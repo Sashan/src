@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exec.c,v 1.257 2024/08/06 08:44:54 claudio Exp $	*/
+/*	$OpenBSD: kern_exec.c,v 1.262 2025/02/17 10:07:10 claudio Exp $	*/
 /*	$NetBSD: kern_exec.c,v 1.75 1996/02/09 18:59:28 christos Exp $	*/
 
 /*-
@@ -514,12 +514,10 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 		pr->ps_pin.pn_pins = pack.ep_pins;
 		pack.ep_pins = NULL;
 		pr->ps_pin.pn_npins = pack.ep_npins;
-		pr->ps_flags |= PS_PIN;
 	} else {
 		pr->ps_pin.pn_start = pr->ps_pin.pn_end = 0;
 		pr->ps_pin.pn_pins = NULL;
 		pr->ps_pin.pn_npins = 0;
-		pr->ps_flags &= ~PS_PIN;
 	}
 	if (pr->ps_libcpin.pn_pins) {
 		free(pr->ps_libcpin.pn_pins, M_PINSYSCALL,
@@ -527,7 +525,6 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 		pr->ps_libcpin.pn_start = pr->ps_libcpin.pn_end = 0;
 		pr->ps_libcpin.pn_pins = NULL;
 		pr->ps_libcpin.pn_npins = 0;
-		pr->ps_flags &= ~PS_LIBCPIN;
 	}
 
 	stopprofclock(pr);	/* stop profiling */
@@ -559,6 +556,7 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	if (pr->ps_flags & PS_PPWAIT) {
 		atomic_clearbits_int(&pr->ps_flags, PS_PPWAIT);
 		atomic_clearbits_int(&pr->ps_pptr->ps_flags, PS_ISPWAIT);
+		atomic_setbits_int(&pr->ps_pptr->ps_flags, PS_WAITEVENT);
 		wakeup(pr->ps_pptr);
 	}
 
@@ -575,10 +573,12 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 		atomic_clearbits_int(&pr->ps_flags, PS_SUGIDEXEC);
 
 	if (pr->ps_flags & PS_EXECPLEDGE) {
+		p->p_pledge = pr->ps_execpledge;
 		pr->ps_pledge = pr->ps_execpledge;
 		atomic_setbits_int(&pr->ps_flags, PS_PLEDGE);
 	} else {
 		atomic_clearbits_int(&pr->ps_flags, PS_PLEDGE);
+		p->p_pledge = 0;
 		pr->ps_pledge = 0;
 		/* XXX XXX XXX XXX */
 		/* Clear our unveil paths out so the child
@@ -751,7 +751,7 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 		atomic_clearbits_int(&p->p_p->ps_flags, PS_WXNEEDED);
 
 	atomic_clearbits_int(&pr->ps_flags, PS_INEXEC);
-	single_thread_clear(p, P_SUSPSIG);
+	single_thread_clear(p);
 
 	/* setregs() sets up all the registers, so just 'return' */
 	return EJUSTRETURN;
@@ -778,7 +778,7 @@ bad:
 freehdr:
 	free(pack.ep_hdr, M_EXEC, pack.ep_hdrlen);
 	atomic_clearbits_int(&pr->ps_flags, PS_INEXEC);
-	single_thread_clear(p, P_SUSPSIG);
+	single_thread_clear(p);
 
 	return (error);
 
@@ -799,11 +799,7 @@ exec_abort:
 free_pack_abort:
 	free(pack.ep_hdr, M_EXEC, pack.ep_hdrlen);
 	exit1(p, 0, SIGABRT, EXIT_NORMAL);
-
 	/* NOTREACHED */
-	atomic_clearbits_int(&pr->ps_flags, PS_INEXEC);
-
-	return (0);
 }
 
 

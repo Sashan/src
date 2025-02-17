@@ -1,4 +1,4 @@
-.\" $OpenBSD: mdoc.7,v 1.184 2024/06/17 15:35:33 schwarze Exp $
+.\" $OpenBSD: mdoc.7,v 1.188 2025/01/27 03:15:20 schwarze Exp $
 .\"
 .\" Copyright (c) 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
 .\" Copyright (c) 2010, 2011, 2013-2020 Ingo Schwarze <schwarze@openbsd.org>
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 17 2024 $
+.Dd $Mdocdate: January 27 2025 $
 .Dt MDOC 7
 .Os
 .Sh NAME
@@ -2310,13 +2310,14 @@ Close single-quoted context opened by
 Begin a new section.
 For a list of conventional manual sections, see
 .Sx MANUAL STRUCTURE .
-These sections should be used unless it's absolutely necessary that
-custom sections be used.
+Use the conventional sections where applicable.
+For unusually long and complicated manual pages,
+adding custom sections is occasionally useful.
 .Pp
-Section names should be unique so that they may be keyed by
-.Ic \&Sx .
-Although this macro is parsed, it should not consist of child node or it
-may not be linked with
+Avoid using macros inside the
+.Ar TITLE LINE
+and keep that line unique within the manual page,
+such that it can be pointed to with
 .Ic \&Sx .
 .Pp
 See also
@@ -2366,10 +2367,10 @@ the conventional sections described in
 .Sx MANUAL STRUCTURE
 rarely have subsections.
 .Pp
-Sub-section names should be unique so that they may be keyed by
-.Ic \&Sx .
-Although this macro is parsed, it should not consist of child node or it
-may not be linked with
+Avoid using macros inside the
+.Ar Title line
+and keep that line unique within the manual page,
+such that it can be pointed to with
 .Ic \&Sx .
 .Pp
 See also
@@ -2411,14 +2412,19 @@ The original C standard.
 .It \-isoC-99
 .St -isoC-99
 .br
-The second major version of the C language standard.
+Edition 2 of the C language standard.
 .Pp
 .It \-isoC-2011
 .St -isoC-2011
 .br
-The third major version of the C language standard.
+Edition 3 of the C language standard.
+.Pp
+.It \-isoC-2023
+.St -isoC-2023
+.br
+Edition 5 of the C language standard.
 .El
-.It POSIX.1 before the Single UNIX Specification
+.It POSIX.1 before XPG4.2
 .Pp
 .Bl -tag -width "-p1003.1g-2000" -compact
 .It \-p1003.1-88
@@ -2459,7 +2465,7 @@ Technical Corrigendum.
 .br
 Includes POSIX.1-1990, 1b, 1c, and 1i.
 .El
-.It X/Open Portability Guide version 4 and related standards
+.It X/Open Portability Guide before XPG4.2
 .Pp
 .Bl -tag -width "-p1003.1g-2000" -compact
 .It \-xpg3
@@ -2486,7 +2492,7 @@ Updates to POSIX.2.
 .br
 Based on POSIX.1 and POSIX.2, published in 1992.
 .El
-.It Single UNIX Specification version 1 and related standards
+.It X/Open Portability Guide Issue 4 Version 2 and related standards
 .Pp
 .Bl -tag -width "-p1003.1g-2000" -compact
 .It \-susv1
@@ -2511,13 +2517,14 @@ Networking APIs, including sockets.
 .br
 Published in 1995.
 .El
-.It Single UNIX Specification version 2 and related standards
+.It X/Open Portability Guide Issue 5 and related standards
 .Pp
 .Bl -tag -width "-p1003.1g-2000" -compact
 .It \-susv2
 .St -susv2
+.br
 This Standard was published in 1997
-and is also called X/Open Portability Guide version 5.
+and is also called X/Open Portability Guide Issue 5.
 It was used as the basis for UNIX 98 certification.
 The following refer to parts of it.
 .Pp
@@ -2535,7 +2542,7 @@ The following refer to parts of it.
 .It \-xns5.2
 .St -xns5.2
 .El
-.It Single UNIX Specification version 3
+.It POSIX Issue 6
 .Pp
 .Bl -tag -width "-p1003.1-2001" -compact
 .It \-p1003.1-2001
@@ -2544,7 +2551,7 @@ The following refer to parts of it.
 .St -susv3
 .br
 This standard is based on C99, SUSv2, POSIX.1-1996, 1d, and 1j.
-It is also called X/Open Portability Guide version 6.
+It is also called X/Open Portability Guide Issue 6.
 It is used as the basis for UNIX 03 certification.
 .Pp
 .It \-p1003.1-2004
@@ -2552,7 +2559,7 @@ It is used as the basis for UNIX 03 certification.
 .br
 The second and last Technical Corrigendum.
 .El
-.It POSIX issues 7 and 8
+.It POSIX Issues 7 and 8
 .Pp
 .Bl -tag -width "-p1003.1g-2000" -compact
 .It \-p1003.1-2008
@@ -3029,7 +3036,7 @@ then the macro accepts an arbitrary number of arguments.
 .It Ic \&Fx  Ta    Yes      Ta    Yes      Ta    n
 .It Ic \&Hf  Ta    \&No     Ta    \&No     Ta    n
 .It Ic \&Ic  Ta    Yes      Ta    Yes      Ta    >0
-.It Ic \&In  Ta    \&No     Ta    \&No     Ta    1
+.It Ic \&In  Ta    Yes      Ta    Yes      Ta    1
 .It Ic \&Lb  Ta    \&No     Ta    \&No     Ta    1
 .It Ic \&Li  Ta    Yes      Ta    Yes      Ta    >0
 .It Ic \&Lk  Ta    Yes      Ta    Yes      Ta    >0

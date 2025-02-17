@@ -109,3 +109,27 @@ first 1 bit should move left 1 position each line
   5   0   5 00000100
   6   0   6 00000010
   7   0   7 00000001
+
+CHI square test
+  0   1   0 10000001
+  1   0   1 01000010
+  2   0   2 00100100
+  3   0   3 00011000
+  4   0   3 00011000
+  5   0   2 00100100
+  6   0   1 01000010
+  7   1   0 10000001
+
+macros should evaluate arguments only once
+_bit_byte(0) -> 1
+_bit_mask(1) -> 2
+bitstr_size(2) -> 3
+bit_alloc(3) -> 4
+bit_alloc(4) -> 5
+bit_test(5) -> 6
+bit_set(6) -> 7
+bit_clear(7) -> 8
+bit_nclear(0, 1) -> 2
+bit_nset(2, 3) -> 4
+bit_ffc(4, 0) -> 5
+bit_ffs(5, 0) -> 6

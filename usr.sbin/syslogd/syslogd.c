@@ -1,4 +1,4 @@
-/*	$OpenBSD: syslogd.c,v 1.282 2024/07/01 12:06:45 bluhm Exp $	*/
+/*	$OpenBSD: syslogd.c,v 1.284 2025/01/23 12:27:42 henning Exp $	*/
 
 /*
  * Copyright (c) 2014-2021 Alexander Bluhm <bluhm@genua.de>
@@ -1172,8 +1172,8 @@ acceptcb(int lfd, short event, void *arg, int usetls)
 		return;
 	}
 	p->p_fd = fd;
-	if ((p->p_bufev = bufferevent_new(fd, tcp_readcb, NULL, tcp_closecb,
-	    p)) == NULL) {
+	if ((p->p_bufev = bufferevent_new(fd, tcp_readcb,
+	    usetls ? tls_handshakecb : NULL, tcp_closecb, p)) == NULL) {
 		log_warn("bufferevent \"%s\"", peername);
 		free(p);
 		close(fd);
@@ -1189,7 +1189,6 @@ acceptcb(int lfd, short event, void *arg, int usetls)
 			close(fd);
 			return;
 		}
-		p->p_bufev->readcb = tls_handshakecb;
 		buffertls_set(&p->p_buftls, p->p_bufev, p->p_ctx, fd);
 		buffertls_accept(&p->p_buftls, fd);
 		log_debug("tcp accept callback: tls context success");
@@ -1215,11 +1214,28 @@ void
 tls_handshakecb(struct bufferevent *bufev, void *arg)
 {
 	struct peer *p = arg;
+	const char *cn;
+	char *cntmp;
 
 	log_debug("Completed tls handshake");
 
-	bufev->readcb = tcp_readcb;
-	tcp_readcb(bufev, p);
+	if (tls_peer_cert_provided(p->p_ctx)) {
+		if ((cn = tls_peer_cert_common_name(p->p_ctx)) != NULL &&
+		    strlen(cn) > 0) {
+			if (stravis(&cntmp, cn, VIS_WHITE) == -1)
+				log_warn("tls_handshakecb stravis");
+			else {
+				log_info(LOG_INFO, "%s using hostname \"%s\" "
+				    "from certificate", p->p_hostname, cntmp);
+				free(p->p_hostname);
+				p->p_hostname = cntmp;
+			}
+		} else
+			log_info(LOG_NOTICE,
+			    "cannot get hostname from peer certificate");
+	}
+
+	bufferevent_setcb(bufev, tcp_readcb, NULL, tcp_closecb, p);
 }
 
 /*

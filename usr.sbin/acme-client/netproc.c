@@ -1,4 +1,4 @@
-/*	$Id: netproc.c,v 1.35 2024/04/28 10:09:25 tb Exp $ */
+/*	$Id: netproc.c,v 1.37 2024/10/10 09:39:35 florian Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -359,7 +360,7 @@ donewacc(struct conn *c, const struct capaths *p, const char *contact)
 {
 	struct jsmnn	*j = NULL;
 	int		 rc = 0;
-	char		*req, *detail, *error = NULL;
+	char		*req, *detail, *error = NULL, *accturi = NULL;
 	long		 lc;
 
 	if ((req = json_fmt_newacc(contact)) == NULL)
@@ -384,6 +385,12 @@ donewacc(struct conn *c, const struct capaths *p, const char *contact)
 	else
 		rc = 1;
 
+	if (c->kid != NULL) {
+		if (stravis(&accturi, c->kid, VIS_SAFE) != -1)
+			printf("account key: %s\n", accturi);
+		free(accturi);
+	}
+
 	if (rc == 0 || verbose > 1)
 		buf_dump(&c->buf);
 	free(req);
@@ -399,7 +406,7 @@ static int
 dochkacc(struct conn *c, const struct capaths *p, const char *contact)
 {
 	int		 rc = 0;
-	char		*req;
+	char		*req, *accturi = NULL;
 	long		 lc;
 
 	if ((req = json_fmt_chkacc()) == NULL)
@@ -417,6 +424,11 @@ dochkacc(struct conn *c, const struct capaths *p, const char *contact)
 
 	if (c->kid == NULL)
 		rc = 0;
+	else {
+		if (stravis(&accturi, c->kid, VIS_SAFE) != -1)
+			dodbg("account key: %s", accturi);
+		free(accturi);
+	}
 
 	if (rc == 0 || verbose > 1)
 		buf_dump(&c->buf);

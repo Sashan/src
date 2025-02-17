@@ -1,4 +1,4 @@
-/*	$OpenBSD: priv.c,v 1.24 2024/01/18 14:49:59 claudio Exp $	*/
+/*	$OpenBSD: priv.c,v 1.27 2024/11/24 10:44:59 kn Exp $	*/
 
 /*
  * Copyright (c) 2016 Reyk Floeter <reyk@openbsd.org>
@@ -17,12 +17,8 @@
  */
 
 #include <sys/types.h>
-#include <sys/queue.h>
-#include <sys/stat.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/ioctl.h>
-#include <sys/tree.h>
 
 #include <net/if.h>
 #include <netinet/in.h>
@@ -34,13 +30,10 @@
 #include <arpa/inet.h>
 
 #include <errno.h>
-#include <event.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <signal.h>
 #include <ctype.h>
 
 #include "proc.h"
@@ -90,7 +83,6 @@ priv_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	struct ifgroupreq	 ifgr;
 	struct ifaliasreq	 ifra;
 	struct in6_aliasreq	 in6_ifra;
-	struct if_afreq		 ifar;
 	struct vmop_addr_req	 vareq;
 	struct vmop_addr_result	 varesult;
 	char			 type[IF_NAMESIZE];
@@ -197,45 +189,29 @@ priv_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		/* Set the interface address */
 		strlcpy(ifra.ifra_name, vfr.vfr_name, sizeof(ifra.ifra_name));
 
-		ifra.ifra_addr.sa_len =
-		    ifra.ifra_mask.sa_len =
-		    sizeof(struct sockaddr_in);
-
 		memcpy(&ifra.ifra_addr, &vfr.vfr_addr,
-		    ifra.ifra_addr.sa_len);
+		    sizeof(ifra.ifra_addr));
 		memcpy(&ifra.ifra_mask, &vfr.vfr_mask,
-		    ifra.ifra_mask.sa_len);
+		    sizeof(ifra.ifra_mask));
 
 		if (ioctl(env->vmd_fd, SIOCAIFADDR, &ifra) == -1)
 			log_warn("SIOCAIFADDR");
 		break;
 	case IMSG_VMDOP_PRIV_IFADDR6:
-		memset(&ifar, 0, sizeof(ifar));
 		memset(&in6_ifra, 0, sizeof(in6_ifra));
 
 		if (vfr.vfr_addr.ss_family != AF_INET6 ||
 		    vfr.vfr_addr.ss_family != vfr.vfr_mask.ss_family)
 			fatalx("%s: invalid address family", __func__);
 
-		/* First enable IPv6 on this interface */
-		strlcpy(ifar.ifar_name, vfr.vfr_name,
-		    sizeof(ifar.ifar_name));
-		ifar.ifar_af = AF_INET6;
-		if (ioctl(env->vmd_fd, SIOCIFAFATTACH, (caddr_t)&ifar) == -1)
-			log_warn("SIOCIFAFATTACH");
-
 		/* Set the interface address */
 		strlcpy(in6_ifra.ifra_name, vfr.vfr_name,
 		    sizeof(in6_ifra.ifra_name));
 
-		in6_ifra.ifra_addr.sin6_len =
-		    in6_ifra.ifra_prefixmask.sin6_len =
-		    sizeof(struct sockaddr_in6);
-
 		memcpy(&in6_ifra.ifra_addr, &vfr.vfr_addr,
-		    in6_ifra.ifra_addr.sin6_len);
+		    sizeof(in6_ifra.ifra_addr));
 		memcpy(&in6_ifra.ifra_prefixmask, &vfr.vfr_mask,
-		    in6_ifra.ifra_prefixmask.sin6_len);
+		    sizeof(in6_ifra.ifra_prefixmask));
 		in6_ifra.ifra_prefixmask.sin6_scope_id = 0;
 
 		in6_ifra.ifra_lifetime.ia6t_vltime = ND6_INFINITE_LIFETIME;

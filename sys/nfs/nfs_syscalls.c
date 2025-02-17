@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_syscalls.c,v 1.127 2024/06/26 01:40:49 jsg Exp $	*/
+/*	$OpenBSD: nfs_syscalls.c,v 1.129 2025/02/16 16:05:07 bluhm Exp $	*/
 /*	$NetBSD: nfs_syscalls.c,v 1.19 1996/02/18 11:53:52 fvdl Exp $	*/
 
 /*
@@ -247,9 +247,9 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 		siz = NFS_MAXPACKET + sizeof (u_long);
 	else
 		siz = NFS_MAXPACKET;
-	solock(so);
+	solock_shared(so);
 	error = soreserve(so, siz, siz); 
-	sounlock(so);
+	sounlock_shared(so);
 	if (error) {
 		m_freem(mynam);
 		return (error);
@@ -275,7 +275,7 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 		sosetopt(so, IPPROTO_TCP, TCP_NODELAY, m);
 		m_freem(m);
 	}
-	solock(so);
+	solock_shared(so);
 	mtx_enter(&so->so_rcv.sb_mtx);
 	so->so_rcv.sb_flags &= ~SB_NOINTR;
 	so->so_rcv.sb_timeo_nsecs = INFSLP;
@@ -284,7 +284,7 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 	so->so_snd.sb_flags &= ~SB_NOINTR;
 	so->so_snd.sb_timeo_nsecs = INFSLP;
 	mtx_leave(&so->so_snd.sb_mtx);
-	sounlock(so);
+	sounlock_shared(so);
 	if (tslp)
 		slp = tslp;
 	else {
@@ -469,7 +469,7 @@ loop:
 		m_freem(nd->nd_mrep);
 		m_freem(nd->nd_nam2);
 		break;
-	};
+	}
 
 	if (nd) {
 		pool_put(&nfsrv_descript_pl, nd);

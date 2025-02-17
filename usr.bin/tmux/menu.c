@@ -1,4 +1,4 @@
-/* $OpenBSD: menu.c,v 1.52 2023/08/15 07:01:47 nicm Exp $ */
+/* $OpenBSD: menu.c,v 1.54 2024/10/17 17:10:41 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -335,7 +335,7 @@ menu_key_cb(struct client *c, void *data, struct key_event *event)
 		c->flags |= CLIENT_REDRAWOVERLAY;
 		return (0);
 	case KEYC_PPAGE:
-	case '\002': /* C-b */
+	case 'b'|KEYC_CTRL:
 		if (md->choice < 6)
 			md->choice = 0;
 		else {
@@ -394,13 +394,13 @@ menu_key_cb(struct client *c, void *data, struct key_event *event)
 		}
 		c->flags |= CLIENT_REDRAWOVERLAY;
 		break;
-	case '\006': /* C-f */
+	case 'f'|KEYC_CTRL:
 		break;
 	case '\r':
 		goto chosen;
 	case '\033': /* Escape */
-	case '\003': /* C-c */
-	case '\007': /* C-g */
+	case 'c'|KEYC_CTRL:
+	case 'g'|KEYC_CTRL:
 	case 'q':
 		return (1);
 	}
@@ -453,7 +453,6 @@ menu_set_style(struct client *c, struct grid_cell *gc, const char *style,
 			gc->bg = sytmp.gc.bg;
 		}
 	}
-	gc->attr = 0;
 }
 
 struct menu_data *

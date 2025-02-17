@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: sysupgrade.sh,v 1.52 2024/06/19 05:22:33 otto Exp $
+# $OpenBSD: sysupgrade.sh,v 1.58 2025/02/03 18:55:55 florian Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015 Robert Peichaer <rpe@openbsd.org>
@@ -35,7 +35,7 @@ err()
 
 usage()
 {
-	echo "usage: ${0##*/} [-fkn] [-r | -s] [-b base-directory] [installurl]" 1>&2
+	echo "usage: ${0##*/} [-fkns] [-b base-directory] [-R version] [installurl | path]" 1>&2
 	return 1
 }
 
@@ -72,32 +72,34 @@ rmel() {
 	echo -n "$_c"
 }
 
-RELEASE=false
 SNAP=false
+FILE=false
 FORCE=false
+FORCE_VERSION=false
 KEEP=false
 REBOOT=true
+WHAT='release'
 
-while getopts b:fknrs arg; do
+VERSION=$(uname -r)
+NEXT_VERSION=$(echo ${VERSION} + 0.1 | bc)
+
+while getopts b:fknrR:s arg; do
 	case ${arg} in
 	b)	SETSDIR=${OPTARG}/_sysupgrade;;
 	f)	FORCE=true;;
 	k)	KEEP=true;;
 	n)	REBOOT=false;;
-	r)	RELEASE=true;;
+	r)	;;
+	R)	FORCE_VERSION=true
+		[[ ${OPTARG} == @([0-9]|[0-9][0-9]).[0-9] ]] ||
+		    err "invalid version: ${OPTARG}"
+		NEXT_VERSION=${OPTARG};;
 	s)	SNAP=true;;
 	*)	usage;;
 	esac
 done
 
 (($(id -u) != 0)) && err "need root privileges"
-
-if $RELEASE && $SNAP; then
-	usage
-fi
-
-set -A _KERNV -- $(sysctl -n kern.version |
-	sed 's/^OpenBSD \([1-9][0-9]*\.[0-9]\)\([^ ]*\).*/\1 \2/;q')
 
 shift $(( OPTIND -1 ))
 
@@ -110,60 +112,84 @@ case $# in
 *)	usage
 esac
 [[ $MIRROR == @(file|ftp|http|https)://* ]] ||
-	err "invalid installurl: $MIRROR"
-
-if ! $RELEASE && [[ ${#_KERNV[*]} == 2 ]]; then
-	if [[ ${_KERNV[1]} != '-stable' ]]; then
-		SNAP=true
-	fi
-fi
-
-if $RELEASE && [[ ${_KERNV[1]} == '-beta' ]]; then
-	NEXT_VERSION=${_KERNV[0]}
-else
-	NEXT_VERSION=$(echo ${_KERNV[0]} + 0.1 | bc)
-fi
+	FILE=true
+$FORCE_VERSION && $SNAP &&
+	err "incompatible options: -s -R $NEXT_VERSION"
+$FORCE && ! $SNAP &&
+	err "incompatible options: -f without -s"
 
 if $SNAP; then
+	WHAT='snapshot'
 	URL=${MIRROR}/snapshots/${ARCH}/
 else
 	URL=${MIRROR}/${NEXT_VERSION}/${ARCH}/
+	$FORCE_VERSION || ALT_URL=${MIRROR}/${VERSION}/${ARCH}/
+fi
+
+# Oh wait, this is a path install
+if $FILE; then
+	URL=file://$MIRROR/
+	ALT_URL=
 fi
 
 install -d -o 0 -g 0 -m 0755 ${SETSDIR}
 cd ${SETSDIR}
 
 echo "Fetching from ${URL}"
-unpriv -f SHA256.sig ftp -N sysupgrade -Vmo SHA256.sig ${URL}SHA256.sig
-
-_KEY=openbsd-${_KERNV[0]%.*}${_KERNV[0]#*.}-base.pub
-_NEXTKEY=openbsd-${NEXT_VERSION%.*}${NEXT_VERSION#*.}-base.pub
-
-if $SNAP; then
-	unpriv -f SHA256 signify -Ve -x SHA256.sig -m SHA256
-else
-	read _LINE <SHA256.sig
-	case ${_LINE} in
-	*\ ${_KEY})	SIGNIFY_KEY=/etc/signify/${_KEY} ;;
-	*\ ${_NEXTKEY})	SIGNIFY_KEY=/etc/signify/${_NEXTKEY} ;;
-	*)		err "invalid signing key" ;;
-	esac
-
-	[[ -f ${SIGNIFY_KEY} ]] || err "cannot find ${SIGNIFY_KEY}"
-
-	unpriv -f SHA256 signify -Ve -p "${SIGNIFY_KEY}" -x SHA256.sig -m SHA256
+if ! unpriv -f SHA256.sig ftp -N sysupgrade -Vmo SHA256.sig ${URL}SHA256.sig; then
+	if [[ -n ${ALT_URL} ]]; then
+		echo "Fetching from ${ALT_URL}"
+		unpriv -f SHA256.sig ftp -N sysupgrade -Vmo SHA256.sig ${ALT_URL}SHA256.sig
+		URL=${ALT_URL}
+		NEXT_VERSION=${VERSION}
+	else
+		exit 1
+	fi
 fi
 
+# The key extracted from SHA256.sig must precisely match a pattern
+KEY=$(head -1 < SHA256.sig | cut -d' ' -f5 | \
+	egrep '^openbsd-[[:digit:]]{2,3}-base.pub$' || true)
+if [[ -z $KEY ]]; then
+	echo "Invalid SHA256.sig file"
+	exit 1
+fi
+
+# If required key is not in the system, get it from a signed bundle
+if ! [[ -r /etc/signify/$KEY ]]; then
+	HAVEKEY=$(cd /etc/signify && ls -1 openbsd-*-base.pub | \
+	    tail -2 | head -1 | cut -d- -f2)
+	BUNDLE=sigbundle-${HAVEKEY}.tgz
+	FWKEY=$(echo $KEY | sed -e 's/base/fw/')
+	echo "Adding missing keys from bundle $BUNDLE"
+	unpriv -f ${BUNDLE} ftp -N sysupgrade -Vmo $BUNDLE https://ftp.openbsd.org/pub/OpenBSD/signify/$BUNDLE
+	signify -Vzq -m - -x $BUNDLE | (cd /etc/signify && tar xfz - $KEY $FWKEY)
+	rm $BUNDLE
+fi
+
+unpriv -f SHA256 signify -Ve -x SHA256.sig -m SHA256
 rm SHA256.sig
 
 if cmp -s /var/db/installed.SHA256 SHA256 && ! $FORCE; then
-	echo "Already on latest snapshot."
+	echo "Already on latest ${WHAT}."
 	exit 0
 fi
 
-# BUILDINFO INSTALL.*, bsd*, *.tgz
+unpriv -f BUILDINFO ftp -N sysupgrade -Vmo BUILDINFO ${URL}BUILDINFO
+unpriv cksum -qC SHA256 BUILDINFO
+
+if [[ -e /var/db/installed.BUILDINFO ]]; then
+	installed_build_ts=$(cut -f3 -d' ' /var/db/installed.BUILDINFO)
+	build_ts=$(cut -f3 -d' ' BUILDINFO)
+	if (( $build_ts <= $installed_build_ts )) && ! $FORCE; then
+		echo "Downloaded ${WHAT} is older than installed system. Use -f to force downgrade."
+		exit 1
+	fi
+fi
+
+# INSTALL.*, bsd*, *.tgz
 SETS=$(sed -n -e 's/^SHA256 (\(.*\)) .*/\1/' \
-    -e '/^BUILDINFO$/p;/^INSTALL\./p;/^bsd/p;/\.tgz$/p' SHA256)
+    -e '/^INSTALL\./p;/^bsd/p;/\.tgz$/p' SHA256)
 
 OLD_FILES=$(ls)
 OLD_FILES=$(rmel SHA256 $OLD_FILES)
@@ -187,15 +213,6 @@ if [[ -n ${DL} ]]; then
 	unpriv cksum -qC SHA256 ${DL}
 fi
 
-if [[ -e /var/db/installed.BUILDINFO && -e BUILDINFO ]]; then
-	installed_build_ts=$(cut -f3 -d' ' /var/db/installed.BUILDINFO)
-	build_ts=$(cut -f3 -d' ' BUILDINFO)
-	if (( $build_ts < $installed_build_ts )) && ! $FORCE; then
-		echo "Downloaded snapshot is older than installed snapshot. Use -f to force downgrade."
-		exit 1
-	fi
-fi
-
 cat <<__EOT >/auto_upgrade.conf
 Location of sets = disk
 Pathname to the sets = ${SETSDIR}/
@@ -203,7 +220,7 @@ Directory does not contain SHA256.sig. Continue without verification = yes
 __EOT
 
 if ! ${KEEP}; then
-	CLEAN=$(echo SHA256 ${SETS} | sed -e 's/ /,/g')
+	CLEAN=$(echo BUILDINFO SHA256 ${SETS} | sed -e 's/ /,/g')
 	cat <<__EOT > /etc/rc.firsttime
 rm -f ${SETSDIR}/{${CLEAN}}
 __EOT

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_ipsp.h,v 1.245 2024/04/17 20:48:51 bluhm Exp $	*/
+/*	$OpenBSD: ip_ipsp.h,v 1.247 2025/02/14 13:14:13 dlg Exp $	*/
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr),
@@ -364,7 +364,7 @@ struct tdb {				/* tunnel descriptor block */
 #define	TDBF_PFSYNC_RPL		0x80000	/* Replay counter should be bumped */
 #define	TDBF_ESN		0x100000 /* 64-bit sequence numbers (ESN) */
 #define	TDBF_PFSYNC_SNAPPED	0x200000 /* entry is being dispatched to peer */
-#define	TDBF_IFACE		0x400000 /* entry policy is via sec(4) */ 
+#define	TDBF_IFACE		0x400000 /* entry policy is via sec(4) */
 
 #define TDBF_BITS ("\20" \
 	"\1UNIQUE\2TIMER\3BYTES\4ALLOCATIONS" \
@@ -675,7 +675,11 @@ int	tcp_signature_tdb_output(struct mbuf *, struct tdb *, int, int);
 int	checkreplaywindow(struct tdb *, u_int64_t, u_int32_t, u_int32_t *, int);
 
 /* Packet processing */
-int	ipsp_process_packet(struct mbuf *, struct tdb *, int, int);
+#define IPSP_DF_INHERIT		-1
+#define IPSP_DF_OFF		 0
+#define IPSP_DF_ON		 1
+
+int	ipsp_process_packet(struct mbuf *, struct tdb *, int, int, int);
 int	ipsp_process_done(struct mbuf *, struct tdb *);
 int	ipsp_spd_lookup(struct mbuf *, int, int, int, struct tdb *,
 	    const struct ipsec_level *, struct tdb **, struct ipsec_ids *);

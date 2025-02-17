@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_glue.c,v 1.84 2022/09/10 20:35:29 miod Exp $	*/
+/*	$OpenBSD: uvm_glue.c,v 1.87 2024/10/28 08:25:32 mpi Exp $	*/
 /*	$NetBSD: uvm_glue.c,v 1.44 2001/02/06 19:54:44 eeh Exp $	*/
 
 /* 
@@ -71,11 +71,9 @@
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/buf.h>
-#include <sys/user.h>
 #ifdef SYSVSHM
 #include <sys/shm.h>
 #endif
-#include <sys/sched.h>
 
 #include <uvm/uvm.h>
 
@@ -259,20 +257,18 @@ uvm_vsunlock_device(struct proc *p, void *addr, size_t len, void *map)
 	uvm_km_free(kernel_map, kva, sz);
 }
 
+const struct kmem_va_mode kv_uarea = {
+	.kv_map = &kernel_map,
+	.kv_align = USPACE_ALIGN
+};
+
 /*
  * uvm_uarea_alloc: allocate the u-area for a new thread
  */
 vaddr_t
 uvm_uarea_alloc(void)
 {
-	vaddr_t uaddr;
-
-	uaddr = uvm_km_kmemalloc_pla(kernel_map, uvm.kernel_object, USPACE,
-	    USPACE_ALIGN, UVM_KMF_ZERO,
-	    no_constraint.ucr_low, no_constraint.ucr_high,
-	    0, 0, USPACE/PAGE_SIZE);
-
-	return (uaddr);
+	return (vaddr_t)km_alloc(USPACE, &kv_uarea, &kp_zero, &kd_waitok);
 }
 
 /*
@@ -284,7 +280,7 @@ uvm_uarea_alloc(void)
 void
 uvm_uarea_free(struct proc *p)
 {
-	uvm_km_free(kernel_map, (vaddr_t)p->p_addr, USPACE);
+	km_free(p->p_addr, USPACE, &kv_uarea, &kp_zero);
 	p->p_addr = NULL;
 }
 
@@ -341,13 +337,13 @@ int	swapdebug = 0;
  *   are swapped... otherwise the longest-sleeping or stopped process
  *   is swapped, otherwise the longest resident process...
  */
-void
+int
 uvm_swapout_threads(void)
 {
 	struct process *pr;
 	struct proc *p, *slpp;
 	struct process *outpr;
-	int outpri;
+	int free, outpri;
 	int didswap = 0;
 	extern int maxslp; 
 	/* XXXCDC: should move off to uvmexp. or uvm., also in uvm_meter */
@@ -356,6 +352,8 @@ uvm_swapout_threads(void)
 	if (!enableswap)
 		return;
 #endif
+
+	free = uvmexp.free;
 
 	/*
 	 * outpr/outpri  : stop/sleep process whose most active thread has
@@ -405,8 +403,7 @@ next_process:	;
 	 * if we are real low on memory since we don't gain much by doing
 	 * it.
 	 */
-	if (didswap == 0 && uvmexp.free <= atop(round_page(USPACE)) &&
-	    outpr != NULL) {
+	if (didswap == 0 && free <= atop(round_page(USPACE)) && outpr != NULL) {
 #ifdef DEBUG
 		if (swapdebug & SDB_SWAPOUT)
 			printf("swapout_threads: no duds, try procpr %p\n",
@@ -414,6 +411,12 @@ next_process:	;
 #endif
 		pmap_collect(outpr->ps_vmspace->vm_map.pmap);
 	}
+
+	/*
+	 * XXX might return a non-0 value even if pmap_collect() didn't
+	 * free anything.
+	 */
+	return (uvmexp.free - free);
 }
 
 #endif	/* __HAVE_PMAP_COLLECT */
@@ -433,18 +436,6 @@ uvm_atopg(vaddr_t kva)
 	pg = PHYS_TO_VM_PAGE(pa);
 	KASSERT(pg != NULL);
 	return (pg);
-}
-
-void
-uvm_pause(void)
-{
-	static unsigned int toggle;
-	if (toggle++ > 128) {
-		toggle = 0;
-		KERNEL_UNLOCK();
-		KERNEL_LOCK();
-	}
-	sched_pause(preempt);
 }
 
 #ifndef SMALL_KERNEL

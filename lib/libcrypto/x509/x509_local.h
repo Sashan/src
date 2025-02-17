@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_local.h,v 1.26 2024/07/13 15:08:58 tb Exp $ */
+/*	$OpenBSD: x509_local.h,v 1.34 2025/01/26 20:01:58 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2013.
  */
@@ -61,6 +61,8 @@
 
 #include <openssl/x509v3.h>
 
+#include "bytestring.h"
+
 __BEGIN_HIDDEN_DECLS
 
 #define TS_HASH_EVP		EVP_sha1()
@@ -71,13 +73,19 @@ __BEGIN_HIDDEN_DECLS
 #define X509_CRL_HASH_EVP	EVP_sha512()
 #define X509_CRL_HASH_LEN	SHA512_DIGEST_LENGTH
 
-/*
- * Used internally instead of the confusing X509_TRUST_DEFAULT,
- * which is not the default for X509_check_trust.
- * XXX Make X509_check_trust internal, and move the other
- * X509_TRUST values here to clean up this mess.
- */
 #define X509_TRUST_ACCEPT_ALL	-1
+
+/* check_trust return codes */
+#define X509_TRUST_TRUSTED	1
+#define X509_TRUST_REJECTED	2
+#define X509_TRUST_UNTRUSTED	3
+
+int X509_check_trust(X509 *x, int id, int flags);
+
+struct X509_val_st {
+	ASN1_TIME *notBefore;
+	ASN1_TIME *notAfter;
+} /* X509_VAL */;
 
 struct X509_pubkey_st {
 	X509_ALGOR *algor;
@@ -193,7 +201,7 @@ struct x509_st {
 	NAME_CONSTRAINTS *nc;
 #ifndef OPENSSL_NO_RFC3779
 	STACK_OF(IPAddressFamily) *rfc3779_addr;
-	struct ASIdentifiers_st *rfc3779_asid;
+	ASIdentifiers *rfc3779_asid;
 #endif
 	unsigned char hash[X509_CERT_HASH_LEN];
 	X509_CERT_AUX *aux;
@@ -312,7 +320,7 @@ struct x509_store_st {
 
 /* This is the functions plus an instance of the local variables. */
 struct x509_lookup_st {
-	X509_LOOKUP_METHOD *method;	/* the functions */
+	const X509_LOOKUP_METHOD *method;	/* the functions */
 	void *method_data;		/* method data */
 
 	X509_STORE *store_ctx;	/* who owns us */
@@ -417,6 +425,38 @@ X509_ALGOR *PKCS5_pbkdf2_set(int iter, unsigned char *salt, int saltlen,
 
 int X509_PURPOSE_get_by_id(int id);
 int X509_PURPOSE_get_trust(const X509_PURPOSE *xp);
+
+int X509at_get_attr_by_NID(const STACK_OF(X509_ATTRIBUTE) *x, int nid,
+    int lastpos);
+int X509at_get_attr_by_OBJ(const STACK_OF(X509_ATTRIBUTE) *sk,
+    const ASN1_OBJECT *obj, int lastpos);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr(STACK_OF(X509_ATTRIBUTE) **x,
+    X509_ATTRIBUTE *attr);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_OBJ(STACK_OF(X509_ATTRIBUTE) **x,
+    const ASN1_OBJECT *obj, int type, const unsigned char *bytes, int len);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_NID(STACK_OF(X509_ATTRIBUTE) **x,
+    int nid, int type, const unsigned char *bytes, int len);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_txt(STACK_OF(X509_ATTRIBUTE) **x,
+    const char *attrname, int type, const unsigned char *bytes, int len);
+void *X509at_get0_data_by_OBJ(STACK_OF(X509_ATTRIBUTE) *x,
+    const ASN1_OBJECT *obj, int lastpos, int type);
+
+int X509_NAME_ENTRY_add_cbb(CBB *cbb, const X509_NAME_ENTRY *ne);
+
+int X509V3_add_value(const char *name, const char *value,
+    STACK_OF(CONF_VALUE) **extlist);
+int X509V3_add_value_uchar(const char *name, const unsigned char *value,
+    STACK_OF(CONF_VALUE) **extlist);
+int X509V3_add_value_bool(const char *name, int asn1_bool,
+    STACK_OF(CONF_VALUE) **extlist);
+int X509V3_add_value_int(const char *name, const ASN1_INTEGER *aint,
+    STACK_OF(CONF_VALUE) **extlist);
+
+int X509V3_get_value_bool(const CONF_VALUE *value, int *asn1_bool);
+int X509V3_get_value_int(const CONF_VALUE *value, ASN1_INTEGER **aint);
+
+STACK_OF(CONF_VALUE) *X509V3_get_section(X509V3_CTX *ctx, const char *section);
+void X509V3_section_free(X509V3_CTX *ctx, STACK_OF(CONF_VALUE) *section);
 
 const X509V3_EXT_METHOD *x509v3_ext_method_authority_key_identifier(void);
 const X509V3_EXT_METHOD *x509v3_ext_method_basic_constraints(void);

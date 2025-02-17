@@ -1,4 +1,4 @@
-/*	$OpenBSD: radius.c,v 1.8 2024/07/18 08:58:59 yasuoka Exp $	*/
+/*	$OpenBSD: radius.c,v 1.13 2024/09/15 11:08:50 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2024 Internet Initiative Japan Inc.
@@ -198,11 +198,8 @@ iked_radius_on_event(int fd, short ev, void *ctx)
 			log_info("%s: received an invalid RADIUS message: "
 			    "code %u", __func__, (unsigned)code);
 		}
-		timer_del(env, &req->rr_timer);
-		TAILQ_REMOVE(&server->rs_reqs, req, rr_entry);
-		req->rr_server = NULL;
-		free(req);
 		radius_delete_packet(pkt);
+		iked_radius_request_free(env, req);
 		return;
 	}
 
@@ -229,8 +226,12 @@ iked_radius_on_event(int fd, short ev, void *ctx)
 			    "state attribute", __func__);
 			goto fail;
 		}
-		if ((req->rr_state != NULL &&
-		    ibuf_set(req->rr_state, 0, attrval, attrlen) != 0) ||
+		if (req->rr_state != NULL &&
+		    ibuf_set(req->rr_state, 0, attrval, attrlen) != 0) {
+			ibuf_free(req->rr_state);
+			req->rr_state = NULL;
+		}
+		if (req->rr_state == NULL &&
 		    (req->rr_state = ibuf_new(attrval, attrlen)) == NULL) {
 			log_info("%s: ibuf_new() failed: %s", __func__,
 			    strerror(errno));
@@ -261,13 +262,23 @@ iked_radius_on_event(int fd, short ev, void *ctx)
 		    strcmp(username, req->rr_user) != 0) {
 			/*
 			 * The Access-Accept might have a User-Name.  It
-			 * should be used for Accouting (RFC 2865 5.1).
+			 * should be used for Accounting (RFC 2865 5.1).
 			 */
 			free(req->rr_user);
 			req->rr_sa->sa_eapid = strdup(username);
 		} else
 			req->rr_sa->sa_eapid = req->rr_user;
 		req->rr_user = NULL;
+
+		if (radius_get_raw_attr_ptr(pkt, RADIUS_TYPE_CLASS, &attrval,
+		    &attrlen) == 0) {
+			ibuf_free(req->rr_sa->sa_eapclass);
+			if ((req->rr_sa->sa_eapclass = ibuf_new(attrval,
+			    attrlen)) == NULL) {
+				log_info("%s: ibuf_new() failed: %s", __func__,
+				    strerror(errno));
+			}
+		}
 
 		sa_state(env, req->rr_sa, IKEV2_STATE_AUTH_SUCCESS);
 
@@ -321,6 +332,7 @@ iked_radius_on_event(int fd, short ev, void *ctx)
 	radius_delete_packet(pkt);
 	ikev2_send_ike_e(env, req->rr_sa, e, IKEV2_PAYLOAD_EAP,
 	    IKEV2_EXCHANGE_IKE_AUTH, 1);
+	ibuf_free(e);
 	/* keep request for challenge state and config parameters */
 	req->rr_reqid = -1;	/* release reqid */
 	return;
@@ -746,8 +758,10 @@ iked_radius_acct_request(struct iked *env, struct iked_sa *sa, uint8_t stype)
 
 	switch (stype) {
 	case RADIUS_ACCT_STATUS_TYPE_START:
-		radius_put_uint32_attr(pkt, RADIUS_TYPE_ACCT_STATUS_TYPE,
-		    RADIUS_ACCT_STATUS_TYPE_START);
+		if (req->rr_sa && req->rr_sa->sa_eapclass != NULL)
+			radius_put_raw_attr(pkt, RADIUS_TYPE_CLASS,
+			    ibuf_data(req->rr_sa->sa_eapclass),
+			    ibuf_size(req->rr_sa->sa_eapclass));
 		break;
 	case RADIUS_ACCT_STATUS_TYPE_INTERIM_UPDATE:
 	case RADIUS_ACCT_STATUS_TYPE_STOP:
@@ -841,7 +855,7 @@ iked_radius_dae_on_event(int fd, short ev, void *ctx)
 		if (code == RADIUS_CODE_COA_REQUEST) {
 			code = RADIUS_CODE_COA_NAK;
 			cause = RADIUS_ERROR_CAUSE_ADMINISTRATIVELY_PROHIBITED;
-			nakcause = "Coa-Request is not supprted";
+			nakcause = "Coa-Request is not supported";
 			goto send;
 		}
 		log_warnx("%s: received an invalid RADIUS message "

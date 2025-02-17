@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_ciph.c,v 1.147 2024/07/23 14:40:53 jsing Exp $ */
+/* $OpenBSD: ssl_ciph.c,v 1.151 2025/01/18 12:20:37 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -217,14 +217,6 @@ static const SSL_CIPHER cipher_aliases[] = {
 	{
 		.name = SSL_TXT_aRSA,
 		.algorithm_auth = SSL_aRSA,
-	},
-	{
-		.name = SSL_TXT_aDSS,
-		.algorithm_auth = SSL_aDSS,
-	},
-	{
-		.name = SSL_TXT_DSS,
-		.algorithm_auth = SSL_aDSS,
 	},
 	{
 		.name = SSL_TXT_aNULL,
@@ -1112,11 +1104,7 @@ ssl_cipher_process_rulestr(const char *rule_str, CIPHER_ORDER **head_p,
 static inline int
 ssl_aes_is_accelerated(void)
 {
-#if defined(__i386__) || defined(__x86_64__)
-	return ((OPENSSL_cpu_caps() & (1ULL << 57)) != 0);
-#else
-	return (0);
-#endif
+	return (OPENSSL_cpu_caps() & CRYPTO_CPU_CAPS_ACCELERATED_AES) != 0;
 }
 
 STACK_OF(SSL_CIPHER) *
@@ -1373,9 +1361,6 @@ SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 	case SSL_aRSA:
 		au = "RSA";
 		break;
-	case SSL_aDSS:
-		au = "DSS";
-		break;
 	case SSL_aNULL:
 		au = "None";
 		break;
@@ -1550,8 +1535,6 @@ SSL_CIPHER_get_cipher_nid(const SSL_CIPHER *c)
 		return NID_camellia_256_cbc;
 	case SSL_CHACHA20POLY1305:
 		return NID_chacha20_poly1305;
-	case SSL_DES:
-		return NID_des_cbc;
 	case SSL_RC4:
 		return NID_rc4;
 	default:
@@ -1639,13 +1622,6 @@ SSL_COMP_get_compression_methods(void)
 	return NULL;
 }
 LSSL_ALIAS(SSL_COMP_get_compression_methods);
-
-int
-SSL_COMP_add_compression_method(int id, void *cm)
-{
-	return 1;
-}
-LSSL_ALIAS(SSL_COMP_add_compression_method);
 
 const char *
 SSL_COMP_get_name(const void *comp)

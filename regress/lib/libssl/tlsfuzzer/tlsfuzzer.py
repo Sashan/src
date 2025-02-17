@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.52 2023/08/14 18:10:42 tb Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.56 2024/09/18 19:12:37 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -211,10 +211,9 @@ tls13_slow_tests = TestGroup("slow TLSv1.3 tests", [
     ]),
     # We don't accept an empty ECPF extension since it must advertise the
     # uncompressed point format. Exclude this extension type from the test.
-    # Also exclude QUIC transport parameters.
     Test(
         "test-tls13-large-number-of-extensions.py",
-        tls13_args = ["--exc", "11", "--exc", "57"],
+        tls13_args = ["--exc", "11"],
     ),
 ])
 
@@ -352,7 +351,6 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
     Test("test-cve-2016-2107.py"),
     Test("test-cve-2016-6309.py"),
     Test("test-dhe-rsa-key-exchange.py"),
-    Test("test-dhe-rsa-key-exchange-with-bad-messages.py"),
     Test("test-early-application-data.py"),
     Test("test-empty-extensions.py"),
     Test("test-extensions.py"),
@@ -366,6 +364,7 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
     Test("test-invalid-content-type.py"),
     Test("test-invalid-session-id.py"),
     Test("test-invalid-version.py"),
+    Test("test-large-number-of-extensions.py"),
     Test("test-lucky13.py"),
     Test("test-message-skipping.py"),
     Test("test-no-heartbeat.py"),
@@ -399,6 +398,10 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
             "-e", "TLS_DHE_RSA_WITH_AES_256_CBC_SHA sha224 signature",
         ]
     ),
+    Test("test-dhe-rsa-key-exchange-with-bad-messages.py", [
+        "-x", "invalid dh_Yc value - missing",
+        "-X", substitute_alert("decode_error", "illegal_parameter"),
+    ]),
     Test("test-dhe-key-share-random.py", tls12_exclude_legacy_protocols),
     Test("test-export-ciphers-rejected.py", ["--min-ver", "TLSv1.2"]),
     Test(
@@ -530,11 +533,6 @@ tls12_failing_tests = TestGroup("failing TLSv1.2 tests", [
     # again illegal_parameter vs unrecognized_name
     Test("test-invalid-server-name-extension.py"),
 
-    # 14 pass
-    # 7 fail
-    # 'n extensions', n in 4095, 4096, 4097, 8191, 8192, 8193, 16383,
-    Test("test-large-number-of-extensions.py"),
-
     # 4 failures:
     #   'insecure (legacy) renegotiation with GET after 2nd handshake'
     #   'insecure (legacy) renegotiation with incomplete GET'
@@ -651,7 +649,7 @@ failing_groups = [
 ]
 
 class TestRunner:
-    """ Runs the given tests troups against a server and displays stats. """
+    """ Runs the given tests against a server and displays stats. """
 
     def __init__(
         self, timing=False, verbose=False, host="localhost", port=4433,

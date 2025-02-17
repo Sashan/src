@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm.c,v 1.2 2023/05/13 23:15:28 dv Exp $ */
+/* $OpenBSD: vmm.c,v 1.4 2025/02/10 16:45:46 deraadt Exp $ */
 /*
  * Copyright (c) 2014-2023 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -184,7 +184,7 @@ vm_find(uint32_t id, struct vm **res)
 			 * The managing vmm parent process can lookup all
 			 * all VMs and is indicated by PLEDGE_PROC.
 			 */
-			if (((p->p_p->ps_pledge &
+			if (((p->p_pledge &
 			    (PLEDGE_VMM | PLEDGE_PROC)) == PLEDGE_VMM) &&
 			    (vm->vm_creator_pid != p->p_p->ps_pid))
 				ret = EPERM;
@@ -291,7 +291,7 @@ pledge_ioctl_vmm(struct proc *p, long com)
 	case VMM_IOC_INFO:
 	case VMM_IOC_SHAREMEM:
 		/* The "parent" process in vmd forks and manages VMs */
-		if (p->p_p->ps_pledge & PLEDGE_PROC)
+		if (p->p_pledge & PLEDGE_PROC)
 			return (0);
 		break;
 	case VMM_IOC_TERM:
@@ -399,13 +399,13 @@ vm_create(struct vm_create_params *vcp, struct proc *p)
 		vcpu = pool_get(&vcpu_pool, PR_WAITOK | PR_ZERO);
 
 		vcpu->vc_parent = vm;
-		if ((ret = vcpu_init(vcpu)) != 0) {
+		vcpu->vc_id = vm->vm_vcpu_ct;
+		vm->vm_vcpu_ct++;
+		if ((ret = vcpu_init(vcpu, vcp)) != 0) {
 			printf("failed to init vcpu %d for vm %p\n", i, vm);
 			vm_teardown(&vm);
 			return (ret);
 		}
-		vcpu->vc_id = vm->vm_vcpu_ct;
-		vm->vm_vcpu_ct++;
 		/* Publish vcpu to list, inheriting the reference. */
 		SLIST_INSERT_HEAD(&vm->vm_vcpu_list, vcpu, vc_vcpu_link);
 	}

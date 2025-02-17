@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_policy.c,v 1.27 2024/03/02 11:20:36 tb Exp $ */
+/*	$OpenBSD: x509_policy.c,v 1.29 2025/01/06 17:42:39 tb Exp $ */
 /*
  * Copyright (c) 2022, Google Inc.
  *
@@ -31,8 +31,8 @@
 #define X509_R_INVALID_POLICY_EXTENSION 201
 
 /*
- * This file computes the X.509 policy tree, as described in RFC 5280, section
- * 6.1. It differs in that:
+ * This file computes the X.509 policy tree, as described in RFC 5280,
+ * section 6.1 and RFC 9618. It differs in that:
  *
  *  (1) It does not track "qualifier_set". This is not needed as it is not
  *      output by this implementation.
@@ -398,7 +398,7 @@ process_certificate_policies(const X509 *x509, X509_POLICY_LEVEL *level,
 
 	/*
 	 * This does the same thing as RFC 5280, section 6.1.3, step (d),
-	 * though in a slighty different order. |level| currently contains
+	 * though in a slightly different order. |level| currently contains
 	 * "expected_policy_set" values of the previous level.
 	 * See |process_policy_mappings| for details.
 	 */

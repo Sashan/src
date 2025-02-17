@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_usrreq.c,v 1.209 2024/08/06 20:13:58 mvs Exp $	*/
+/*	$OpenBSD: uipc_usrreq.c,v 1.215 2025/01/31 13:40:33 bluhm Exp $	*/
 /*	$NetBSD: uipc_usrreq.c,v 1.18 1996/02/09 19:00:50 christos Exp $	*/
 
 /*
@@ -234,13 +234,13 @@ uipc_setaddr(const struct unpcb *unp, struct mbuf *nam)
  * and don't really want to reserve the sendspace.  Their recvspace should
  * be large enough for at least one max-size datagram plus address.
  */
-#define	PIPSIZ	8192
+#define	PIPSIZ	32768
 u_int	unpst_sendspace = PIPSIZ;	/* [a] */
 u_int	unpst_recvspace = PIPSIZ;	/* [a] */
 u_int	unpsq_sendspace = PIPSIZ;	/* [a] */
 u_int	unpsq_recvspace = PIPSIZ;	/* [a] */
-u_int	unpdg_sendspace = 2*1024;	/* [a] really max datagram size */
-u_int	unpdg_recvspace = 16*1024;	/* [a] */
+u_int	unpdg_sendspace = 8192;		/* [a] really max datagram size */
+u_int	unpdg_recvspace = PIPSIZ;	/* [a] */
 
 const struct sysctl_bounded_args unpstctl_vars[] = {
 	{ UNPCTL_RECVSPACE, &unpst_recvspace, 0, SB_MAX },
@@ -385,7 +385,7 @@ uipc_bind(struct socket *so, struct mbuf *nam, struct proc *p)
 		solock(unp->unp_socket);
 		goto out;
 	}
-	VATTR_NULL(&vattr);
+	vattr_null(&vattr);
 	vattr.va_type = VSOCK;
 	vattr.va_mode = ACCESSPERMS &~ p->p_fd->fd_cmask;
 	error = VOP_CREATE(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr);
@@ -656,7 +656,7 @@ uipc_abort(struct socket *so)
 	struct unpcb *unp = sotounpcb(so);
 
 	unp_detach(unp);
-	sofree(so, 0);
+	sofree(so, 1);
 }
 
 int
@@ -890,18 +890,17 @@ unp_connect(struct socket *so, struct mbuf *nam, struct proc *p)
 
 		if ((so2->so_options & SO_ACCEPTCONN) == 0 ||
 		    (so3 = sonewconn(so2, 0, M_WAIT)) == NULL) {
+			sounlock(so2);
 			error = ECONNREFUSED;
-		}
-
-		sounlock(so2);
-
-		if (error != 0)
 			goto put;
+		}
 
 		/*
 		 * Since `so2' is protected by vnode(9) lock, `so3'
 		 * can't be PRU_ABORT'ed here.
 		 */
+		sounlock(so2);
+		sounlock(so3);
 		solock_pair(so, so3);
 
 		unp2 = sotounpcb(so2);
@@ -925,22 +924,15 @@ unp_connect(struct socket *so, struct mbuf *nam, struct proc *p)
 		}
 
 		so2 = so3;
-	} else {
-		if (so2 != so)
-			solock_pair(so, so2);
-		else
-			solock(so);
-	}
+	} else
+		solock_pair(so, so2);
 
 	error = unp_connect2(so, so2);
-
-	sounlock(so);
 
 	/*
 	 * `so2' can't be PRU_ABORT'ed concurrently
 	 */
-	if (so2 != so)
-		sounlock(so2);
+	sounlock_pair(so, so2);
 put:
 	vput(vp);
 unlock:
@@ -1158,7 +1150,7 @@ restart:
 	 * Keep `fdp' locked to prevent concurrent close() of just
 	 * inserted descriptors. Such descriptors could have the only
 	 * `f_count' reference which is now shared between control
-	 * message and `fdp'. 
+	 * message and `fdp'.
 	 */
 
 	/*
@@ -1469,7 +1461,7 @@ unp_gc(void *arg __unused)
 				m = sb->sb_mb;
 				memset(&sb->sb_startzero, 0,
 				    (caddr_t)&sb->sb_endzero -
-				        (caddr_t)&sb->sb_startzero);
+				    (caddr_t)&sb->sb_startzero);
 				sb->sb_timeo_nsecs = INFSLP;
 				mtx_leave(&sb->sb_mtx);
 

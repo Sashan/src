@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio_mmio.c,v 1.13 2024/05/17 16:37:10 sf Exp $	*/
+/*	$OpenBSD: virtio_mmio.c,v 1.23 2025/01/14 14:28:38 sf Exp $	*/
 /*	$NetBSD: virtio.c,v 1.3 2011/11/02 23:05:52 njoly Exp $	*/
 
 /*
@@ -97,11 +97,16 @@ void		virtio_mmio_write_device_config_4(struct virtio_softc *, int, uint32_t);
 void		virtio_mmio_write_device_config_8(struct virtio_softc *, int, uint64_t);
 uint16_t	virtio_mmio_read_queue_size(struct virtio_softc *, uint16_t);
 void		virtio_mmio_setup_queue(struct virtio_softc *, struct virtqueue *, uint64_t);
+void		virtio_mmio_setup_intrs(struct virtio_softc *);
+int		virtio_mmio_attach_finish(struct virtio_softc *, struct virtio_attach_args *);
 int		virtio_mmio_get_status(struct virtio_softc *);
 void		virtio_mmio_set_status(struct virtio_softc *, int);
 int		virtio_mmio_negotiate_features(struct virtio_softc *,
     const struct virtio_feature_name *);
 int		virtio_mmio_intr(void *);
+void		virtio_mmio_intr_barrier(struct virtio_softc *);
+int		virtio_mmio_intr_establish(struct virtio_softc *, struct virtio_attach_args *,
+    int, struct cpu_info *, int (*)(void *), void *);
 
 struct virtio_mmio_softc {
 	struct virtio_softc	sc_sc;
@@ -115,6 +120,11 @@ struct virtio_mmio_softc {
 
 	int			sc_config_offset;
 	uint32_t		sc_version;
+};
+
+struct virtio_mmio_attach_args {
+	struct virtio_attach_args	 vma_va;
+	struct fdt_attach_args		*vma_fa;
 };
 
 const struct cfattach virtio_mmio_ca = {
@@ -133,7 +143,7 @@ const struct cfattach virtio_mmio_fdt_ca = {
 	NULL
 };
 
-struct virtio_ops virtio_mmio_ops = {
+const struct virtio_ops virtio_mmio_ops = {
 	virtio_mmio_kick,
 	virtio_mmio_read_device_config_1,
 	virtio_mmio_read_device_config_2,
@@ -145,10 +155,14 @@ struct virtio_ops virtio_mmio_ops = {
 	virtio_mmio_write_device_config_8,
 	virtio_mmio_read_queue_size,
 	virtio_mmio_setup_queue,
+	virtio_mmio_setup_intrs,
 	virtio_mmio_get_status,
 	virtio_mmio_set_status,
 	virtio_mmio_negotiate_features,
+	virtio_mmio_attach_finish,
 	virtio_mmio_intr,
+	virtio_mmio_intr_barrier,
+	virtio_mmio_intr_establish,
 };
 
 uint16_t
@@ -196,6 +210,11 @@ virtio_mmio_setup_queue(struct virtio_softc *vsc, struct virtqueue *vq,
 	}
 }
 
+void
+virtio_mmio_setup_intrs(struct virtio_softc *vsc)
+{
+}
+
 int
 virtio_mmio_get_status(struct virtio_softc *vsc)
 {
@@ -218,7 +237,7 @@ virtio_mmio_set_status(struct virtio_softc *vsc, int status)
 		    VIRTIO_MMIO_STATUS) != 0) {
 			CPU_BUSY_CYCLE();
 		}
-	} else  {
+	} else {
 		old = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
 		    VIRTIO_MMIO_STATUS);
 		bus_space_write_4(sc->sc_iot, sc->sc_ioh, VIRTIO_MMIO_STATUS,
@@ -241,6 +260,7 @@ virtio_mmio_attach(struct device *parent, struct device *self, void *aux)
 	struct virtio_mmio_softc *sc = (struct virtio_mmio_softc *)self;
 	struct virtio_softc *vsc = &sc->sc_sc;
 	uint32_t id, magic;
+	struct virtio_mmio_attach_args vma = { { 0 }, faa };
 
 	if (faa->fa_nreg < 1) {
 		printf(": no register data\n");
@@ -271,15 +291,15 @@ virtio_mmio_attach(struct device *parent, struct device *self, void *aux)
 	id = bus_space_read_4(sc->sc_iot, sc->sc_ioh, VIRTIO_MMIO_DEVICE_ID);
 	printf(": Virtio %s Device", virtio_device_string(id));
 
-	if (sc->sc_version == 1)
-		bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-		    VIRTIO_MMIO_GUEST_PAGE_SIZE, PAGE_SIZE);
-
 	printf("\n");
 
 	/* No device connected. */
 	if (id == 0)
 		return;
+
+	if (sc->sc_version == 1)
+		bus_space_write_4(sc->sc_iot, sc->sc_ioh,
+		    VIRTIO_MMIO_GUEST_PAGE_SIZE, PAGE_SIZE);
 
 	vsc->sc_ops = &virtio_mmio_ops;
 	vsc->sc_dmat = sc->sc_dmat;
@@ -289,36 +309,43 @@ virtio_mmio_attach(struct device *parent, struct device *self, void *aux)
 	virtio_mmio_set_status(vsc, VIRTIO_CONFIG_DEVICE_STATUS_ACK);
 	virtio_mmio_set_status(vsc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER);
 
-	/* XXX: use softc as aux... */
-	vsc->sc_childdevid = id;
+	vma.vma_va.va_devid = id;
+	vma.vma_va.va_nintr = 1;
 	vsc->sc_child = NULL;
-	config_found(self, sc, NULL);
+	config_found(self, &vma, NULL);
 	if (vsc->sc_child == NULL) {
 		printf("%s: no matching child driver; not configured\n",
 		    vsc->sc_dev.dv_xname);
-		goto fail_1;
+		goto fail;
 	}
 	if (vsc->sc_child == VIRTIO_CHILD_ERROR) {
 		printf("%s: virtio configuration failed\n",
 		    vsc->sc_dev.dv_xname);
-		goto fail_1;
-	}
-
-	sc->sc_ih = fdt_intr_establish(faa->fa_node, vsc->sc_ipl,
-	    virtio_mmio_intr, sc, vsc->sc_dev.dv_xname);
-	if (sc->sc_ih == NULL) {
-		printf("%s: couldn't establish interrupt\n",
-		    vsc->sc_dev.dv_xname);
-		goto fail_2;
+		goto fail;
 	}
 
 	return;
 
-fail_2:
-	config_detach(vsc->sc_child, 0);
-fail_1:
-	/* no mmio_mapreg_unmap() or mmio_intr_unmap() */
+fail:
 	virtio_set_status(vsc, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
+}
+
+int
+virtio_mmio_attach_finish(struct virtio_softc *vsc,
+    struct virtio_attach_args *va)
+{
+	struct virtio_mmio_softc *sc = (struct virtio_mmio_softc *)vsc;
+	struct virtio_mmio_attach_args *vma =
+	    (struct virtio_mmio_attach_args *)va;
+
+	sc->sc_ih = fdt_intr_establish(vma->vma_fa->fa_node, vsc->sc_ipl,
+	    virtio_mmio_intr, sc, vsc->sc_dev.dv_xname);
+	if (sc->sc_ih == NULL) {
+		printf("%s: couldn't establish interrupt\n",
+		    vsc->sc_dev.dv_xname);
+		return -EIO;
+	}
+	return 0;
 }
 
 int
@@ -513,4 +540,20 @@ virtio_mmio_kick(struct virtio_softc *vsc, uint16_t idx)
 	struct virtio_mmio_softc *sc = (struct virtio_mmio_softc *)vsc;
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, VIRTIO_MMIO_QUEUE_NOTIFY,
 	    idx);
+}
+
+void
+virtio_mmio_intr_barrier(struct virtio_softc *vsc)
+{
+	struct virtio_mmio_softc *sc = (struct virtio_mmio_softc *)vsc;
+	if (sc->sc_ih)
+		intr_barrier(sc->sc_ih);
+}
+
+int
+virtio_mmio_intr_establish(struct virtio_softc *vsc,
+    struct virtio_attach_args *va, int vec, struct cpu_info *ci,
+    int (*func)(void *), void *arg)
+{
+	return ENXIO;
 }

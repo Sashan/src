@@ -1,4 +1,4 @@
-/*	$OpenBSD: xl.c,v 1.139 2023/11/10 15:51:20 bluhm Exp $	*/
+/*	$OpenBSD: xl.c,v 1.141 2024/11/05 18:58:59 miod Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999
@@ -188,29 +188,23 @@ xl_activate(struct device *self, int act)
 {
 	struct xl_softc *sc = (struct xl_softc *)self;
 	struct ifnet	*ifp = &sc->sc_arpcom.ac_if;
-	int rv = 0;
 
 	switch (act) {
 	case DVACT_SUSPEND:
 		if (ifp->if_flags & IFF_RUNNING)
 			xl_stop(sc);
-		rv = config_activate_children(self, act);
 		break;
 	case DVACT_RESUME:
 		if (ifp->if_flags & IFF_UP)
 			xl_init(sc);
 		break;
 	case DVACT_POWERDOWN:
-		rv = config_activate_children(self, act);
 #ifndef SMALL_KERNEL
 		xl_wol_power(sc);
 #endif
 		break;
-	default:
-		rv = config_activate_children(self, act);
-		break;
 	}
-	return (rv);
+	return (0);
 }
 
 /*
@@ -2660,5 +2654,5 @@ xl_wol(struct ifnet *ifp, int enable)
 #endif
 
 struct cfdriver xl_cd = {
-	0, "xl", DV_IFNET
+	NULL, "xl", DV_IFNET
 };

@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: l3vpn.sh,v 1.4 2023/02/15 14:19:08 claudio Exp $
+#	$OpenBSD: l3vpn.sh,v 1.6 2024/10/28 12:11:05 claudio Exp $
 
 set -e
 
@@ -22,7 +22,6 @@ PAIR2IP6=2001:db8:57::2
 error_notify() {
 	set -x
 	echo cleanup
-	pfctl -q -t bgpd_integ_test -T kill
 	pkill -T ${RDOMAIN1} bgpd || true
 	pkill -T ${RDOMAIN2} bgpd || true
 	sleep 1
@@ -116,6 +115,7 @@ echo Remove new network
 route -T ${RDOMAIN2} exec bgpctl network del 192.168.45.0/24 rd 4200000002:14
 route -T ${RDOMAIN2} exec bgpctl network del 2001:db8:42:45::/64 rd 4200000002:14
 sleep 1
+route -T ${RDOMAIN1} exec bgpctl show rib
 ! route -T ${RDOMAIN3} get 192.168.45/24 > /dev/null
 ! route -T ${RDOMAIN3} get -inet6 2001:db8:42:45::/64 > /dev/null
 

@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip_divert.c,v 1.96 2024/07/12 19:50:35 bluhm Exp $ */
+/*      $OpenBSD: ip_divert.c,v 1.99 2025/01/23 12:51:51 bluhm Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -41,17 +41,22 @@
 
 #include <net/pfvar.h>
 
+/*
+ * Locks used to protect data:
+ *	a	atomic
+ */
+
 struct	inpcbtable	divbtable;
 struct	cpumem		*divcounters;
 
 #ifndef DIVERT_SENDSPACE
 #define DIVERT_SENDSPACE	(65536 + 100)
 #endif
-u_int   divert_sendspace = DIVERT_SENDSPACE;
+u_int   divert_sendspace = DIVERT_SENDSPACE;	/* [a] */
 #ifndef DIVERT_RECVSPACE
 #define DIVERT_RECVSPACE	(65536 + 100)
 #endif
-u_int   divert_recvspace = DIVERT_RECVSPACE;
+u_int   divert_recvspace = DIVERT_RECVSPACE;	/* [a] */
 
 #ifndef DIVERTHASHSIZE
 #define DIVERTHASHSIZE	128
@@ -231,7 +236,7 @@ divert_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 		if_put(ifp);
 	} else {
 		/*
-		 * Calculate IP and protocol checksums for outbound packet 
+		 * Calculate IP and protocol checksums for outbound packet
 		 * diverted to userland.  pf rule diverts before cksum offload.
 		 */
 		in_hdr_cksum_out(m, NULL);
@@ -267,11 +272,11 @@ divert_attach(struct socket *so, int proto, int wait)
 	if ((so->so_state & SS_PRIV) == 0)
 		return EACCES;
 
-	error = in_pcballoc(so, &divbtable, wait);
+	error = soreserve(so, atomic_load_int(&divert_sendspace),
+	    atomic_load_int(&divert_recvspace));
 	if (error)
 		return error;
-
-	error = soreserve(so, divert_sendspace, divert_recvspace);
+	error = in_pcballoc(so, &divbtable, wait);
 	if (error)
 		return error;
 
@@ -346,8 +351,6 @@ int
 divert_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
 {
-	int error;
-
 	/* All sysctl names at this level are terminal. */
 	if (namelen != 1)
 		return (ENOTDIR);
@@ -356,12 +359,9 @@ divert_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case DIVERTCTL_STATS:
 		return (divert_sysctl_divstat(oldp, oldlenp, newp));
 	default:
-		NET_LOCK();
-		error = sysctl_bounded_arr(divertctl_vars,
-		    nitems(divertctl_vars), name, namelen, oldp, oldlenp, newp,
-		    newlen);
-		NET_UNLOCK();
-		return (error);
+		return (sysctl_bounded_arr(divertctl_vars,
+		    nitems(divertctl_vars), name, namelen, oldp, oldlenp,
+		    newp, newlen));
 	}
 	/* NOTREACHED */
 }

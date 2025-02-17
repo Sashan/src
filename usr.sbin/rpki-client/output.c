@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.33 2024/02/22 12:49:42 job Exp $ */
+/*	$OpenBSD: output.c,v 1.38 2025/01/03 10:14:32 job Exp $ */
 /*
  * Copyright (c) 2019 Theo de Raadt <deraadt@openbsd.org>
  *
@@ -67,9 +67,7 @@ static const struct outputs {
 		    struct vap_tree *, struct vsp_tree *, struct stats *);
 } outputs[] = {
 	{ FORMAT_OPENBGPD, "openbgpd", output_bgpd },
-	{ FORMAT_BIRD, "bird1v4", output_bird1v4 },
-	{ FORMAT_BIRD, "bird1v6", output_bird1v6 },
-	{ FORMAT_BIRD, "bird", output_bird2 },
+	{ FORMAT_BIRD, "bird", output_bird },
 	{ FORMAT_CSV, "csv", output_csv },
 	{ FORMAT_JSON, "json", output_json },
 	{ FORMAT_OMETRIC, "metrics", output_ometric },
@@ -82,6 +80,48 @@ static int	 output_finish(FILE *);
 static void	 sig_handler(int);
 static void	 set_signal_handler(void);
 
+/*
+ * Detect & reject so-called "AS0 TALs".
+ * AS0 TALs are TALs where for each and every subordinate ROA the asID field
+ * set to 0. Such TALs introduce operational risk, as they change the fail-safe
+ * from 'fail-open' to 'fail-closed'. Some context:
+ *     https://lists.afrinic.net/pipermail/rpd/2021/013312.html
+ *     https://lists.afrinic.net/pipermail/rpd/2021/013314.html
+ */
+static void
+prune_as0_tals(struct vrp_tree *vrps)
+{
+	struct vrp *v, *tv;
+	int talid;
+	int has_vrps[TALSZ_MAX] = { 0 };
+	int is_as0_tal[TALSZ_MAX] = { 0 };
+
+	for (talid = 0; talid < talsz; talid++)
+		is_as0_tal[talid] = 1;
+
+	RB_FOREACH(v, vrp_tree, vrps) {
+		has_vrps[v->talid] = 1;
+		if (v->asid != 0)
+			is_as0_tal[v->talid] = 0;
+	}
+
+	for (talid = 0; talid < talsz; talid++) {
+		if (is_as0_tal[talid] && has_vrps[talid]) {
+			warnx("%s: Detected AS0 TAL, pruning associated VRPs",
+			    taldescs[talid]);
+		}
+	}
+
+	RB_FOREACH_SAFE(v, vrp_tree, vrps, tv) {
+		if (is_as0_tal[v->talid]) {
+			RB_REMOVE(vrp_tree, vrps, v);
+			free(v);
+		}
+	}
+
+	/* XXX: update talstats? */
+}
+
 int
 outputfiles(struct vrp_tree *v, struct brk_tree *b, struct vap_tree *a,
     struct vsp_tree *p, struct stats *st)
@@ -90,6 +130,9 @@ outputfiles(struct vrp_tree *v, struct brk_tree *b, struct vap_tree *a,
 
 	atexit(output_cleantmp);
 	set_signal_handler();
+
+	if (excludeas0)
+		prune_as0_tals(v);
 
 	for (i = 0; outputs[i].name; i++) {
 		FILE *fout;

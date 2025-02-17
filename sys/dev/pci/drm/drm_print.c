@@ -23,13 +23,13 @@
  * Rob Clark <robdclark@gmail.com>
  */
 
-#include <linux/stdarg.h>
-
+#include <linux/debugfs.h>
+#include <linux/dynamic_debug.h>
 #include <linux/io.h>
 #include <linux/moduleparam.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <linux/dynamic_debug.h>
+#include <linux/stdarg.h>
 
 #include <drm/drm.h>
 #include <drm/drm_drv.h>
@@ -104,8 +104,9 @@ void __drm_puts_coredump(struct drm_printer *p, const char *str)
 			copy = iterator->remain;
 
 		/* Copy out the bit of the string that we need */
-		memcpy(iterator->data,
-			str + (iterator->start - iterator->offset), copy);
+		if (iterator->data)
+			memcpy(iterator->data,
+			       str + (iterator->start - iterator->offset), copy);
 
 		iterator->offset = iterator->start + copy;
 		iterator->remain -= copy;
@@ -114,7 +115,8 @@ void __drm_puts_coredump(struct drm_printer *p, const char *str)
 
 		len = min_t(ssize_t, strlen(str), iterator->remain);
 
-		memcpy(iterator->data + pos, str, len);
+		if (iterator->data)
+			memcpy(iterator->data + pos, str, len);
 
 		iterator->offset += len;
 		iterator->remain -= len;
@@ -144,8 +146,9 @@ void __drm_printfn_coredump(struct drm_printer *p, struct va_format *vaf)
 	if ((iterator->offset >= iterator->start) && (len < iterator->remain)) {
 		ssize_t pos = iterator->offset - iterator->start;
 
-		snprintf(((char *) iterator->data) + pos,
-			iterator->remain, "%pV", vaf);
+		if (iterator->data)
+			snprintf(((char *) iterator->data) + pos,
+				 iterator->remain, "%pV", vaf);
 
 		iterator->offset += len;
 		iterator->remain -= len;
@@ -180,23 +183,55 @@ void __drm_printfn_seq_file(struct drm_printer *p, struct va_format *vaf)
 }
 EXPORT_SYMBOL(__drm_printfn_seq_file);
 
+static void __drm_dev_vprintk(const struct device *dev, const char *level,
+			      const void *origin, const char *prefix,
+			      struct va_format *vaf)
+{
+	const char *prefix_pad = prefix ? " " : "";
+
+	if (!prefix)
+		prefix = "";
+
+	if (dev) {
+		dev_printk(level, dev, "[" DRM_NAME "]%s%s ",
+			   prefix_pad, prefix);
+	} else {
+		printk("%s" "[" DRM_NAME "]%s%s ",
+		       level, prefix_pad, prefix);
+	}
+	vprintf(vaf->fmt, *vaf->va);
+}
+
 #ifdef __linux__
 void __drm_printfn_info(struct drm_printer *p, struct va_format *vaf)
 {
 	dev_info(p->arg, "[" DRM_NAME "] %pV", vaf);
 }
 EXPORT_SYMBOL(__drm_printfn_info);
+#endif
 
-void __drm_printfn_debug(struct drm_printer *p, struct va_format *vaf)
+void __drm_printfn_dbg(struct drm_printer *p, struct va_format *vaf)
 {
-	/* pr_debug callsite decorations are unhelpful here */
-	printk(KERN_DEBUG "%s %pV", p->prefix, vaf);
-}
-EXPORT_SYMBOL(__drm_printfn_debug);
+	const struct drm_device *drm = p->arg;
+	const struct device *dev = drm ? drm->dev : NULL;
+	enum drm_debug_category category = p->category;
 
+	if (!__drm_debug_enabled(category))
+		return;
+
+	__drm_dev_vprintk(dev, KERN_DEBUG, p->origin, p->prefix, vaf);
+}
+EXPORT_SYMBOL(__drm_printfn_dbg);
+
+#ifdef __linux__
 void __drm_printfn_err(struct drm_printer *p, struct va_format *vaf)
 {
-	pr_err("*ERROR* %s %pV", p->prefix, vaf);
+	struct drm_device *drm = p->arg;
+
+	if (p->prefix)
+		drm_err(drm, "%s %pV", p->prefix, vaf);
+	else
+		drm_err(drm, "%pV", vaf);
 }
 EXPORT_SYMBOL(__drm_printfn_err);
 #else
@@ -297,12 +332,7 @@ void drm_dev_printk(const struct device *dev, const char *level,
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	if (dev)
-		dev_printk(level, dev, "[" DRM_NAME ":%ps] %pV",
-			   __builtin_return_address(0), &vaf);
-	else
-		printk("%s" "[" DRM_NAME ":%ps] %pV",
-		       level, __builtin_return_address(0), &vaf);
+	__drm_dev_vprintk(dev, level, __builtin_return_address(0), NULL, &vaf);
 
 	va_end(args);
 }
@@ -322,35 +352,11 @@ void __drm_dev_dbg(struct _ddebug *desc, const struct device *dev,
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	if (dev)
-		dev_printk(KERN_DEBUG, dev, "[" DRM_NAME ":%ps] %pV",
-			   __builtin_return_address(0), &vaf);
-	else
-		printk(KERN_DEBUG "[" DRM_NAME ":%ps] %pV",
-		       __builtin_return_address(0), &vaf);
+	__drm_dev_vprintk(dev, KERN_DEBUG, __builtin_return_address(0), NULL, &vaf);
 
 	va_end(args);
 }
 EXPORT_SYMBOL(__drm_dev_dbg);
-
-void ___drm_dbg(struct _ddebug *desc, enum drm_debug_category category, const char *format, ...)
-{
-	struct va_format vaf;
-	va_list args;
-
-	if (!__drm_debug_enabled(category))
-		return;
-
-	va_start(args, format);
-	vaf.fmt = format;
-	vaf.va = &args;
-
-	printk(KERN_DEBUG "[" DRM_NAME ":%ps] %pV",
-	       __builtin_return_address(0), &vaf);
-
-	va_end(args);
-}
-EXPORT_SYMBOL(___drm_dbg);
 
 void __drm_err(const char *format, ...)
 {
@@ -361,8 +367,7 @@ void __drm_err(const char *format, ...)
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	printk(KERN_ERR "[" DRM_NAME ":%ps] *ERROR* %pV",
-	       __builtin_return_address(0), &vaf);
+	__drm_dev_vprintk(NULL, KERN_ERR, __builtin_return_address(0), "*ERROR*", &vaf);
 
 	va_end(args);
 }

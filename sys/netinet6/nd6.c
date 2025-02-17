@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6.c,v 1.282 2024/07/14 18:53:39 bluhm Exp $	*/
+/*	$OpenBSD: nd6.c,v 1.286 2025/02/16 11:39:28 bluhm Exp $	*/
 /*	$KAME: nd6.c,v 1.280 2002/06/08 19:52:07 itojun Exp $	*/
 
 /*
@@ -99,7 +99,7 @@ struct mutex nd6_mtx = MUTEX_INITIALIZER(IPL_SOFTNET);
 TAILQ_HEAD(llinfo_nd6_head, llinfo_nd6) nd6_list =
     TAILQ_HEAD_INITIALIZER(nd6_list);	/* [mN] list of llinfo_nd6 structures */
 struct	pool nd6_pool;		/* [I] pool for llinfo_nd6 structures */
-int	nd6_inuse;		/* [m] limit neigbor discovery routes */
+int	nd6_inuse;		/* [m] limit neighbor discovery routes */
 unsigned int	ln_hold_total;	/* [a] packets currently in the nd6 queue */
 
 void nd6_timer(void *);
@@ -709,21 +709,25 @@ nd6_nud_hint(struct rtentry *rt)
 	struct llinfo_nd6 *ln;
 	struct ifnet *ifp;
 
-	NET_ASSERT_LOCKED_EXCLUSIVE();
+	NET_ASSERT_LOCKED();
+
+	if ((rt->rt_flags & RTF_GATEWAY) != 0 ||
+	    (rt->rt_flags & RTF_LLINFO) == 0 ||
+	    rt->rt_gateway == NULL ||
+	    rt->rt_gateway->sa_family != AF_LINK) {
+		/* This is not a host route. */
+		return;
+	}
 
 	ifp = if_get(rt->rt_ifidx);
 	if (ifp == NULL)
 		return;
 
-	if ((rt->rt_flags & RTF_GATEWAY) != 0 ||
-	    (rt->rt_flags & RTF_LLINFO) == 0 ||
-	    rt->rt_llinfo == NULL || rt->rt_gateway == NULL ||
-	    rt->rt_gateway->sa_family != AF_LINK) {
-		/* This is not a host route. */
-		goto out;
-	}
+	mtx_enter(&nd6_mtx);
 
 	ln = (struct llinfo_nd6 *)rt->rt_llinfo;
+	if (ln == NULL)
+		goto out;
 	if (ln->ln_state < ND6_LLINFO_REACHABLE)
 		goto out;
 
@@ -739,6 +743,7 @@ nd6_nud_hint(struct rtentry *rt)
 	if (!ND6_LLINFO_PERMANENT(ln))
 		nd6_llinfo_settimer(ln, ifp->if_nd->reachable);
 out:
+	mtx_leave(&nd6_mtx);
 	if_put(ifp);
 }
 

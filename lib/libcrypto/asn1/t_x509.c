@@ -1,4 +1,4 @@
-/* $OpenBSD: t_x509.c,v 1.45 2024/04/09 13:55:02 beck Exp $ */
+/* $OpenBSD: t_x509.c,v 1.51 2025/02/08 03:41:36 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -56,26 +56,21 @@
  * [including the GNU Public Licence.]
  */
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <openssl/opensslconf.h>
 
-#include <openssl/bn.h>
-#include <openssl/buffer.h>
+#include <openssl/asn1.h>
+#include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/objects.h>
+#include <openssl/sha.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
-
-#ifndef OPENSSL_NO_DSA
-#include <openssl/dsa.h>
-#endif
-#ifndef OPENSSL_NO_EC
-#include <openssl/ec.h>
-#endif
-#ifndef OPENSSL_NO_RSA
-#include <openssl/rsa.h>
-#endif
 
 #include "evp_local.h"
 #include "x509_local.h"
@@ -155,8 +150,21 @@ X509_print_ex(BIO *bp, X509 *x, unsigned long nmflags, unsigned long cflag)
 
 		bs = X509_get_serialNumber(x);
 		l = -1;
-		if (bs->length <= (int)sizeof(long))
-			l = ASN1_INTEGER_get(bs);
+
+		/*
+		 * For historical reasons, non-negative serial numbers are
+		 * printed in decimal as long as they fit into a long. Using
+		 * ASN1_INTEGER_get_uint64() avoids an error on the stack for
+		 * numbers between LONG_MAX and ULONG_MAX. Otherwise fall back
+		 * to hexadecimal, also for numbers that are non-conformant
+		 * (negative or larger than 2^159 - 1).
+		 */
+		if (bs->length <= sizeof(long) && bs->type == V_ASN1_INTEGER) {
+			uint64_t u64;
+
+			if (ASN1_INTEGER_get_uint64(&u64, bs) && u64 <= LONG_MAX)
+				l = (long)u64;
+		}
 		if (l >= 0) {
 			if (BIO_printf(bp, " %ld (0x%lx)\n", l, l) <= 0)
 				goto err;
@@ -475,49 +483,3 @@ ASN1_UTCTIME_print(BIO *bp, const ASN1_UTCTIME *tm)
 	return (0);
 }
 LCRYPTO_ALIAS(ASN1_UTCTIME_print);
-
-int
-X509_NAME_print(BIO *bp, const X509_NAME *name, int obase)
-{
-	char *s, *c, *b;
-	int i;
-	int ret = 0;
-
-	b = X509_NAME_oneline(name, NULL, 0);
-	if (b == NULL)
-		return 0;
-	if (*b == '\0') {
-		free(b);
-		return 1;
-	}
-	s = b + 1; /* skip the first slash */
-
-	c = s;
-	for (;;) {
-		if (((*s == '/') &&
-		    ((s[1] >= 'A') && (s[1] <= 'Z') &&
-		    ((s[2] == '=') || ((s[2] >= 'A') && (s[2] <= 'Z') &&
-		    (s[3] == '='))))) || (*s == '\0')) {
-			i = s - c;
-			if (BIO_write(bp, c, i) != i)
-				goto err;
-			c = s + 1;	/* skip following slash */
-			if (*s != '\0') {
-				if (BIO_write(bp, ", ", 2) != 2)
-					goto err;
-			}
-		}
-		if (*s == '\0')
-			break;
-		s++;
-	}
-
-	ret = 1;
-	if (0) {
- err:
-		X509error(ERR_R_BUF_LIB);
-	}
-	free(b);
-	return (ret);
-}
-LCRYPTO_ALIAS(X509_NAME_print);

@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.524 2024/08/04 11:05:18 kettenis Exp $
+#	$OpenBSD: GENERIC,v 1.532 2025/02/10 11:41:19 miod Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -86,6 +86,7 @@ ipmi0		at acpi? disable
 ccpmic*		at iic?
 tipmic*		at iic?
 intelpmc*	at acpi?
+pckbc*		at acpi?
 
 efi0		at bios0
 mpbios0		at bios0
@@ -120,6 +121,7 @@ ksmn*	at pci?			# AMD K17 temperature sensor
 amas*	at pci? disable		# AMD memory configuration
 pchtemp* at pci?		# Intel C610 temperature sensor
 ccp*	at pci?			# AMD Cryptographic Co-processor
+psp*	at ccp?			# AMD Platform Security Processor
 
 # National Semiconductor LM7[89] and compatible hardware monitors
 lm0	at isa? port 0x290
@@ -391,6 +393,7 @@ wsmouse*	at pms? mux 0
 #agp*		at mmuagp?
 
 inteldrm*	at pci? 	# Intel i915, i945 DRM driver
+option		I915
 intagp*		at inteldrm?
 agp*		at intagp?
 drm0		at inteldrm? primary 1
@@ -528,6 +531,7 @@ msk*	at mskc?			#  each port of above
 em*	at pci?				# Intel Pro/1000 ethernet
 ixgb*	at pci?				# Intel Pro/10Gb ethernet
 ix*	at pci?				# Intel 82598EB 10Gb ethernet
+ixv*	at pci?				# Virtual Function of Intel 82599
 myx*	at pci?				# Myricom Myri-10G 10Gb ethernet
 oce*	at pci?				# Emulex OneConnect 10Gb ethernet
 txp*	at pci?				# 3com 3CR990
@@ -559,6 +563,7 @@ jme*	at pci?				# JMicron JMC250/JMC260 Ethernet
 bnxt*	at pci?				# Broadcom BCM573xx, BCM574xx
 ixl*	at pci?				# Intel Ethernet 700 Series
 dwqe*	at pci?				# Intel Elkhart Lake Ethernet
+ice*	at pci?				# Intel E810 100GbE
 mcx*	at pci?				# Mellanox ConnectX-4
 iavf*	at pci?				# Intel Ethernet Adaptive VF
 aq*	at pci?				# Aquantia aQtion Ethernet
@@ -586,6 +591,7 @@ iwn*	at pci?				# Intel WiFi Link 4965/5000/1000/6000
 iwm*	at pci?				# Intel WiFi Link 7xxx
 iwx*	at pci?				# Intel WiFi Link 22xxx
 qwx*	at pci?				# Qualcomm 802.11ax
+#qwz*	at pci?				# Qualcomm 802.11be
 ral*	at pci?				# Ralink RT2500/RT2501/RT2600
 ral*	at cardbus?			# Ralink RT2500/RT2501/RT2600
 rtw*	at pci?				# Realtek 8180

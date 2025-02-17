@@ -1,5 +1,5 @@
 #!/bin/sh
-#	$OpenBSD: redirect.sh,v 1.6 2017/01/23 23:10:35 bluhm Exp $
+#	$OpenBSD: redirect.sh,v 1.9 2024/12/31 07:58:12 anton Exp $
 
 : ${FTP:=ftp}
 
@@ -25,9 +25,9 @@ done
 
 unset http_proxy
 
-res=$(${FTP} -4 -o/dev/null -v $req1 2>&1 | \
-    sed '/^Redirected to /{s///;x;};$!d;x')
+${FTP} -4 -o/dev/null -v $req1 2>&1 | tee redirect.log
 
+res=$(sed '/^Redirected to /{s///;x;};$!d;x' redirect.log)
 if [ X"$res" != X"$req2" ]; then
 	echo "*** Fail; expected \"$req2\", got \"$res\""
 	exit 1

@@ -1,4 +1,4 @@
-/*	$OpenBSD: mem.c,v 1.7 2024/06/23 22:08:37 kettenis Exp $	*/
+/*	$OpenBSD: mem.c,v 1.10 2024/12/30 02:46:00 guenther Exp $	*/
 
 /*
  * Copyright (c) 1998-2004 Michael Shalayeff
@@ -81,6 +81,7 @@
 #include <sys/device.h>
 #include <sys/errno.h>
 #include <sys/ioctl.h>
+#include <sys/atomic.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -306,7 +307,8 @@ mmopen(dev_t dev, int flag, int ioflag, struct proc *p)
 	switch (minor(dev)) {
 	case 0:
 	case 1:
-		if (securelevel <= 0 || allowkmem)
+		if ((int)atomic_load_int(&securelevel) <= 0 ||
+		    atomic_load_int(&allowkmem))
 			break;
 		return (EPERM);
 	case 2:
@@ -421,7 +423,6 @@ int
 mmioctl(dev_t dev, u_long cmd, caddr_t data, int flags, struct proc *p)
 {
         switch (cmd) {
-        case FIONBIO:
         case FIOASYNC:
                 /* handled by fd layer */
                 return 0;

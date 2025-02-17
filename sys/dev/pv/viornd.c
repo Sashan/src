@@ -1,4 +1,4 @@
-/*	$OpenBSD: viornd.c,v 1.9 2024/06/26 01:40:49 jsg Exp $	*/
+/*	$OpenBSD: viornd.c,v 1.12 2024/12/20 22:18:27 sf Exp $	*/
 
 /*
  * Copyright (c) 2014 Stefan Fritsch <sf@sfritsch.de>
@@ -72,8 +72,8 @@ struct cfdriver viornd_cd = {
 int
 viornd_match(struct device *parent, void *match, void *aux)
 {
-	struct virtio_softc *va = aux;
-	if (va->sc_childdevid == PCI_PRODUCT_VIRTIO_ENTROPY)
+	struct virtio_attach_args *va = aux;
+	if (va->va_devid == PCI_PRODUCT_VIRTIO_ENTROPY)
 		return 1;
 	return 0;
 }
@@ -83,18 +83,19 @@ viornd_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct viornd_softc *sc = (struct viornd_softc *)self;
 	struct virtio_softc *vsc = (struct virtio_softc *)parent;
+	struct virtio_attach_args *va = aux;
 	unsigned int shift;
 
 	vsc->sc_vqs = &sc->sc_vq;
 	vsc->sc_nvqs = 1;
-	vsc->sc_config_change = NULL;
 	if (vsc->sc_child != NULL)
 		panic("already attached to something else");
 	vsc->sc_child = self;
 	vsc->sc_ipl = IPL_NET;
 	sc->sc_virtio = vsc;
 
-	virtio_negotiate_features(vsc, NULL);
+	if (virtio_negotiate_features(vsc, NULL) != 0)
+		goto err;
 
 	if (sc->sc_dev.dv_cfdata->cf_flags & VIORND_ONESHOT) {
 		sc->sc_interval = 0;
@@ -125,8 +126,7 @@ viornd_attach(struct device *parent, struct device *self, void *aux)
 		goto err2;
 	}
 
-	if (virtio_alloc_vq(vsc, &sc->sc_vq, 0, VIORND_BUFSIZE, 1,
-	    "Entropy request") != 0) {
+	if (virtio_alloc_vq(vsc, &sc->sc_vq, 0, 1, "Entropy request") != 0) {
 		printf(": Can't alloc virtqueue\n");
 		goto err2;
 	}
@@ -137,7 +137,8 @@ viornd_attach(struct device *parent, struct device *self, void *aux)
 	timeout_add(&sc->sc_tick, 1);
 
 	printf("\n");
-	virtio_set_status(vsc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
+	if (virtio_attach_finish(vsc, va) != 0)
+		goto err2;
 	return;
 err2:
 	bus_dmamap_destroy(vsc->sc_dmat, sc->sc_dmamap);

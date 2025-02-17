@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.230 2024/08/06 18:41:20 claudio Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.242 2025/02/17 10:16:05 claudio Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -118,7 +118,6 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 {
 	struct process *pr, *qr, *nqr;
 	struct rusage *rup;
-	struct timespec ts, pts;
 
 	atomic_setbits_int(&p->p_flag, P_WEXIT);
 
@@ -149,8 +148,13 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 			atomic_clearbits_int(&pr->ps_flags, PS_PPWAIT);
 			atomic_clearbits_int(&pr->ps_pptr->ps_flags,
 			    PS_ISPWAIT);
+			atomic_setbits_int(&pr->ps_pptr->ps_flags,
+			    PS_WAITEVENT);
 			wakeup(pr->ps_pptr);
 		}
+
+		/* Wait for concurrent `allprocess' loops */
+		refcnt_finalize(&pr->ps_refcnt, "psdtor");
 	}
 
 	/* unlink ourselves from the active threads */
@@ -169,17 +173,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	}
 
 	/* proc is off ps_threads list so update accounting of process now */
-	nanouptime(&ts);
-	if (timespeccmp(&ts, &curcpu()->ci_schedstate.spc_runtime, <))
-		timespecclear(&pts);
-	else
-		timespecsub(&ts, &curcpu()->ci_schedstate.spc_runtime, &pts);
-	tu_enter(&p->p_tu);
-	timespecadd(&p->p_tu.tu_runtime, &pts, &p->p_tu.tu_runtime);
-	tu_leave(&p->p_tu);
-	/* adjust spc_runtime to not double account the runtime from above */
-	curcpu()->ci_schedstate.spc_runtime = ts;
-	tuagg_add_process(p->p_p, p);
+	tuagg_add_runtime();
+	tuagg_add_process(pr, p);
 
 	if ((p->p_flag & P_THREAD) == 0) {
 		/* main thread gotta wait because it has the pid, et al */
@@ -305,9 +300,11 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 			 * Traced processes are killed since their
 			 * existence means someone is screwing up.
 			 */
+			mtx_enter(&qr->ps_mtx);
 			if (qr->ps_flags & PS_TRACED &&
 			    !(qr->ps_flags & PS_EXITING)) {
 				process_untrace(qr);
+				mtx_leave(&qr->ps_mtx);
 
 				/*
 				 * If single threading is active,
@@ -321,6 +318,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 					prsignal(qr, SIGKILL);
 			} else {
 				process_reparent(qr, initprocess);
+				mtx_leave(&qr->ps_mtx);
 			}
 		}
 
@@ -328,9 +326,11 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		 * Make sure orphans won't remember the exiting process.
 		 */
 		while ((qr = LIST_FIRST(&pr->ps_orphans)) != NULL) {
-			KASSERT(qr->ps_oppid == pr->ps_pid);
-			qr->ps_oppid = 0;
+			mtx_enter(&qr->ps_mtx);
+			KASSERT(qr->ps_opptr == pr);
+			qr->ps_opptr = NULL;
 			process_clear_orphan(qr);
+			mtx_leave(&qr->ps_mtx);
 		}
 	}
 
@@ -356,11 +356,14 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		 * we can wake our original parent to possibly unblock
 		 * wait4() to return ECHILD.
 		 */
+		mtx_enter(&pr->ps_mtx);
 		if (pr->ps_flags & PS_NOZOMBIE) {
 			struct process *ppr = pr->ps_pptr;
 			process_reparent(pr, initprocess);
+			atomic_setbits_int(&ppr->ps_flags, PS_WAITEVENT);
 			wakeup(ppr);
 		}
+		mtx_leave(&pr->ps_mtx);
 	}
 
 	/* just a thread? check if last one standing. */
@@ -387,7 +390,6 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	 * Note that cpu_exit() will end with a call equivalent to
 	 * cpu_switch(), finishing our execution (pun intended).
 	 */
-	uvmexp.swtch++;
 	cpu_exit(p);
 	panic("cpu_exit returned");
 }
@@ -429,7 +431,7 @@ proc_free(struct proc *p)
 {
 	crfree(p->p_ucred);
 	pool_put(&proc_pool, p);
-	nthreads--;
+	atomic_dec_int(&nthreads);
 }
 
 /*
@@ -468,9 +470,7 @@ reaper(void *arg)
 
 		if (p->p_flag & P_THREAD) {
 			/* Just a thread */
-			KERNEL_LOCK();
 			proc_free(p);
-			KERNEL_UNLOCK();
 		} else {
 			struct process *pr = p->p_p;
 
@@ -489,6 +489,8 @@ reaper(void *arg)
 			if (pr->ps_flags & PS_ZOMBIE) {
 				/* Post SIGCHLD and wake up parent. */
 				prsignal(pr->ps_pptr, SIGCHLD);
+				atomic_setbits_int(&pr->ps_pptr->ps_flags,
+				    PS_WAITEVENT);
 				wakeup(pr->ps_pptr);
 			} else {
 				/* No one will wait for us, just zap it. */
@@ -505,24 +507,25 @@ dowait6(struct proc *q, idtype_t idtype, id_t id, int *statusp, int options,
 {
 	int nfound;
 	struct process *pr;
-	struct proc *p;
 	int error;
 
 	if (info != NULL)
 		memset(info, 0, sizeof(*info));
 
 loop:
+	atomic_clearbits_int(&q->p_p->ps_flags, PS_WAITEVENT);
 	nfound = 0;
 	LIST_FOREACH(pr, &q->p_p->ps_children, ps_sibling) {
+		mtx_enter(&pr->ps_mtx);
 		if ((pr->ps_flags & PS_NOZOMBIE) ||
 		    (idtype == P_PID && id != pr->ps_pid) ||
-		    (idtype == P_PGID && id != pr->ps_pgid))
+		    (idtype == P_PGID && id != pr->ps_pgid)) {
+			mtx_leave(&pr->ps_mtx);
 			continue;
-
-		p = pr->ps_mainproc;
-
+		}
 		nfound++;
 		if ((options & WEXITED) && (pr->ps_flags & PS_ZOMBIE)) {
+			mtx_leave(&pr->ps_mtx);
 			*retval = pr->ps_pid;
 			if (info != NULL) {
 				info->si_pid = pr->ps_pid;
@@ -549,10 +552,10 @@ loop:
 				proc_finish_wait(q, pr);
 			return (0);
 		}
-		if ((options & WTRAPPED) &&
-		    (pr->ps_flags & PS_TRACED) &&
-		    (pr->ps_flags & PS_WAITED) == 0 && pr->ps_single &&
-		    pr->ps_single->p_stat == SSTOP) {
+		if ((options & WTRAPPED) && (pr->ps_flags & PS_TRACED) &&
+		    (pr->ps_flags & PS_WAITED) == 0 &&
+		    (pr->ps_flags & PS_TRAPPED)) {
+			mtx_leave(&pr->ps_mtx);
 			if (single_thread_wait(pr, 0))
 				goto loop;
 
@@ -574,11 +577,11 @@ loop:
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
 		}
-		if (p->p_stat == SSTOP &&
+		if (((pr->ps_flags & PS_TRACED) || (options & WUNTRACED)) &&
 		    (pr->ps_flags & PS_WAITED) == 0 &&
-		    (p->p_flag & P_SUSPSINGLE) == 0 &&
-		    ((pr->ps_flags & PS_TRACED) ||
-		    (options & WUNTRACED))) {
+		    (pr->ps_flags & PS_STOPPED) &&
+		    (pr->ps_flags & PS_TRAPPED) == 0) {
+			mtx_leave(&pr->ps_mtx);
 			if ((options & WNOWAIT) == 0)
 				atomic_setbits_int(&pr->ps_flags, PS_WAITED);
 
@@ -598,6 +601,7 @@ loop:
 			return (0);
 		}
 		if ((options & WCONTINUED) && (pr->ps_flags & PS_CONTINUED)) {
+			mtx_leave(&pr->ps_mtx);
 			if ((options & WNOWAIT) == 0)
 				atomic_clearbits_int(&pr->ps_flags,
 				    PS_CONTINUED);
@@ -617,6 +621,7 @@ loop:
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
 		}
+		mtx_leave(&pr->ps_mtx);
 	}
 	/*
 	 * Look in the orphans list too, to allow the parent to
@@ -646,7 +651,9 @@ loop:
 		*retval = 0;
 		return (0);
 	}
-	if ((error = tsleep_nsec(q->p_p, PWAIT | PCATCH, "wait", INFSLP)) != 0)
+	sleep_setup(q->p_p, PWAIT | PCATCH, "wait");
+	if ((error = sleep_finish(0,
+	    !ISSET(atomic_load_int(&q->p_p->ps_flags), PS_WAITEVENT))) != 0)
 		return (error);
 	goto loop;
 }
@@ -746,14 +753,18 @@ proc_finish_wait(struct proc *waiter, struct process *pr)
 	 * If we got the child via a ptrace 'attach',
 	 * we need to give it back to the old parent.
 	 */
-	if (pr->ps_oppid != 0 && (pr->ps_oppid != pr->ps_pptr->ps_pid) &&
-	   (tr = prfind(pr->ps_oppid))) {
-		pr->ps_oppid = 0;
+	mtx_enter(&pr->ps_mtx);
+	if (pr->ps_opptr != NULL && (pr->ps_opptr != pr->ps_pptr)) {
+		tr = pr->ps_opptr;
+		pr->ps_opptr = NULL;
 		atomic_clearbits_int(&pr->ps_flags, PS_TRACED);
 		process_reparent(pr, tr);
+		mtx_leave(&pr->ps_mtx);
 		prsignal(tr, SIGCHLD);
+		atomic_setbits_int(&tr->ps_flags, PS_WAITEVENT);
 		wakeup(tr);
 	} else {
+		mtx_leave(&pr->ps_mtx);
 		scheduler_wait_hook(waiter, pr->ps_mainproc);
 		rup = &waiter->p_p->ps_cru;
 		ruadd(rup, pr->ps_ru);
@@ -772,13 +783,14 @@ process_untrace(struct process *pr)
 	struct process *ppr = NULL;
 
 	KASSERT(pr->ps_flags & PS_TRACED);
+	MUTEX_ASSERT_LOCKED(&pr->ps_mtx);
 
-	if (pr->ps_oppid != 0 &&
-	    (pr->ps_oppid != pr->ps_pptr->ps_pid))
-		ppr = prfind(pr->ps_oppid);
+	if (pr->ps_opptr != NULL &&
+	    (pr->ps_opptr != pr->ps_pptr))
+		ppr = pr->ps_opptr;
 
 	/* not being traced any more */
-	pr->ps_oppid = 0;
+	pr->ps_opptr = NULL;
 	atomic_clearbits_int(&pr->ps_flags, PS_TRACED);
 	process_reparent(pr, ppr ? ppr : initprocess);
 }
@@ -802,8 +814,8 @@ process_reparent(struct process *child, struct process *parent)
 	if (child->ps_pptr == parent)
 		return;
 
-	KASSERT(child->ps_oppid == 0 ||
-		child->ps_oppid == child->ps_pptr->ps_pid);
+	KASSERT(child->ps_opptr == NULL ||
+		child->ps_opptr == child->ps_pptr);
 
 	LIST_REMOVE(child, ps_sibling);
 	LIST_INSERT_HEAD(&parent->ps_children, child, ps_sibling);
@@ -814,6 +826,7 @@ process_reparent(struct process *child, struct process *parent)
 		LIST_INSERT_HEAD(&child->ps_pptr->ps_orphans, child, ps_orphan);
 	}
 
+	MUTEX_ASSERT_LOCKED(&child->ps_mtx);
 	child->ps_pptr = parent;
 	child->ps_ppid = parent->ps_pid;
 }

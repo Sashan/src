@@ -1,4 +1,4 @@
-/*	$OpenBSD: azalia.c,v 1.287 2024/05/17 19:43:45 kettenis Exp $	*/
+/*	$OpenBSD: azalia.c,v 1.290 2024/08/18 14:42:56 deraadt Exp $	*/
 /*	$NetBSD: azalia.c,v 1.20 2006/05/07 08:31:44 kent Exp $	*/
 
 /*-
@@ -598,16 +598,29 @@ azalia_pci_activate(struct device *self, int act)
 	azalia_t *sc = (azalia_t*)self;
 	int rv = 0; 
 
+	if (sc->detached)
+		return (0);
+
 	switch (act) {
-	case DVACT_SUSPEND:
-		azalia_suspend(sc);
+	case DVACT_QUIESCE:
+		rv = config_activate_children(self, act);
+		/* stop interrupts and clear status registers */
+		AZ_WRITE_4(sc, INTCTL, 0);
+		AZ_WRITE_2(sc, STATESTS, HDA_STATESTS_SDIWAKE);
+		AZ_WRITE_1(sc, RIRBSTS, HDA_RIRBSTS_RINTFL | HDA_RIRBSTS_RIRBOIS);
+		(void) AZ_READ_4(sc, INTSTS);
 		break;
-	case DVACT_POWERDOWN:
-		azalia_shutdown(sc);
+	case DVACT_SUSPEND:
+		rv = config_activate_children(self, act);
+		azalia_suspend(sc);
 		break;
 	case DVACT_RESUME:
 		azalia_resume(sc);
 		rv = config_activate_children(self, act);
+		break;
+	case DVACT_POWERDOWN:
+		rv = config_activate_children(self, act);
+		azalia_shutdown(sc);
 		break;
 	default:
 		rv = config_activate_children(self, act);
@@ -1387,6 +1400,12 @@ azalia_suspend(azalia_t *az)
 
 	if (az->detached)
 		return 0;
+
+	/* stop interrupts and clear status registers */
+	AZ_WRITE_4(az, INTCTL, 0);
+	AZ_WRITE_2(az, STATESTS, HDA_STATESTS_SDIWAKE);
+	AZ_WRITE_1(az, RIRBSTS, HDA_RIRBSTS_RINTFL | HDA_RIRBSTS_RIRBOIS);
+	(void) AZ_READ_4(az, INTSTS);
 
 	/* disable unsolicited responses */
 	AZ_WRITE_4(az, GCTL, AZ_READ_4(az, GCTL) & ~HDA_GCTL_UNSOL);

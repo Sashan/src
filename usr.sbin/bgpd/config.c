@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.109 2024/05/22 08:41:14 claudio Exp $ */
+/*	$OpenBSD: config.c,v 1.114 2025/02/12 16:49:56 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -85,8 +85,10 @@ copy_config(struct bgpd_config *to, struct bgpd_config *from)
 	to->short_as = from->short_as;
 	to->holdtime = from->holdtime;
 	to->min_holdtime = from->min_holdtime;
+	to->staletime = from->staletime;
 	to->connectretry = from->connectretry;
 	to->fib_priority = from->fib_priority;
+	to->filtered_in_locrib = from->filtered_in_locrib;
 }
 
 void
@@ -405,9 +407,7 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf)
 			if (ola->flags & DEFAULT_LISTENER)
 				ola->reconf = RECONF_KEEP;
 	/* else loop over listeners and merge configs */
-	for (nla = TAILQ_FIRST(conf->listen_addrs); nla != NULL; nla = next) {
-		next = TAILQ_NEXT(nla, entry);
-
+	TAILQ_FOREACH_SAFE(nla, conf->listen_addrs, entry, next) {
 		TAILQ_FOREACH(ola, xconf->listen_addrs, entry)
 			if (!memcmp(&nla->sa, &ola->sa, sizeof(nla->sa)))
 				break;
@@ -421,8 +421,7 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf)
 			ola->reconf = RECONF_KEEP;
 	}
 	/* finally clean up the original list and remove all stale entries */
-	for (nla = TAILQ_FIRST(xconf->listen_addrs); nla != NULL; nla = next) {
-		next = TAILQ_NEXT(nla, entry);
+	TAILQ_FOREACH_SAFE(nla, xconf->listen_addrs, entry, next) {
 		if (nla->reconf == RECONF_DELETE) {
 			TAILQ_REMOVE(xconf->listen_addrs, nla, entry);
 			free(nla);
@@ -433,22 +432,20 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf)
 	 * merge peers:
 	 * - need to know which peers are new, replaced and removed
 	 * - walk over old peers and check if there is a corresponding new
-	 *   peer if so mark it RECONF_KEEP. Remove all old peers.
-	 * - swap lists (old peer list is actually empty).
+	 *   peer if so mark it RECONF_KEEP. Mark all old peers RECONF_DELETE.
 	 */
 	RB_FOREACH_SAFE(p, peer_head, &xconf->peers, nextp) {
 		np = getpeerbyid(conf, p->conf.id);
 		if (np != NULL) {
 			np->reconf_action = RECONF_KEEP;
-			/* copy the auth state since parent uses it */
-			np->auth = p->auth;
-		} else {
-			/* peer no longer exists, clear pfkey state */
-			pfkey_remove(p);
-		}
+			/* keep the auth state since parent needs it */
+			np->auth_state = p->auth_state;
 
-		RB_REMOVE(peer_head, &xconf->peers, p);
-		free(p);
+			RB_REMOVE(peer_head, &xconf->peers, p);
+			free(p);
+		} else {
+			p->reconf_action = RECONF_DELETE;
+		}
 	}
 	RB_FOREACH_SAFE(np, peer_head, &conf->peers, nextp) {
 		RB_REMOVE(peer_head, &conf->peers, np);
@@ -458,6 +455,21 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf)
 
 	/* conf is merged so free it */
 	free_config(conf);
+}
+
+void
+free_deleted_peers(struct bgpd_config *conf)
+{
+	struct peer *p, *nextp;
+
+	RB_FOREACH_SAFE(p, peer_head, &conf->peers, nextp) {
+		if (p->reconf_action == RECONF_DELETE) {
+			/* peer no longer exists, clear pfkey state */
+			pfkey_remove(&p->auth_state);
+			RB_REMOVE(peer_head, &conf->peers, p);
+			free(p);
+		}
+	}
 }
 
 uint32_t
@@ -553,8 +565,7 @@ prepare_listeners(struct bgpd_config *conf)
 	int			 opt = 1;
 	int			 r = 0;
 
-	for (la = TAILQ_FIRST(conf->listen_addrs); la != NULL; la = next) {
-		next = TAILQ_NEXT(la, entry);
+	TAILQ_FOREACH_SAFE(la, conf->listen_addrs, entry, next) {
 		if (la->reconf != RECONF_REINIT)
 			continue;
 

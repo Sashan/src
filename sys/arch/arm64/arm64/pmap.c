@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.c,v 1.103 2024/05/28 15:16:45 claudio Exp $ */
+/* $OpenBSD: pmap.c,v 1.111 2025/02/14 18:36:04 kettenis Exp $ */
 /*
  * Copyright (c) 2008-2009,2014-2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -41,6 +41,9 @@ static inline void
 ttlb_flush(pmap_t pm, vaddr_t va)
 {
 	vaddr_t resva;
+
+	if (!pm->pm_active)
+		return;
 
 	resva = ((va >> PAGE_SHIFT) & ((1ULL << 44) - 1));
 	if (pm == pmap_kernel()) {
@@ -443,6 +446,67 @@ pmap_vp_enter(pmap_t pm, vaddr_t va, struct pte_desc *pted, int flags)
 	return 0;
 }
 
+void
+pmap_vp_populate(pmap_t pm, vaddr_t va)
+{
+	struct pte_desc *pted;
+	struct pmapvp1 *vp1;
+	struct pmapvp2 *vp2;
+	struct pmapvp3 *vp3;
+	void *vp;
+
+	pted = pool_get(&pmap_pted_pool, PR_WAITOK | PR_ZERO);
+	vp = pool_get(&pmap_vp_pool, PR_WAITOK | PR_ZERO);
+
+	pmap_lock(pm);
+
+	if (pm->have_4_level_pt) {
+		vp1 = pm->pm_vp.l0->vp[VP_IDX0(va)];
+		if (vp1 == NULL) {
+			vp1 = vp; vp = NULL;
+			pmap_set_l1(pm, va, vp1);
+		}
+	} else {
+		vp1 = pm->pm_vp.l1;
+	}
+
+	if (vp == NULL) {
+		pmap_unlock(pm);
+		vp = pool_get(&pmap_vp_pool, PR_WAITOK | PR_ZERO);
+		pmap_lock(pm);
+	}
+
+	vp2 = vp1->vp[VP_IDX1(va)];
+	if (vp2 == NULL) {
+		vp2 = vp; vp = NULL;
+		pmap_set_l2(pm, va, vp1, vp2);
+	}
+	
+	if (vp == NULL) {
+		pmap_unlock(pm);
+		vp = pool_get(&pmap_vp_pool, PR_WAITOK | PR_ZERO);
+		pmap_lock(pm);
+	}
+
+	vp3 = vp2->vp[VP_IDX2(va)];
+	if (vp3 == NULL) {
+		vp3 = vp; vp = NULL;
+		pmap_set_l3(pm, va, vp2, vp3);
+	}
+
+	if (vp3->vp[VP_IDX3(va)] == NULL) {
+		vp3->vp[VP_IDX3(va)] = pted;
+		pted = NULL;
+	}
+
+	pmap_unlock(pm);
+
+	if (vp)
+		pool_put(&pmap_vp_pool, vp);
+	if (pted)
+		pool_put(&pmap_pted_pool, pted);
+}
+
 void *
 pmap_vp_page_alloc(struct pool *pp, int flags, int *slowdown)
 {
@@ -616,6 +680,11 @@ out:
 	return error;
 }
 
+void
+pmap_populate(pmap_t pm, vaddr_t va)
+{
+	pmap_vp_populate(pm, va);
+}
 
 /*
  * Remove the given range of mapping entries.
@@ -659,10 +728,6 @@ pmap_remove_pted(pmap_t pm, struct pte_desc *pted)
 
 	pmap_pte_remove(pted, pm != pmap_kernel());
 	ttlb_flush(pm, pted->pted_va & ~PAGE_MASK);
-
-	if (pted->pted_va & PTED_VA_EXEC_M) {
-		pted->pted_va &= ~PTED_VA_EXEC_M;
-	}
 
 	if (PTED_MANAGED(pted))
 		pmap_remove_pv(pted);
@@ -718,8 +783,14 @@ _pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, int flags, int cache)
 void
 pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot)
 {
-	_pmap_kenter_pa(va, pa, prot, prot,
-	    (pa & PMAP_NOCACHE) ? PMAP_CACHE_CI : PMAP_CACHE_WB);
+	int cache = PMAP_CACHE_WB;
+
+	if (pa & PMAP_NOCACHE)
+		cache = PMAP_CACHE_CI;
+	if (pa & PMAP_DEVICE)
+		cache = PMAP_CACHE_DEV_NGNRNE;
+	
+	_pmap_kenter_pa(va, pa, prot, prot, cache);
 }
 
 void
@@ -751,9 +822,6 @@ pmap_kremove_pg(vaddr_t va)
 
 	pmap_pte_remove(pted, 0);
 	ttlb_flush(pm, pted->pted_va & ~PAGE_MASK);
-
-	if (pted->pted_va & PTED_VA_EXEC_M)
-		pted->pted_va &= ~PTED_VA_EXEC_M;
 
 	if (PTED_MANAGED(pted))
 		pmap_remove_pv(pted);
@@ -821,6 +889,8 @@ pmap_zero_page(struct vm_page *pg)
 	paddr_t pa = VM_PAGE_TO_PHYS(pg);
 	vaddr_t va = zero_page + cpu_number() * PAGE_SIZE;
 
+	KASSERT(curcpu()->ci_idepth == 0);
+
 	pmap_kenter_pa(va, pa, PROT_READ|PROT_WRITE);
 	pagezero_cache(va);
 	pmap_kremove_pg(va);
@@ -836,12 +906,19 @@ pmap_copy_page(struct vm_page *srcpg, struct vm_page *dstpg)
 	paddr_t dstpa = VM_PAGE_TO_PHYS(dstpg);
 	vaddr_t srcva = copy_src_page + cpu_number() * PAGE_SIZE;
 	vaddr_t dstva = copy_dst_page + cpu_number() * PAGE_SIZE;
+	int s;
 
+	/*
+	 * XXX The buffer flipper (incorrectly?) uses pmap_copy_page()
+	 * (from uvm_pagerealloc_multi()) from interrupt context!
+	 */
+	s = splbio();
 	pmap_kenter_pa(srcva, srcpa, PROT_READ);
 	pmap_kenter_pa(dstva, dstpa, PROT_READ|PROT_WRITE);
 	memcpy((void *)dstva, (void *)srcva, PAGE_SIZE);
 	pmap_kremove_pg(srcva);
 	pmap_kremove_pg(dstva);
+	splx(s);
 }
 
 void
@@ -1225,12 +1302,14 @@ pmap_bootstrap(long kvo, paddr_t lpt1, long kernelstart, long kernelend,
 	vp1 = (struct pmapvp1 *)pt1pa;
 	pmap_kernel()->pm_vp.l1 = (struct pmapvp1 *)va;
 	pmap_kernel()->pm_privileged = 1;
+	pmap_kernel()->pm_active = 1;
 	pmap_kernel()->pm_guarded = ATTR_GP;
 	pmap_kernel()->pm_asid = 0;
 
 	mtx_init(&pmap_tramp.pm_mtx, IPL_VM);
 	pmap_tramp.pm_vp.l1 = (struct pmapvp1 *)va + 1;
 	pmap_tramp.pm_privileged = 1;
+	pmap_tramp.pm_active = 1;
 	pmap_tramp.pm_guarded = ATTR_GP;
 	pmap_tramp.pm_asid = 0;
 
@@ -1403,6 +1482,7 @@ pmap_activate(struct proc *p)
 {
 	pmap_t pm = p->p_vmspace->vm_map.pmap;
 
+	atomic_inc_int(&pm->pm_active);
 	if (p == curproc && pm != curcpu()->ci_curpm)
 		pmap_setttb(p);
 }
@@ -1413,6 +1493,18 @@ pmap_activate(struct proc *p)
 void
 pmap_deactivate(struct proc *p)
 {
+	pmap_t pm = p->p_vmspace->vm_map.pmap;
+
+	KASSERT(p == curproc);
+
+	WRITE_SPECIALREG(ttbr0_el1, pmap_kernel()->pm_pt0pa);
+	__asm volatile("isb");
+
+	if (atomic_dec_int_nv(&pm->pm_active) > 0)
+		return;
+
+	cpu_tlb_flush_asid_all((uint64_t)pm->pm_asid << 48);
+	cpu_tlb_flush_asid_all((uint64_t)(pm->pm_asid | ASID_USER) << 48);
 }
 
 /*
@@ -2237,34 +2329,37 @@ pmap_show_mapping(uint64_t va)
 		pted, vp3->l3[VP_IDX3(va)], VP_IDX3(va)*8);
 }
 
+__attribute__((target("+pauth")))
 void
 pmap_setpauthkeys(struct pmap *pm)
 {
-	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_BASE ||
-	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_BASE) {
-		__asm volatile (".arch armv8.3-a; msr apiakeylo_el1, %0"
+	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_PAC ||
+	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_PAC ||
+	    ID_AA64ISAR2_APA3(cpu_id_aa64isar2) >= ID_AA64ISAR2_APA3_PAC) {
+		__asm volatile ("msr apiakeylo_el1, %0"
 		    :: "r"(pm->pm_apiakey[0]));
-		__asm volatile (".arch armv8.3-a; msr apiakeyhi_el1, %0"
+		__asm volatile ("msr apiakeyhi_el1, %0"
 		    :: "r"(pm->pm_apiakey[1]));
-		__asm volatile (".arch armv8.3-a; msr apdakeylo_el1, %0"
+		__asm volatile ("msr apdakeylo_el1, %0"
 		    :: "r"(pm->pm_apdakey[0]));
-		__asm volatile (".arch armv8.3-a; msr apdakeyhi_el1, %0"
+		__asm volatile ("msr apdakeyhi_el1, %0"
 		    :: "r"(pm->pm_apdakey[1]));
-		__asm volatile (".arch armv8.3-a; msr apibkeylo_el1, %0"
+		__asm volatile ("msr apibkeylo_el1, %0"
 		    :: "r"(pm->pm_apibkey[0]));
-		__asm volatile (".arch armv8.3-a; msr apibkeyhi_el1, %0"
+		__asm volatile ("msr apibkeyhi_el1, %0"
 		    :: "r"(pm->pm_apibkey[1]));
-		__asm volatile (".arch armv8.3-a; msr apdbkeylo_el1, %0"
+		__asm volatile ("msr apdbkeylo_el1, %0"
 		    :: "r"(pm->pm_apdbkey[0]));
-		__asm volatile (".arch armv8.3-a; msr apdbkeyhi_el1, %0"
+		__asm volatile ("msr apdbkeyhi_el1, %0"
 		    :: "r"(pm->pm_apdbkey[1]));
 	}
 
 	if (ID_AA64ISAR1_GPA(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPA_IMPL ||
-	    ID_AA64ISAR1_GPI(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPI_IMPL) {
-		__asm volatile (".arch armv8.3-a; msr apgakeylo_el1, %0"
+	    ID_AA64ISAR1_GPI(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPI_IMPL ||
+	    ID_AA64ISAR2_GPA3(cpu_id_aa64isar2) >= ID_AA64ISAR2_GPA3_IMPL) {
+		__asm volatile ("msr apgakeylo_el1, %0"
 		    :: "r"(pm->pm_apgakey[0]));
-		__asm volatile (".arch armv8.3-a; msr apgakeyhi_el1, %0"
+		__asm volatile ("msr apgakeyhi_el1, %0"
 		    :: "r"(pm->pm_apgakey[1]));
 	}
 }

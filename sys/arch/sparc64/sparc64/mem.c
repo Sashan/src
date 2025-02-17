@@ -1,4 +1,4 @@
-/*	$OpenBSD: mem.c,v 1.21 2024/06/23 22:08:37 kettenis Exp $	*/
+/*	$OpenBSD: mem.c,v 1.24 2024/12/30 02:46:00 guenther Exp $	*/
 /*	$NetBSD: mem.c,v 1.18 2001/04/24 04:31:12 thorpej Exp $ */
 
 /*
@@ -50,6 +50,7 @@
 #include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/conf.h>
+#include <sys/atomic.h>
 
 #include <machine/conf.h>
 #include <machine/ctlreg.h>
@@ -68,7 +69,8 @@ mmopen(dev_t dev, int flag, int mode, struct proc *p)
 	switch (minor(dev)) {
 	case 0:
 	case 1:
-		if (securelevel <= 0 || allowkmem)
+		if ((int)atomic_load_int(&securelevel) <= 0 ||
+		    atomic_load_int(&allowkmem))
 			break;
 		return (EPERM);
 	case 2:
@@ -196,7 +198,6 @@ int
 mmioctl(dev_t dev, u_long cmd, caddr_t data, int flags, struct proc *p)
 {
         switch (cmd) {
-        case FIONBIO:
         case FIOASYNC:
                 /* handled by fd layer */
                 return 0;

@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.436 2024/07/30 19:47:06 mglocker Exp $ */
+/* $OpenBSD: acpi.c,v 1.443 2025/02/11 16:22:37 miod Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -324,7 +324,8 @@ acpi_gasio(struct acpi_softc *sc, int iodir, int iospace, uint64_t address,
 			return (0);
 		}
 
-		pc = pci_lookup_segment(ACPI_PCI_SEG(address));
+		pc = pci_lookup_segment(ACPI_PCI_SEG(address),
+		    ACPI_PCI_BUS(address));
 		tag = pci_make_tag(pc,
 		    ACPI_PCI_BUS(address), ACPI_PCI_DEV(address),
 		    ACPI_PCI_FN(address));
@@ -642,7 +643,7 @@ acpi_getpci(struct aml_node *node, void *arg)
 		free(pci, M_DEVBUF, sizeof(*pci));
 		return (1);
 	}
-	pc = pci_lookup_segment(pci->seg);
+	pc = pci_lookup_segment(pci->seg, pci->bus);
 	tag = pci_make_tag(pc, pci->bus, pci->dev, pci->fun);
 	reg = pci_conf_read(pc, tag, PCI_ID_REG);
 	if (PCI_VENDOR(reg) == PCI_VENDOR_INVALID) {
@@ -839,7 +840,7 @@ acpi_pci_notify(struct aml_node *node, int ntype, void *arg)
 	if (ntype != 2)
 		return (0);
 
-	pc = pci_lookup_segment(pdev->seg);
+	pc = pci_lookup_segment(pdev->seg, pdev->bus);
 	tag = pci_make_tag(pc, pdev->bus, pdev->dev, pdev->fun);
 	if (pci_get_capability(pc, tag, PCI_CAP_PWRMGMT, &offset, 0)) {
 		/* Clear the PME Status bit if it is set. */
@@ -2502,16 +2503,19 @@ acpi_init_states(struct acpi_softc *sc)
 		snprintf(name, sizeof(name), "_S%d_", i);
 		sc->sc_sleeptype[i].slp_typa = -1;
 		sc->sc_sleeptype[i].slp_typb = -1;
-		if (aml_evalname(sc, sc->sc_root, name, 0, NULL, &res) == 0) {
-			if (res.type == AML_OBJTYPE_PACKAGE) {
-				sc->sc_sleeptype[i].slp_typa =
-				    aml_val2int(res.v_package[0]);
-				sc->sc_sleeptype[i].slp_typb =
-				    aml_val2int(res.v_package[1]);
-				printf(" S%d", i);
-			}
+		if (aml_evalname(sc, sc->sc_root, name, 0, NULL, &res) != 0)
+			continue;
+		if (res.type != AML_OBJTYPE_PACKAGE) {
 			aml_freevalue(&res);
+			continue;
 		}
+		sc->sc_sleeptype[i].slp_typa = aml_val2int(res.v_package[0]);
+		sc->sc_sleeptype[i].slp_typb = aml_val2int(res.v_package[1]);
+		aml_freevalue(&res);
+
+		printf(" S%d", i);
+		if (i == 0 && (sc->sc_fadt->flags & FADT_POWER_S0_IDLE_CAPABLE))
+			printf("ix");
 	}
 }
 
@@ -2590,8 +2594,6 @@ acpi_resume_pm(struct acpi_softc *sc, int fromstate)
 	/* Enable runtime GPEs */
 	acpi_disable_allgpes(sc);
 	acpi_enable_rungpes(sc);
-
-	acpi_indicator(sc, ACPI_SST_WAKING);
 
 	/* 2nd resume AML step: _WAK(fromstate) */
 	aml_node_setval(sc, sc->sc_wak, fromstate);
@@ -2967,17 +2969,22 @@ acpi_parsehid(struct aml_node *node, void *arg, char *outcdev, char *outdev,
     size_t devlen)
 {
 	struct acpi_softc	*sc = (struct acpi_softc *)arg;
-	struct aml_value	 res;
+	struct aml_value	 res, *cid;
 	const char		*dev;
 
 	/* NB aml_eisaid returns a static buffer, this must come first */
 	if (aml_evalname(acpi_softc, node->parent, "_CID", 0, NULL, &res) == 0) {
-		switch (res.type) {
+		if (res.type == AML_OBJTYPE_PACKAGE && res.length >= 1) {
+			cid = res.v_package[0];
+		} else {
+			cid = &res;
+		}
+		switch (cid->type) {
 		case AML_OBJTYPE_STRING:
-			dev = res.v_string;
+			dev = cid->v_string;
 			break;
 		case AML_OBJTYPE_INTEGER:
-			dev = aml_eisaid(aml_val2int(&res));
+			dev = aml_eisaid(aml_val2int(cid));
 			break;
 		default:
 			dev = "unknown";
@@ -3035,12 +3042,9 @@ const char *acpi_skip_hids[] = {
 
 /* ISA devices for which we attach a driver later */
 const char *acpi_isa_hids[] = {
-	"PNP0303",	/* IBM Enhanced Keyboard (101/102-key, PS/2 Mouse) */
 	"PNP0400",	/* Standard LPT Parallel Port */
 	"PNP0401",	/* ECP Parallel Port */
 	"PNP0700",	/* PC-class Floppy Disk Controller */
-	"PNP0F03",	/* Microsoft PS/2-style Mouse */
-	"PNP0F13",	/* PS/2 Mouse */
 	NULL
 };
 
@@ -3248,7 +3252,6 @@ acpi_foundhid(struct aml_node *node, void *arg)
 	aaa.aaa_node = node->parent;
 	aaa.aaa_dev = dev;
 	aaa.aaa_cdev = cdev;
-	acpi_parse_crs(sc, &aaa);
 
 #ifndef SMALL_KERNEL
 	if (!strcmp(cdev, ACPI_DEV_MOUSE)) {
@@ -3264,6 +3267,8 @@ acpi_foundhid(struct aml_node *node, void *arg)
 	if (acpi_matchhids(&aaa, acpi_skip_hids, "none") ||
 	    acpi_matchhids(&aaa, acpi_isa_hids, "none"))
 		return (0);
+
+	acpi_parse_crs(sc, &aaa);
 
 	aaa.aaa_dmat = acpi_iommu_device_map(node->parent, aaa.aaa_dmat);
 

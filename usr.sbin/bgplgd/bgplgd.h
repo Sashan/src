@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgplgd.h,v 1.3 2023/03/13 17:31:28 claudio Exp $ */
+/*	$OpenBSD: bgplgd.h,v 1.5 2024/12/03 10:38:06 claudio Exp $ */
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
  *
@@ -32,19 +32,22 @@
 #define QS_AVS			15
 #define QS_INVALID		16
 #define QS_LEAKED		17
-#define QS_MAX			18
+#define QS_FILTERED		18
+#define QS_MAX			19
 
-/* too add: empty-as, in, out, peer-as, source-as, transit-as */
+/* too add: empty-as, peer-as, source-as, transit-as */
 
 #define QS_MASK_NEIGHBOR	((1 << QS_NEIGHBOR) | (1 << QS_GROUP))
-#define QS_MASK_RIB						\
+#define QS_MASK_ADJRIB						\
 	((1 << QS_NEIGHBOR) | (1 << QS_GROUP) |	(1 << QS_AS) |	\
 	(1 << QS_PREFIX) | (1 << QS_COMMUNITY) |		\
 	(1 << QS_EXTCOMMUNITY) | (1 << QS_LARGECOMMUNITY) |	\
-	(1 << QS_AF) |	(1 << QS_RIB) | (1 << QS_OVS) |		\
-	(1 << QS_BEST) | (1 << QS_ALL) | (1 << QS_SHORTER) |	\
-	(1 << QS_ERROR) | (1 << QS_AVS) | (1 << QS_INVALID) |	\
-	(1 << QS_LEAKED))
+	(1 << QS_AF) | (1 << QS_OVS) | (1 << QS_BEST) |		\
+	(1 << QS_ALL) | (1 << QS_SHORTER) | (1 << QS_ERROR) |	\
+	(1 << QS_AVS) | (1 << QS_INVALID) | (1 << QS_LEAKED) |	\
+	(1 << QS_FILTERED))
+
+#define QS_MASK_RIB	(QS_MASK_ADJRIB | (1 << QS_RIB))
 
 struct cmd;
 struct lg_ctx {

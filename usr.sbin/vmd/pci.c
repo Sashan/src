@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci.c,v 1.33 2024/07/10 09:27:33 dv Exp $	*/
+/*	$OpenBSD: pci.c,v 1.35 2024/10/02 17:05:56 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -20,7 +20,6 @@
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcidevs.h>
-#include <dev/pv/virtioreg.h>
 #include <dev/vmm/vmm.h>
 
 #include <string.h>
@@ -28,7 +27,6 @@
 
 #include "vmd.h"
 #include "pci.h"
-#include "i8259.h"
 #include "atomicio.h"
 
 struct pci pci;
@@ -75,7 +73,7 @@ pci_add_bar(uint8_t id, uint32_t type, void *barfn, void *cookie)
 	/* Compute BAR address and add */
 	bar_reg_idx = (PCI_MAPREG_START + (bar_ct * 4)) / 4;
 	if (type == PCI_MAPREG_TYPE_MEM) {
-		if (pci.pci_next_mmio_bar >= VMM_PCI_MMIO_BAR_END)
+		if (pci.pci_next_mmio_bar >= PCI_MMIO_BAR_END)
 			return (1);
 
 		pci.pci_devices[id].pd_cfg_space[bar_reg_idx] =
@@ -218,7 +216,7 @@ pci_init(void)
 	uint8_t id;
 
 	memset(&pci, 0, sizeof(pci));
-	pci.pci_next_mmio_bar = VMM_PCI_MMIO_BAR_BASE;
+	pci.pci_next_mmio_bar = PCI_MMIO_BAR_BASE;
 
 #ifdef __amd64__
 	pci.pci_next_io_bar = VM_PCI_IO_BAR_BASE;

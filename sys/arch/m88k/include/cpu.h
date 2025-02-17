@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.80 2024/06/20 10:46:11 aoyama Exp $ */
+/*	$OpenBSD: cpu.h,v 1.82 2024/10/23 07:41:44 mpi Exp $ */
 /*
  * Copyright (c) 1996 Nivas Madhur
  * Copyright (c) 1992, 1993
@@ -89,7 +89,7 @@
 struct pmap;
 
 struct cpu_info {
-	u_int		 ci_flags;
+	volatile u_int	 ci_flags;
 #define	CIF_ALIVE		0x01		/* cpu initialized */
 #define	CIF_PRIMARY		0x02		/* primary cpu */
 
@@ -146,7 +146,7 @@ struct cpu_info {
 			 ci_schedstate;		/* scheduling state */
 	int		 ci_want_resched;	/* need_resched() invoked */
 
-	u_int		 ci_intrdepth;		/* interrupt depth */
+	u_int		 ci_idepth;		/* interrupt depth */
 
 	int		 ci_ddb_state;		/* ddb status */
 #define	CI_DDB_RUNNING	0
@@ -268,7 +268,7 @@ struct clockframe {
 #define	CLKF_USERMODE(framep)	(((framep)->tf.tf_epsr & PSR_MODE) == 0)
 #define	CLKF_PC(framep)		((framep)->tf.tf_sxip & XIP_ADDR)
 #define	CLKF_INTR(framep) \
-	(((struct cpu_info *)(framep)->tf.tf_cpu)->ci_intrdepth > 1)
+	(((struct cpu_info *)(framep)->tf.tf_cpu)->ci_idepth > 1)
 
 #define	aston(p)		((p)->p_md.md_astpending = 1)
 

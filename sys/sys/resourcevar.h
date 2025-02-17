@@ -1,4 +1,4 @@
-/*	$OpenBSD: resourcevar.h,v 1.32 2024/07/08 13:17:12 claudio Exp $	*/
+/*	$OpenBSD: resourcevar.h,v 1.35 2024/10/24 23:24:58 jsg Exp $	*/
 /*	$NetBSD: resourcevar.h,v 1.12 1995/11/22 23:01:53 cgd Exp $	*/
 
 /*
@@ -36,7 +36,6 @@
 #define	_SYS_RESOURCEVAR_H_
 
 #include <sys/refcnt.h>
-#include <sys/timeout.h>
 
 /*
  * Kernel shareable process resource limits.  Because this structure
@@ -67,6 +66,7 @@ void	 addupc_task(struct proc *, u_long, u_int);
 struct clockrequest;
 void	 profclock(struct clockrequest *, void *, void *);
 void	 tuagg_add_process(struct process *, struct proc *);
+void	 tuagg_add_runtime(void);
 struct tusage;
 void	 tuagg_get_proc(struct tusage *, struct proc *);
 void	 tuagg_get_process(struct tusage *, struct process *);
@@ -107,7 +107,7 @@ lim_cur(int which)
 
 rlim_t	 lim_cur_proc(struct proc *, int);
 
-void	 ruadd(struct rusage *, struct rusage *);
+void	 ruadd(struct rusage *, const struct rusage *);
 void	 rucheck(void *);
 
 #endif

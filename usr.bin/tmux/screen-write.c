@@ -1,4 +1,4 @@
-/* $OpenBSD: screen-write.c,v 1.225 2024/03/21 12:10:57 nicm Exp $ */
+/* $OpenBSD: screen-write.c,v 1.232 2024/11/16 16:49:50 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -151,7 +151,7 @@ screen_write_set_client_cb(struct tty_ctx *ttyctx, struct client *c)
 		 */
 		log_debug("%s: adding %%%u to deferred redraw", __func__,
 		    wp->id);
-		wp->flags |= PANE_REDRAW;
+		wp->flags |= (PANE_REDRAW|PANE_REDRAWSCROLLBAR);
 		return (-1);
 	}
 
@@ -326,8 +326,9 @@ screen_write_reset(struct screen_write_ctx *ctx)
 	screen_write_scrollregion(ctx, 0, screen_size_y(s) - 1);
 
 	s->mode = MODE_CURSOR|MODE_WRAP;
+
 	if (options_get_number(global_options, "extended-keys") == 2)
-		s->mode |= MODE_KEXTENDED;
+		s->mode = (s->mode & ~EXTENDED_KEY_MODES)|MODE_KEYS_EXTENDED;
 
 	screen_write_clearscreen(ctx, 8);
 	screen_write_set_cursor(ctx, 0, 0);
@@ -376,7 +377,7 @@ screen_write_strlen(const char *fmt, ...)
 			if (more == UTF8_DONE)
 				size += ud.width;
 		} else {
-			if (*ptr > 0x1f && *ptr < 0x7f)
+			if (*ptr == '\t' || (*ptr > 0x1f && *ptr < 0x7f))
 				size++;
 			ptr++;
 		}
@@ -546,7 +547,7 @@ screen_write_vnputs(struct screen_write_ctx *ctx, ssize_t maxlen,
 			else if (*ptr == '\n') {
 				screen_write_linefeed(ctx, 0, 8);
 				screen_write_carriagereturn(ctx);
-			} else if (*ptr > 0x1f && *ptr < 0x7f) {
+			} else if (*ptr == '\t' || (*ptr > 0x1f && *ptr < 0x7f)) {
 				size++;
 				screen_write_putc(ctx, &gc, *ptr);
 			}
@@ -566,9 +567,11 @@ screen_write_fast_copy(struct screen_write_ctx *ctx, struct screen *src,
     u_int px, u_int py, u_int nx, u_int ny)
 {
 	struct screen		*s = ctx->s;
+	struct window_pane	*wp = ctx->wp;
+	struct tty_ctx	 	 ttyctx;
 	struct grid		*gd = src->grid;
 	struct grid_cell	 gc;
-	u_int		 	 xx, yy, cx, cy;
+	u_int		 	 xx, yy, cx = s->cx, cy = s->cy;
 
 	if (nx == 0 || ny == 0)
 		return;
@@ -577,18 +580,28 @@ screen_write_fast_copy(struct screen_write_ctx *ctx, struct screen *src,
 	for (yy = py; yy < py + ny; yy++) {
 		if (yy >= gd->hsize + gd->sy)
 			break;
-		cx = s->cx;
+		s->cx = cx;
+		if (wp != NULL)
+			screen_write_initctx(ctx, &ttyctx, 0);
 		for (xx = px; xx < px + nx; xx++) {
 			if (xx >= grid_get_line(gd, yy)->cellsize)
 				break;
 			grid_get_cell(gd, xx, yy, &gc);
 			if (xx + gc.data.width > px + nx)
 				break;
-			grid_view_set_cell(ctx->s->grid, cx, cy, &gc);
-			cx++;
+			grid_view_set_cell(ctx->s->grid, s->cx, s->cy, &gc);
+			if (wp != NULL) {
+				ttyctx.cell = &gc;
+				tty_write(tty_cmd_cell, &ttyctx);
+				ttyctx.ocx++;
+			}
+			s->cx++;
 		}
-		cy++;
+		s->cy++;
 	}
+
+	s->cx = cx;
+	s->cy = cy;
 }
 
 /* Select character set for drawing border lines. */
@@ -1165,13 +1178,14 @@ screen_write_deleteline(struct screen_write_ctx *ctx, u_int ny, u_int bg)
 	struct screen	*s = ctx->s;
 	struct grid	*gd = s->grid;
 	struct tty_ctx	 ttyctx;
+	u_int		 sy = screen_size_y(s);
 
 	if (ny == 0)
 		ny = 1;
 
 	if (s->cy < s->rupper || s->cy > s->rlower) {
-		if (ny > screen_size_y(s) - s->cy)
-			ny = screen_size_y(s) - s->cy;
+		if (ny > sy - s->cy)
+			ny = sy - s->cy;
 		if (ny == 0)
 			return;
 
@@ -1363,13 +1377,14 @@ screen_write_linefeed(struct screen_write_ctx *ctx, int wrapped, u_int bg)
 	struct screen		*s = ctx->s;
 	struct grid		*gd = s->grid;
 	struct grid_line	*gl;
+	u_int			 rupper = s->rupper, rlower = s->rlower;
 
 	gl = grid_get_line(gd, gd->hsize + s->cy);
 	if (wrapped)
 		gl->flags |= GRID_LINE_WRAPPED;
 
 	log_debug("%s: at %u,%u (region %u-%u)", __func__, s->cx, s->cy,
-	    s->rupper, s->rlower);
+	    rupper, rlower);
 
 	if (bg != ctx->bg) {
 		screen_write_collect_flush(ctx, 1, __func__);
@@ -1687,6 +1702,9 @@ screen_write_collect_flush(struct screen_write_ctx *ctx, int scroll_only,
 		ttyctx.num = ctx->scrolled;
 		ttyctx.bg = ctx->bg;
 		tty_write(tty_cmd_scrollup, &ttyctx);
+
+		if (ctx->wp != NULL)
+			ctx->wp->flags |= PANE_REDRAWSCROLLBAR;
 	}
 	ctx->scrolled = 0;
 	ctx->bg = 8;
@@ -1800,6 +1818,8 @@ screen_write_collect_add(struct screen_write_ctx *ctx,
 
 	collect = 1;
 	if (gc->data.width != 1 || gc->data.size != 1 || *gc->data.data >= 0x7f)
+		collect = 0;
+	else if (gc->flags & GRID_FLAG_TAB)
 		collect = 0;
 	else if (gc->attr & GRID_ATTR_CHARSET)
 		collect = 0;
@@ -2123,7 +2143,17 @@ screen_write_overwrite(struct screen_write_ctx *ctx, struct grid_cell *gc,
 				break;
 			log_debug("%s: overwrite at %u,%u", __func__, xx,
 			    s->cy);
-			grid_view_set_cell(gd, xx, s->cy, &grid_default_cell);
+			if (gc->flags & GRID_FLAG_TAB) {
+				memcpy(&tmp_gc, gc, sizeof tmp_gc);
+				memset(tmp_gc.data.data, 0,
+				    sizeof tmp_gc.data.data);
+				*tmp_gc.data.data = ' ';
+				tmp_gc.data.width = tmp_gc.data.size =
+				    tmp_gc.data.have = 1;
+				grid_view_set_cell(gd, xx, s->cy, &tmp_gc);
+			} else
+				grid_view_set_cell(gd, xx, s->cy,
+				    &grid_default_cell);
 			done = 1;
 		}
 	}
@@ -2175,6 +2205,9 @@ screen_write_alternateon(struct screen_write_ctx *ctx, struct grid_cell *gc,
 	screen_write_collect_flush(ctx, 0, __func__);
 	screen_alternate_on(ctx->s, gc, cursor);
 
+	if (wp != NULL)
+		layout_fix_panes(wp->window, NULL);
+
 	screen_write_initctx(ctx, &ttyctx, 1);
 	if (ttyctx.redraw_cb != NULL)
 		ttyctx.redraw_cb(&ttyctx);
@@ -2193,6 +2226,9 @@ screen_write_alternateoff(struct screen_write_ctx *ctx, struct grid_cell *gc,
 
 	screen_write_collect_flush(ctx, 0, __func__);
 	screen_alternate_off(ctx->s, gc, cursor);
+
+	if (wp != NULL)
+		layout_fix_panes(wp->window, NULL);
 
 	screen_write_initctx(ctx, &ttyctx, 1);
 	if (ttyctx.redraw_cb != NULL)

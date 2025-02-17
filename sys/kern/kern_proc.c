@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_proc.c,v 1.99 2024/07/08 13:17:12 claudio Exp $	*/
+/*	$OpenBSD: kern_proc.c,v 1.101 2024/10/22 11:54:04 claudio Exp $	*/
 /*	$NetBSD: kern_proc.c,v 1.14 1996/02/09 18:59:41 christos Exp $	*/
 
 /*
@@ -319,7 +319,9 @@ enterthispgrp(struct process *pr, struct pgrp *pgrp)
 	fixjobc(pr, savepgrp, 0);
 
 	LIST_REMOVE(pr, ps_pglist);
+	mtx_enter(&pr->ps_mtx);
 	pr->ps_pgrp = pgrp;
+	mtx_leave(&pr->ps_mtx);
 	LIST_INSERT_HEAD(&pgrp->pg_members, pr, ps_pglist);
 	if (LIST_EMPTY(&savepgrp->pg_members))
 		pgdelete(savepgrp);
@@ -337,7 +339,9 @@ leavepgrp(struct process *pr)
 	LIST_REMOVE(pr, ps_pglist);
 	if (LIST_EMPTY(&pr->ps_pgrp->pg_members))
 		pgdelete(pr->ps_pgrp);
+	mtx_enter(&pr->ps_mtx);
 	pr->ps_pgrp = NULL;
+	mtx_leave(&pr->ps_mtx);
 }
 
 /*
@@ -462,7 +466,7 @@ orphanpg(struct pgrp *pg)
 	struct process *pr;
 
 	LIST_FOREACH(pr, &pg->pg_members, ps_pglist) {
-		if (pr->ps_mainproc->p_stat == SSTOP) {
+		if (pr->ps_flags & PS_STOPPED) {
 			LIST_FOREACH(pr, &pg->pg_members, ps_pglist) {
 				prsignal(pr, SIGHUP);
 				prsignal(pr, SIGCONT);

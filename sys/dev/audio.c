@@ -1,4 +1,4 @@
-/*	$OpenBSD: audio.c,v 1.207 2024/06/07 08:48:10 jsg Exp $	*/
+/*	$OpenBSD: audio.c,v 1.211 2025/02/14 13:29:00 ratchov Exp $	*/
 /*
  * Copyright (c) 2015 Alexandre Ratchov <alex@caoua.org>
  *
@@ -27,10 +27,16 @@
 #include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/audioio.h>
+#include <sys/atomic.h>
 #include <dev/audio_if.h>
 #include <dev/mulaw.h>
 #include "audio.h"
 #include "wskbd.h"
+
+/*
+ * Locks used to protect data:
+ *	a	atomic
+ */
 
 #ifdef AUDIO_DEBUG
 #define DPRINTF(...)				\
@@ -82,8 +88,7 @@ struct audio_buf {
 };
 
 #if NWSKBD > 0
-struct wskbd_vol
-{
+struct wskbd_vol {
 	int val;			/* index of the value control */
 	int mute;			/* index of the mute control */
 	int step;			/* increment/decrement step */
@@ -225,7 +230,10 @@ struct mutex audio_lock = MUTEX_INITIALIZER(IPL_AUDIO);
  * Global flag to control if audio recording is enabled when the
  * mixerctl setting is record.enable=sysctl
  */
-int audio_record_enable = 0;
+int audio_record_enable = 0;	/* [a] */
+#if NWSKBD > 0
+int audio_kbdcontrol_enable = 1;	/* [a] */
+#endif
 
 #ifdef AUDIO_DEBUG
 /*
@@ -590,7 +598,7 @@ audio_rintr(void *addr)
 
 	sc->rec.pos += sc->rec.blksz;
 	if ((sc->record_enable == MIXER_RECORD_ENABLE_SYSCTL &&
-	    !audio_record_enable) ||
+	    atomic_load_int(&audio_record_enable) == 0) ||
 	    sc->record_enable == MIXER_RECORD_ENABLE_OFF) {
 		ptr = audio_buf_wgetblk(&sc->rec, &count);
 		audio_fill_sil(sc, ptr, sc->rec.blksz);
@@ -1747,9 +1755,6 @@ audio_ioctl(struct audio_softc *sc, unsigned long cmd, void *addr)
 		tsleep_nsec(&sc->quiesce, 0, "au_qio", INFSLP);
 
 	switch (cmd) {
-	case FIONBIO:
-		/* All handled in the upper FS layer. */
-		break;
 	case AUDIO_GETPOS:
 		mtx_enter(&audio_lock);
 		ap = (struct audio_pos *)addr;
@@ -1902,9 +1907,6 @@ audio_ioctl_mixer(struct audio_softc *sc, unsigned long cmd, void *addr,
 		tsleep_nsec(&sc->quiesce, 0, "mix_qio", INFSLP);
 
 	switch (cmd) {
-	case FIONBIO:
-		/* All handled in the upper FS layer. */
-		break;
 	case AUDIO_MIXER_DEVINFO:
 		return audio_mixer_devinfo(sc, addr);
 	case AUDIO_MIXER_READ:

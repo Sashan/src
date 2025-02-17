@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_pipe.c,v 1.146 2023/05/09 14:22:17 visa Exp $	*/
+/*	$OpenBSD: sys_pipe.c,v 1.148 2024/12/30 02:46:00 guenther Exp $	*/
 
 /*
  * Copyright (c) 1996 John S. Dyson
@@ -253,9 +253,7 @@ pipe_buffer_realloc(struct pipe *cpipe, u_int size)
 	/* buffer should be empty */
 	KASSERT(cpipe->pipe_buffer.cnt == 0);
 
-	KERNEL_LOCK();
 	buffer = km_alloc(size, &kv_any, &kp_pageable, &kd_waitok);
-	KERNEL_UNLOCK();
 	if (buffer == NULL)
 		return (ENOMEM);
 
@@ -676,9 +674,6 @@ pipe_ioctl(struct file *fp, u_long cmd, caddr_t data, struct proc *p)
 
 	switch (cmd) {
 
-	case FIONBIO:
-		break;
-
 	case FIOASYNC:
 		rw_enter_write(mpipe->pipe_lock);
 		if (*(int *)data) {
@@ -767,9 +762,7 @@ pipe_buffer_free(struct pipe *cpipe)
 
 	size = cpipe->pipe_buffer.size;
 
-	KERNEL_LOCK();
 	km_free(cpipe->pipe_buffer.buffer, size, &kv_any, &kp_pageable);
-	KERNEL_UNLOCK();
 
 	cpipe->pipe_buffer.buffer = NULL;
 

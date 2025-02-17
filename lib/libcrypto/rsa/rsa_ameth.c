@@ -1,4 +1,4 @@
-/* $OpenBSD: rsa_ameth.c,v 1.58 2024/03/17 07:10:00 tb Exp $ */
+/* $OpenBSD: rsa_ameth.c,v 1.62 2024/11/02 07:11:14 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -56,20 +56,26 @@
  *
  */
 
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <openssl/opensslconf.h>
 
-#include <openssl/asn1t.h>
+#include <openssl/asn1.h>
+#include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/cms.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/objects.h>
+#include <openssl/pkcs7.h>
 #include <openssl/rsa.h>
+#include <openssl/sha.h>
 #include <openssl/x509.h>
 
 #include "asn1_local.h"
 #include "bn_local.h"
-#include "cryptlib.h"
 #include "evp_local.h"
 #include "rsa_local.h"
 #include "x509_local.h"
@@ -845,6 +851,58 @@ rsa_pss_get_param(const RSA_PSS_PARAMS *pss, const EVP_MD **pmd,
 	return 1;
 }
 
+static int
+rsa_pss_signature_info(const X509_ALGOR *alg, int *out_md_nid,
+    int *out_pkey_nid, int *out_security_bits, uint32_t *out_flags)
+{
+	RSA_PSS_PARAMS *pss = NULL;
+	const ASN1_OBJECT *aobj;
+	const EVP_MD *md, *mgf1md;
+	int md_len, salt_len;
+	int md_nid = NID_undef, pkey_nid = NID_undef;
+	int security_bits = -1;
+	uint32_t flags = 0;
+
+	X509_ALGOR_get0(&aobj, NULL, NULL, alg);
+	if (OBJ_obj2nid(aobj) != EVP_PKEY_RSA_PSS)
+		goto err;
+
+	if ((pss = rsa_pss_decode(alg)) == NULL)
+		goto err;
+	if (!rsa_pss_get_param(pss, &md, &mgf1md, &salt_len))
+		goto err;
+
+	if ((md_nid = EVP_MD_type(md)) == NID_undef)
+		goto err;
+	if ((md_len = EVP_MD_size(md)) <= 0)
+		goto err;
+
+	/*
+	 * RFC 8446, section 4.2.3 - restricts the digest algorithm:
+	 * - it must be one of SHA256, SHA384, and SHA512;
+	 * - the same digest must be used in the mask generation function;
+	 * - the salt length must match the output length of the digest.
+	 * XXX - consider separate flags for these checks.
+	 */
+	if (md_nid == NID_sha256 || md_nid == NID_sha384 || md_nid == NID_sha512) {
+		if (md_nid == EVP_MD_type(mgf1md) && salt_len == md_len)
+			flags |= X509_SIG_INFO_TLS;
+	}
+
+	security_bits = md_len * 4;
+	flags |= X509_SIG_INFO_VALID;
+
+	*out_md_nid = md_nid;
+	*out_pkey_nid = pkey_nid;
+	*out_security_bits = security_bits;
+	*out_flags = flags;
+
+ err:
+	RSA_PSS_PARAMS_free(pss);
+
+	return (flags & X509_SIG_INFO_VALID) != 0;
+}
+
 #ifndef OPENSSL_NO_CMS
 static int
 rsa_cms_verify(CMS_SignerInfo *si)
@@ -1030,12 +1088,6 @@ rsa_item_sign(EVP_MD_CTX *ctx, const ASN1_ITEM *it, void *asn,
 	return 2;
 }
 
-static int
-rsa_pkey_check(const EVP_PKEY *pkey)
-{
-	return RSA_check_key(pkey->pkey.rsa);
-}
-
 #ifndef OPENSSL_NO_CMS
 static RSA_OAEP_PARAMS *
 rsa_oaep_decode(const X509_ALGOR *alg)
@@ -1183,16 +1235,12 @@ const EVP_PKEY_ASN1_METHOD rsa_asn1_meth = {
 	.old_priv_encode = old_rsa_priv_encode,
 	.item_verify = rsa_item_verify,
 	.item_sign = rsa_item_sign,
-
-	.pkey_check = rsa_pkey_check,
 };
 
 const EVP_PKEY_ASN1_METHOD rsa2_asn1_meth = {
 	.base_method = &rsa_asn1_meth,
 	.pkey_id = EVP_PKEY_RSA2,
 	.pkey_flags = ASN1_PKEY_ALIAS,
-
-	.pkey_check = rsa_pkey_check,
 };
 
 const EVP_PKEY_ASN1_METHOD rsa_pss_asn1_meth = {
@@ -1215,6 +1263,8 @@ const EVP_PKEY_ASN1_METHOD rsa_pss_asn1_meth = {
 	.pkey_size = rsa_size,
 	.pkey_bits = rsa_bits,
 	.pkey_security_bits = rsa_security_bits,
+
+	.signature_info = rsa_pss_signature_info,
 
 	.sig_print = rsa_sig_print,
 

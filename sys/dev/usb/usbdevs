@@ -1,4 +1,4 @@
-$OpenBSD: usbdevs,v 1.766 2024/05/29 06:48:43 jsg Exp $
+$OpenBSD: usbdevs,v 1.774 2025/02/06 13:13:25 kirill Exp $
 /* $NetBSD: usbdevs,v 1.322 2003/05/10 17:47:14 hamajima Exp $ */
 
 /*
@@ -365,6 +365,7 @@ vendor GARMIN		0x091e	Garmin International
 vendor GOHUBS		0x0921	GoHubs
 vendor BIOMETRIC	0x0929	American Biometric Company
 vendor TOSHIBA		0x0930	Toshiba Corp
+vendor PIXART		0x093a	PixArt
 vendor INTREPIDCS	0x093c	Intrepid
 vendor YANO		0x094f	Yano
 vendor KINGSTON		0x0951	Kingston Technology
@@ -691,6 +692,7 @@ vendor DATAAPEX		0xdaae	DataApex
 vendor EVOLUTION	0xdeee	Evolution Robotics
 vendor EMPIA		0xeb1a	eMPIA Technology
 vendor HP2		0xf003	Hewlett Packard
+vendor ELGATO		0x0fd9	Elgato
 
 /*
  * List of known products.  Grouped by vendor.
@@ -1283,6 +1285,27 @@ product BILLIONTON USBEL100	0x0988	USB100EL
 product BILLIONTON USBE100	0x8511	USBE100
 product BILLIONTON USB2AR	0x90ff	USB2AR Ethernet
 
+/* Brainboxes Limited Products */
+product BRAINBOXES US101	0x1011	US-101 USB2Serial 1xRS232
+product BRAINBOXES US324	0x1013	US-324 USB2Serial 1xRS422/485
+product BRAINBOXES US235	0x1017	US-235 USB2Serial 1xRS232
+product BRAINBOXES US320	0x1019	US-320 USB2Serial 1xRS422/485
+product BRAINBOXES US159	0x1021	US-159 USB2Serial 1xRS232
+product BRAINBOXES US701_12	0x2011	US-701 USB2Serial 4xRS232 (Port 1 and 2)
+product BRAINBOXES US701_34	0x2012	US-701 USB2Serial 4xRS232 (Port 3 and 4)
+product BRAINBOXES US279_12	0x2021	US-279 USB2Serial 8xRS232 (Port 1 and 2)
+product BRAINBOXES US279_34	0x2022	US-279 USB2Serial 8xRS232 (Port 3 and 4)
+product BRAINBOXES US279_56	0x2023	US-279 USB2Serial 8xRS232 (Port 5 and 6)
+product BRAINBOXES US279_78	0x2024	US-279 USB2Serial 8xRS232 (Port 7 and 8)
+product BRAINBOXES US346_12	0x3011	US-346 USB2Serial 4xRS422/485 (Port 1 and 2)
+product BRAINBOXES US346_34	0x3012	US-346 USB2Serial 4xRS422/485 (Port 3 and 4)
+product BRAINBOXES US257	0x5001	US-257 USB2Serial 2xRS232
+product BRAINBOXES US313	0x6001	US-313 USB2Serial 2xRS422/485
+product BRAINBOXES US842_12	0x8001	US-842 USB2Serial 8xRS422/485 (Port 1 and 2)
+product BRAINBOXES US842_34	0x8002	US-842 USB2Serial 8xRS422/485 (Port 3 and 4)
+product BRAINBOXES US842_56	0x8003	US-842 USB2Serial 8xRS422/485 (Port 5 and 6)
+product BRAINBOXES US842_78	0x8004	US-842 USB2Serial 8xRS422/485 (Port 7 and 8)
+
 /* Broadcom products */
 product BROADCOM BCMFW		0x0bdc	BCMFW
 product BROADCOM BCM2033	0x2000	BCM2033
@@ -1340,6 +1363,7 @@ product CHENSOURCE CM12402	0x933d	CM12402 Eagle IR Cam
 /* Cherry products */
 product CHERRY MY3000KBD	0x0001	My3000 keyboard
 product CHERRY MY3000HUB	0x0003	My3000 hub
+product CHERRY MOUSE1		0xb091	mouse
 
 /* Chic Technology products */
 product CHIC MOUSE1		0x0001	mouse
@@ -1347,6 +1371,7 @@ product CHIC CYPRESS		0x0003	Cypress
 
 /* Chicony products */
 product CHICONY KB8933		0x0001	KB-8933 keyboard
+product	CHICONY	OPTMOUSE	0x0939	Optical Mouse
 product	CHICONY	CAMERA		0x480c	Integrated Camera
 product CHICONY RTL8188CUS_1	0xaff7	RTL8188CUS
 product CHICONY RTL8188CUS_2	0xaff8	RTL8188CUS
@@ -1537,7 +1562,8 @@ product	DELL PRISM_GT_2		0x8104	PrismGT USB 2.0 WLAN
 product DELL W5500		0x8115	W5500 HSDPA 
 product DELL U740		0x8135	U740 CDMA
 product DELL EU870D		0x8138	EU870D HSDPA
-product DELL DW5821E		0x81d7	DW5821e LTE
+product DELL DW5821E_1		0x81d7	DW5821e LTE
+product DELL DW5821E_2		0x81e0	DW5821e LTE
 product DELL DW700		0x9500	DW700 GPS
 product DELL2 UPS		0xffff	UPS
 
@@ -1578,24 +1604,39 @@ product DIGITALSTREAM PS2	0x0001	PS/2 Active
 /* DisplayLink products */
 product DISPLAYLINK GUC2020	0x0059	IOGEAR DVI GUC2020
 product DISPLAYLINK LD220	0x0100	Samsung LD220
+product DISPLAYLINK LD190	0x0102	Samsung LD190
+product DISPLAYLINK U70		0x0103	Samsung U70
 product DISPLAYLINK TOSHIBA	0x0110	TOSHIBA Video Dock
 product DISPLAYLINK POLARIS2	0x0117	Polaris2 USB dock
 product DISPLAYLINK VCUD60	0x0136	Rextron DVI
 product DISPLAYLINK CONV	0x0138	StarTech CONV-USB2DVI
 product DISPLAYLINK DLDVI	0x0141	DisplayLink DVI
+product DISPLAYLINK USBRGB	0x0150	IO-DATA USB-RGB
+product DISPLAYLINK LCDUSB7X	0x0153	IO-DATA LCD-USB7X
+product DISPLAYLINK LCDUSB10X	0x0156	IO-DATA LCD-USB10XB-T
 product DISPLAYLINK VGA10	0x015a	CMP-USBVGA10
 product DISPLAYLINK WSDVI	0x0198	WS Tech DVI
 product DISPLAYLINK EC008	0x019b	EasyCAP008 DVI
+product DISPLAYLINK FYDVI2	0x019e	DisplayLink FY-DVI2
+product DISPLAYLINK GXDVIU2	0x01ac	BUFFALO GX-DVI/U2
 product DISPLAYLINK LCD4300U	0x01ba	LCD-4300U
 product DISPLAYLINK LCD8000U	0x01bb	LCD-8000U
 product DISPLAYLINK HPDOCK	0x01d4	HP USB Docking
 product DISPLAYLINK NL571	0x01d7	HP USB DVI
 product DISPLAYLINK M01061	0x01e2	Lenovo DVI
 product DISPLAYLINK NBDOCK	0x0215	VideoHome NBdock1920
+product DISPLAYLINK GXDVIU2B	0x0223	BUFFALO GX-DVI/U2B
 product DISPLAYLINK SWDVI	0x024c	SUNWEIT DVI
 product DISPLAYLINK LUM70	0x02a9	Lilliput UM-70
+product DISPLAYLINK LCD8000UD_DVI	0x02b8	LCD-8000UD-DVI
+product DISPLAYLINK LDEWX015U	0x02e3	Logitec LDE-WX015U
+product DISPLAYLINK KC002N	0x02ee	SANWA SUPPLY 500-KC002N
+product DISPLAYLINK MIMO	0x0335	DisplayLink MIMO
+product DISPLAYLINK PLUGABLE	0x0377	Plugable docking station
 product DISPLAYLINK LT1421	0x03e0	Lenovo ThinkVision LT1421
+product DISPLAYLINK SD_U2VDH	0x046d	AREA SD-U2VDH
 product DISPLAYLINK UM7X0	0x401a	nanovision MiMo
+product DISPLAYLINK FYDVI	0x8060	DisplayLink FY-DVI
 
 /* D-Link products */
 /*product DLINK DSBS25		0x0100	DSB-S25 serial */
@@ -1743,6 +1784,9 @@ product EICON DIVA852		0x4905	Diva 852 ISDN TA
 /* EIZO products */
 product EIZO HUB		0x0000	hub
 product EIZO MONITOR		0x0001	monitor
+
+/* Elgato products */
+product ELGATO HD60		0x006a	Game Capture HD60 S+
 
 /* Elan Microelectronics products */
 product ELAN BARCODE		0x0001	Barcode Scanner
@@ -2637,6 +2681,7 @@ product LENOVO RTL8153B_2	0x3098	RTL8153B
 product LENOVO RTL8153B_3	0x309b	RTL8153B
 product LENOVO RTL8153B_4	0x309c	RTL8153B
 product LENOVO RTL8153B_5	0x309d	RTL8153B
+product LENOVO OPTUSBMOUSE	0x600e	Optical Mouse
 product LENOVO ETHERNET		0x7203	USB 2.0 Ethernet
 product LENOVO RTL8153_1	0x7205	RTL8153
 product LENOVO ONELINK		0x720a	OneLink
@@ -2752,6 +2797,8 @@ product LOGITECH MBA47		0xc002	M-BA47 mouse
 product LOGITECH WMMOUSE	0xc004	WingMan Gaming Mouse
 product LOGITECH BD58		0xc00c	BD58 mouse
 product LOGITECH UN58A		0xc030	iFeel Mouse
+product LOGITECH B100_1		0xc05a	B100 mouse
+product LOGITECH B100_2		0xc077	B100 mouse
 product LOGITECH WMPAD		0xc208	WingMan GamePad Extreme
 product LOGITECH WMRPAD		0xc20a	WingMan RumblePad
 product LOGITECH WMJOY		0xc281	WingMan Force joystick
@@ -3138,6 +3185,7 @@ product MICROSOFT INETPRO	0x001c	Internet Keyboard Pro
 product MICROSOFT TBEXPLORER	0x0024	Trackball Explorer
 product MICROSOFT INTELLIEYE	0x0025	IntelliEye mouse
 product MICROSOFT INETPRO2	0x002b	Internet Keyboard Pro
+product MICROSOFT PIXARTMOUSE	0x00cb	Optical Mouse
 product MICROSOFT MN510		0x006e	MN510 Wireless
 product MICROSOFT 700WX		0x0079	Palm 700WX
 product MICROSOFT MN110		0x007a	10/100 Ethernet
@@ -3598,6 +3646,10 @@ product PILOTECH CRW600		0x0001	CRW-600 6-in-1
 /* Pioneer DJ products */
 product PIONEERDJ RTL8152B	0x0007	RTL8152B
 product PIONEERDJ RTL8153B	0x0031	RTL8153B
+
+/* PixArt products */
+
+product PIXART RPIMOUSE		0x2510	Raspberry Pi Mouse
 
 /* Planex Communications products */
 product PLANEX GW_US11H		0x14ea	GW-US11H WLAN

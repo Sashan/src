@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_process.c,v 1.98 2024/06/03 12:48:25 claudio Exp $	*/
+/*	$OpenBSD: sys_process.c,v 1.105 2024/12/15 18:25:12 mvs Exp $	*/
 /*	$NetBSD: sys_process.c,v 1.55 1996/05/15 06:17:47 tls Exp $	*/
 
 /*-
@@ -70,6 +70,11 @@
 
 #ifdef PTRACE
 
+/*
+ * Locks used to protect data:
+ *	a	atomic
+ */
+
 static inline int	process_checktracestate(struct process *_curpr,
 			    struct process *_tr, struct proc *_t);
 static inline struct process *process_tprfind(pid_t _tpid, struct proc **_tp);
@@ -78,7 +83,7 @@ int	ptrace_ctrl(struct proc *, int, pid_t, caddr_t, int);
 int	ptrace_ustate(struct proc *, int, pid_t, void *, int, register_t *);
 int	ptrace_kstate(struct proc *, int, pid_t, void *);
 
-int	global_ptrace;	/* permit tracing of not children */
+int	global_ptrace;	/* [a] permit tracing of not children */
 
 
 /*
@@ -207,6 +212,24 @@ sys_ptrace(struct proc *p, void *v, register_t *retval)
 		size = sizeof u.u_pacmask;
 		break;
 #endif
+#ifdef PT_GETXSTATE_INFO
+	case PT_GETXSTATE_INFO:
+		mode = OUT_ALLOC;
+		size = sizeof(struct ptrace_xstate_info);
+		break;
+#endif
+#ifdef PT_GETXSTATE
+	case PT_GETXSTATE:
+		mode = OUT_ALLOC;
+		size = fpu_save_len;
+		break;
+#endif
+#ifdef PT_SETXSTATE
+	case PT_SETXSTATE:
+		mode = IN_ALLOC;
+		size = fpu_save_len;
+		break;
+#endif
 	default:
 		return EINVAL;
 	}
@@ -288,10 +311,14 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 	case PT_TRACE_ME:
 		/* Just set the trace flag. */
 		tr = p->p_p;
-		if (ISSET(tr->ps_flags, PS_TRACED))
+		mtx_enter(&tr->ps_mtx);
+		if (ISSET(tr->ps_flags, PS_TRACED)) {
+			mtx_leave(&tr->ps_mtx);
 			return EBUSY;
+		}
 		atomic_setbits_int(&tr->ps_flags, PS_TRACED);
-		tr->ps_oppid = tr->ps_pptr->ps_pid;
+		tr->ps_opptr = tr->ps_pptr;
+		mtx_leave(&tr->ps_mtx);
 		if (tr->ps_ptstat == NULL)
 			tr->ps_ptstat = malloc(sizeof(*tr->ps_ptstat),
 			    M_SUBPROC, M_WAITOK);
@@ -389,8 +416,8 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 		/*
 		 * 	(5.5) it's not a child of the tracing process.
 		 */
-		if (global_ptrace == 0 && !inferior(tr, p->p_p) &&
-		    (error = suser(p)) != 0)
+		if (atomic_load_int(&global_ptrace) == 0 &&
+		    !inferior(tr, p->p_p) && (error = suser(p)) != 0)
 			goto fail;
 
 		/*
@@ -441,6 +468,13 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 
 		if (pid < THREAD_PID_OFFSET && tr->ps_single)
 			t = tr->ps_single;
+		else if (t == tr->ps_single)
+			atomic_setbits_int(&t->p_flag, P_TRACESINGLE);
+		else {
+			error = EINVAL;
+			goto fail;
+		}
+			
 
 		/* If the address parameter is not (int *)1, set the pc. */
 		if ((int *)addr != (int *)1)
@@ -482,8 +516,10 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 			goto fail;
 #endif
 
+		mtx_enter(&tr->ps_mtx);
 		process_untrace(tr);
 		atomic_clearbits_int(&tr->ps_flags, PS_WAITED);
+		mtx_leave(&tr->ps_mtx);
 
 	sendsig:
 		memset(tr->ps_ptstat, 0, sizeof(*tr->ps_ptstat));
@@ -519,9 +555,11 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 		 *   proc gets to see all the action.
 		 * Stop the target.
 		 */
+		mtx_enter(&tr->ps_mtx);
 		atomic_setbits_int(&tr->ps_flags, PS_TRACED);
-		tr->ps_oppid = tr->ps_pptr->ps_pid;
+		tr->ps_opptr = tr->ps_pptr;
 		process_reparent(tr, p->p_p);
+		mtx_leave(&tr->ps_mtx);
 		if (tr->ps_ptstat == NULL)
 			tr->ps_ptstat = malloc(sizeof(*tr->ps_ptstat),
 			    M_SUBPROC, M_WAITOK);
@@ -744,6 +782,18 @@ ptrace_ustate(struct proc *p, int req, pid_t pid, void *addr, int data,
 		((register_t *)addr)[0] = process_get_pacmask(t);
 		((register_t *)addr)[1] = process_get_pacmask(t);
 		return 0;
+#endif
+#ifdef PT_GETXSTATE_INFO
+	case PT_GETXSTATE_INFO:
+		return process_read_xstate_info(t, addr);
+#endif
+#ifdef PT_GETXSTATE
+	case PT_GETXSTATE:
+		return process_read_xstate(t, addr);
+#endif
+#ifdef PT_SETXSTATE
+	case PT_SETXSTATE:
+		return process_write_xstate(t, addr);
 #endif
 	default:
 		KASSERTMSG(0, "%s: unhandled request %d", __func__, req);

@@ -1,4 +1,4 @@
-.\"	$OpenBSD: ddb.4,v 1.107 2024/02/05 21:33:00 jmc Exp $
+.\"	$OpenBSD: ddb.4,v 1.110 2024/12/21 03:10:46 jsg Exp $
 .\"	$NetBSD: ddb.4,v 1.5 1994/11/30 16:22:09 jtc Exp $
 .\"
 .\" Mach Operating System
@@ -25,7 +25,7 @@
 .\" any improvements or extensions that they make and grant Carnegie Mellon
 .\" the rights to redistribute these changes.
 .\"
-.Dd $Mdocdate: February 5 2024 $
+.Dd $Mdocdate: December 21 2024 $
 .Dt DDB 4
 .Os
 .Sh NAME
@@ -658,7 +658,11 @@ If the
 .Cm /f
 modifier is specified, the complete map is printed.
 .\" --------------------
-.It Ic show mbuf Ar addr
+.It Xo
+.Ic show mbuf
+.Op Cm /cp
+.Ar addr
+.Xc
 Prints the
 .Vt struct mbuf
 header at
@@ -668,6 +672,13 @@ Depending on the mbuf flags
 and
 .Vt struct m_ext
 are printed as well.
+If the
+.Cm /c
+modifier is specified, print the mbuf chain linked with the m_next
+pointer.
+.Cm /p
+does the same using m_nextpkt.
+Both can be combined.
 .\" --------------------
 .It Xo
 .Ic show mount
@@ -1157,14 +1168,6 @@ Register names can be found with the
 .Ic show registers
 command.
 .Pp
-Some variable names are suffixed with numbers, and some may have a modifier
-following a colon immediately after the variable name.
-For example, register variables can have the
-.Ql :u
-modifier to indicate a
-user register (e.g.,
-.Ql $eax:u ) .
-.Pp
 Built-in debugger variables currently supported are:
 .Bl -tag -width 10n -compact -offset indent
 .It Va $radix
@@ -1266,16 +1269,13 @@ command.
 The last address explicitly specified.
 .It Li $ Ns Ar variable
 The value of a register or variable.
-The name may be followed by a
-.Ql \&:
-and modifiers as described above with
-.Ar identifier .
 .It Ar expr Li # Ar expr
 A binary operator which rounds up the left hand side to the next
 multiple of right hand side.
 .It Li * Ns Ar expr
 Indirection.
-It may be followed by a ':' and modifiers as described above.
+It may be followed by a ':' as described above with
+.Ar identifier .
 .El
 .Sh SEE ALSO
 .Xr ctfstrip 1 ,
@@ -1290,7 +1290,7 @@ It may be followed by a ':' and modifiers as described above.
 .Xr pool 9 ,
 .Xr uvm_init 9
 .Sh HISTORY
-This kernel facility first appeared in the MACH 2 operating system
+This kernel facility first appeared in the Mach 3.0 operating system
 developed by CMU.
 Hangman (which stands for "hangs maniacal analyzer") first appeared in
 .Ox 1.2 .

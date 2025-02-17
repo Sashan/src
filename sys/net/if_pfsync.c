@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_pfsync.c,v 1.326 2024/05/24 06:38:41 sashan Exp $	*/
+/*	$OpenBSD: if_pfsync.c,v 1.330 2024/12/18 02:25:30 dlg Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff

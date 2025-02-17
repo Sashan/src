@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_var.h,v 1.178 2024/05/13 01:15:53 jsg Exp $	*/
+/*	$OpenBSD: tcp_var.h,v 1.185 2025/01/16 11:59:20 bluhm Exp $	*/
 /*	$NetBSD: tcp_var.h,v 1.17 1996/02/13 23:44:24 christos Exp $	*/
 
 /*
@@ -70,6 +70,7 @@ struct tcpqent {
 struct tcpcb {
 	struct tcpqehead t_segq;		/* sequencing queue */
 	struct timeout t_timer[TCPT_NTIMERS];	/* tcp timers */
+	struct timeout t_timer_reaper;	/* reaper is special, no refcnt */
 	short	t_state;		/* state of this connection */
 	short	t_rxtshift;		/* log(2) of rexmt exp. backoff */
 	int	t_rxtcur;		/* current retransmit value */
@@ -102,8 +103,7 @@ struct tcpcb {
 #define TF_TMR_PERSIST	0x08000000U	/* retransmit persistence timer armed */
 #define TF_TMR_KEEP	0x10000000U	/* keep alive timer armed */
 #define TF_TMR_2MSL	0x20000000U	/* 2*msl quiet time timer armed */
-#define TF_TMR_REAPER	0x40000000U	/* delayed cleanup timer armed, dead */
-#define TF_TMR_DELACK	0x80000000U	/* delayed ack timer armed */
+#define TF_TMR_DELACK	0x40000000U	/* delayed ack timer armed */
 #define TF_TIMER	TF_TMR_REXMT	/* used to shift with TCPT values */
 
 	struct	mbuf *t_template;	/* skeletal packet for transmit */
@@ -278,7 +278,7 @@ struct syn_cache {
 	u_int     sc_request_r_scale	: 4,	/* [I] */
 		  sc_requested_s_scale	: 4;	/* [I] */
 
-	struct tcpcb *sc_tp;		/* [S] tcb for listening socket */
+	struct inpcb *sc_inplisten;	/* [S] inpcb for listening socket */
 	LIST_ENTRY(syn_cache) sc_tpq;	/* [S] list of entries by same tp */
 };
 
@@ -677,17 +677,17 @@ extern	const struct pr_usrreqs tcp6_usrreqs;
 
 extern	struct pool tcpcb_pool;
 extern	struct inpcbtable tcbtable, tcb6table;	/* queue of active tcpcb's */
-extern	int tcp_do_rfc1323;	/* enabled/disabled? */
-extern	int tcptv_keep_init;	/* [N] time to keep alive initial SYN packet */
-extern	int tcp_mssdflt;	/* default maximum segment size */
-extern	int tcp_rst_ppslim;	/* maximum outgoing RST packet per second */
-extern	int tcp_ack_on_push;	/* ACK immediately on PUSH */
-extern	int tcp_do_sack;	/* SACK enabled/disabled */
+extern	int tcp_do_rfc1323;	/* [a] enabled/disabled? */
+extern	const int tcprexmtthresh;
+extern	int tcp_mssdflt;	/* [a] default maximum segment size */
+extern	int tcp_rst_ppslim;	/* [a] maximum outgoing RST packet per second */
+extern	int tcp_ack_on_push;	/* [a] ACK immediately on PUSH */
+extern	int tcp_do_sack;	/* [a] SACK enabled/disabled */
 extern	struct pool sackhl_pool;
 extern	int tcp_sackhole_limit;	/* max entries for tcp sack queues */
-extern	int tcp_do_ecn;		/* RFC3168 ECN enabled/disabled? */
-extern	int tcp_do_rfc3390;	/* RFC3390 Increasing TCP's Initial Window */
-extern	int tcp_do_tso;		/* enable TSO for TCP output packets */
+extern	int tcp_do_ecn;		/* [a] RFC3168 ECN enabled/disabled? */
+extern	int tcp_do_rfc3390;	/* [a] RFC3390 Increasing TCP Initial Window */
+extern	int tcp_do_tso;		/* [a] enable TSO for TCP output packets */
 
 extern	struct pool tcpqe_pool;
 extern	int tcp_reass_limit;	/* max entries for tcp reass queues */

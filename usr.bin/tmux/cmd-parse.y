@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-parse.y,v 1.51 2024/08/04 09:42:23 nicm Exp $ */
+/* $OpenBSD: cmd-parse.y,v 1.53 2025/01/13 08:58:34 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -223,9 +223,16 @@ assignment	: EQUALS
 		{
 			struct cmd_parse_state	*ps = &parse_state;
 			int			 flags = ps->input->flags;
+			int			 flag = 1;
+			struct cmd_parse_scope	*scope;
 
-			if ((~flags & CMD_PARSE_PARSEONLY) &&
-			    (ps->scope == NULL || ps->scope->flag))
+			if (ps->scope != NULL) {
+				flag = ps->scope->flag;
+				TAILQ_FOREACH(scope, &ps->stack, entry)
+					flag = flag && scope->flag;
+			}
+
+			if ((~flags & CMD_PARSE_PARSEONLY) && flag)
 				environ_put(global_environ, $1, 0);
 			free($1);
 		}
@@ -234,9 +241,16 @@ hidden_assignment : HIDDEN EQUALS
 		{
 			struct cmd_parse_state	*ps = &parse_state;
 			int			 flags = ps->input->flags;
+			int			 flag = 1;
+			struct cmd_parse_scope	*scope;
 
-			if ((~flags & CMD_PARSE_PARSEONLY) &&
-			    (ps->scope == NULL || ps->scope->flag))
+			if (ps->scope != NULL) {
+				flag = ps->scope->flag;
+				TAILQ_FOREACH(scope, &ps->stack, entry)
+					flag = flag && scope->flag;
+			}
+
+			if ((~flags & CMD_PARSE_PARSEONLY) && flag)
 				environ_put(global_environ, $2, ENVIRON_HIDDEN);
 			free($2);
 		}
@@ -1613,6 +1627,7 @@ yylex_token_tilde(char **buf, size_t *len)
 static char *
 yylex_token(int ch)
 {
+	struct cmd_parse_state	*ps = &parse_state;
 	char			*buf;
 	size_t			 len;
 	enum { START,
@@ -1636,9 +1651,12 @@ yylex_token(int ch)
 				ch = '\r';
 			}
 		}
-		if (state == NONE && ch == '\n') {
-			log_debug("%s: end at EOL", __func__);
-			break;
+		if (ch == '\n') {
+			if (state == NONE) {
+				log_debug("%s: end at EOL", __func__);
+				break;
+			}
+			ps->input->line++;
 		}
 
 		/* Whitespace or ; or } ends a token unless inside quotes. */

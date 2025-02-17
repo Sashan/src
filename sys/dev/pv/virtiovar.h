@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtiovar.h,v 1.18 2024/05/17 16:37:10 sf Exp $	*/
+/*	$OpenBSD: virtiovar.h,v 1.29 2025/01/29 14:03:19 sf Exp $	*/
 /*	$NetBSD: virtiovar.h,v 1.1 2011/10/30 12:12:21 hannken Exp $	*/
 
 /*
@@ -82,8 +82,12 @@
 /* flags for config(8) */
 #define VIRTIO_CF_NO_INDIRECT		1
 #define VIRTIO_CF_NO_EVENT_IDX		2
-#define VIRTIO_CF_PREFER_VERSION_1	4
-#define VIRTIO_CF_NO_VERSION_1		8
+#define VIRTIO_CF_PREFER_VERSION_09	8
+
+struct virtio_attach_args {
+	int			 va_devid;	/* virtio device id */
+	unsigned int		 va_nintr;	/* number of intr vectors */
+};
 
 struct vq_entry {
 	SLIST_ENTRY(vq_entry)	 qe_list;	/* free list */
@@ -98,7 +102,8 @@ struct vq_entry {
 
 struct virtqueue {
 	struct virtio_softc	*vq_owner;
-	unsigned int		vq_num;  /* queue size (# of entries) */
+	unsigned int		vq_num;  /* queue size (# of entries),
+					  * 0 if unused/non-existant */
 	unsigned int		vq_mask; /* (1 << vq_num - 1) */
 	int			vq_index; /* queue number (0, 1, ...) */
 
@@ -122,19 +127,17 @@ struct virtqueue {
 	/* free entry management */
 	struct vq_entry		*vq_entries;
 	SLIST_HEAD(, vq_entry) vq_freelist;
-	struct mutex		*vq_freelist_lock;
 
 	/* enqueue/dequeue status */
 	uint16_t		vq_avail_idx;
 	uint16_t		vq_used_idx;
 	int			vq_queued;
-	struct mutex		*vq_aring_lock;
-	struct mutex		*vq_uring_lock;
 
 	/* interrupt handler */
 	int			(*vq_done)(struct virtqueue*);
 	/* 1.x only: offset for notify address calculation */
 	uint32_t		vq_notify_off;
+	int			vq_intr_vec;
 };
 
 struct virtio_feature_name {
@@ -154,10 +157,15 @@ struct virtio_ops {
 	void		(*write_dev_cfg_8)(struct virtio_softc *, int, uint64_t);
 	uint16_t	(*read_queue_size)(struct virtio_softc *, uint16_t);
 	void		(*setup_queue)(struct virtio_softc *, struct virtqueue *, uint64_t);
+	void		(*setup_intrs)(struct virtio_softc *);
 	int		(*get_status)(struct virtio_softc *);
 	void		(*set_status)(struct virtio_softc *, int);
 	int		(*neg_features)(struct virtio_softc *, const struct virtio_feature_name *);
+	int		(*attach_finish)(struct virtio_softc *, struct virtio_attach_args *);
 	int		(*poll_intr)(void *);
+	void		(*intr_barrier)(struct virtio_softc *);
+	int		(*intr_establish)(struct virtio_softc *, struct virtio_attach_args *,
+			    int, struct cpu_info *, int (*)(void *), void *);
 };
 
 #define VIRTIO_CHILD_ERROR	((void*)1)
@@ -165,7 +173,7 @@ struct virtio_ops {
 struct virtio_softc {
 	struct device		 sc_dev;
 	bus_dma_tag_t		 sc_dmat;	/* set by transport */
-	struct virtio_ops	*sc_ops;	/* set by transport */
+	const struct virtio_ops	*sc_ops;	/* set by transport */
 
 	int			 sc_ipl;		/* set by child */
 
@@ -174,10 +182,9 @@ struct virtio_softc {
 	int			 sc_indirect;
 	int			 sc_version_1;
 
-	int			 sc_nvqs;	/* set by child */
+	int			 sc_nvqs;	/* size of sc_vqs, set by child */
 	struct virtqueue	*sc_vqs;	/* set by child */
 
-	int			 sc_childdevid;	/* set by transport */
 	struct device		*sc_child;	/* set by child,
 						 * VIRTIO_CHILD_ERROR on error
 						 */
@@ -200,6 +207,15 @@ struct virtio_softc {
 #define	virtio_poll_intr(sc)			(sc)->sc_ops->poll_intr(sc)
 #define	virtio_get_status(sc)			(sc)->sc_ops->get_status(sc)
 #define	virtio_set_status(sc, i)		(sc)->sc_ops->set_status(sc, i)
+#define	virtio_intr_barrier(sc)			(sc)->sc_ops->intr_barrier(sc)
+
+/*
+ * virtio_intr_establish() only works if va_nintr > 1. If it is called by a
+ * child driver, the transport driver will skip automatic intr allocation and
+ * the child driver must allocate all required interrupts itself. Vector 0 is
+ * always used for the config change interrupt.
+ */
+#define	virtio_intr_establish(sc, va, v, ci, fn, a)	(sc)->sc_ops->intr_establish(sc, va, v, ci, fn, a)
 
 /* only for transport drivers */
 #define	virtio_device_reset(sc)			virtio_set_status((sc), 0)
@@ -212,9 +228,10 @@ virtio_has_feature(struct virtio_softc *sc, uint64_t fbit)
 	return 0;
 }
 
-int virtio_alloc_vq(struct virtio_softc*, struct virtqueue*, int, int, int,
+int virtio_alloc_vq(struct virtio_softc*, struct virtqueue*, int, int,
 		    const char*);
 int virtio_free_vq(struct virtio_softc*, struct virtqueue*);
+int virtio_attach_finish(struct virtio_softc *, struct virtio_attach_args *);
 void virtio_reset(struct virtio_softc *);
 void virtio_reinit_start(struct virtio_softc *);
 void virtio_reinit_end(struct virtio_softc *);

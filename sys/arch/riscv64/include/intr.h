@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.h,v 1.6 2021/06/29 21:27:52 kettenis Exp $	*/
+/*	$OpenBSD: intr.h,v 1.8 2024/10/16 02:32:27 jsg Exp $	*/
 
 /*
  * Copyright (c) 2001-2004 Opsycon AB  (www.opsycon.se / www.opsycon.com)
@@ -101,10 +101,7 @@ enum {
 };
 
 #ifndef _LOCORE
-#include <sys/device.h>
 #include <sys/queue.h>
-
-#include <machine/frame.h>
 
 int	 splraise(int);
 int	 spllower(int);
@@ -150,8 +147,6 @@ extern struct riscv_intr_func riscv_intr_func;
 #define	splhigh()	splraise(IPL_HIGH)
 
 #define	spl0()		spllower(IPL_NONE)
-
-#include <machine/riscvreg.h>
 
 void	 intr_barrier(void *);
 

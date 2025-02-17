@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.h,v 1.9 2022/06/28 14:43:50 visa Exp $	*/
+/*	$OpenBSD: conf.h,v 1.11 2024/09/04 07:45:08 jsg Exp $	*/
 /*	$NetBSD: conf.h,v 1.2 1996/05/05 19:28:34 christos Exp $	*/
 
 /*
@@ -54,3 +54,6 @@ cdev_decl(pctr);
 
 #include "vmm.h"
 cdev_decl(vmm);
+
+#include "psp.h"
+cdev_decl(psp);

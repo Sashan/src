@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd.c,v 1.609 2024/06/27 23:01:15 djm Exp $ */
+/* $OpenBSD: sshd.c,v 1.615 2025/02/10 23:19:26 djm Exp $ */
 /*
  * Copyright (c) 2000, 2001, 2002 Markus Friedl.  All rights reserved.
  * Copyright (c) 2002 Niels Provos.  All rights reserved.
@@ -32,6 +32,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/queue.h>
+#include <sys/utsname.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -241,7 +242,7 @@ child_register(int pipefd, int sockfd)
 	} else {
 		laddr = get_local_ipaddr(sockfd);
 		raddr = get_peer_ipaddr(sockfd);
-		xasprintf(&child->id, "connection from %s to %s", laddr, raddr);
+		xasprintf(&child->id, "connection from %s to %s", raddr, laddr);
 	}
 	free(laddr);
 	free(raddr);
@@ -357,6 +358,13 @@ child_reap(struct early_child *child)
 			penalty_type = SRCLIMIT_PENALTY_AUTHFAIL;
 			debug_f("preauth child %ld for %s exited "
 			    "after unsuccessful auth attempt %s",
+			    (long)child->pid, child->id,
+			    child->early ? " (early)" : "");
+			break;
+		case EXIT_CONFIG_REFUSED:
+			penalty_type = SRCLIMIT_PENALTY_REFUSECONNECTION;
+			debug_f("preauth child %ld for %s prohibited by"
+			    "RefuseConnection %s",
 			    (long)child->pid, child->id,
 			    child->early ? " (early)" : "");
 			break;
@@ -533,59 +541,51 @@ should_drop_connection(int startups)
 static int
 drop_connection(int sock, int startups, int notify_pipe)
 {
+	static struct log_ratelimit_ctx ratelimit_maxstartups;
+	static struct log_ratelimit_ctx ratelimit_penalty;
+	static int init_done;
 	char *laddr, *raddr;
-	const char *reason = NULL, msg[] = "Not allowed at this time\r\n";
-	static time_t last_drop, first_drop;
-	static u_int ndropped;
-	LogLevel drop_level = SYSLOG_LEVEL_VERBOSE;
-	time_t now;
+	const char *reason = NULL, *subreason = NULL;
+	const char msg[] = "Not allowed at this time\r\n";
+	struct log_ratelimit_ctx *rl = NULL;
+	int ratelimited;
+	u_int ndropped;
 
-	if (!srclimit_penalty_check_allow(sock, &reason)) {
-		drop_level = SYSLOG_LEVEL_INFO;
-		goto handle;
+	if (!init_done) {
+		init_done = 1;
+		log_ratelimit_init(&ratelimit_maxstartups, 4, 60, 20, 5*60);
+		log_ratelimit_init(&ratelimit_penalty, 8, 60, 30, 2*60);
 	}
 
-	now = monotime();
-	if (!should_drop_connection(startups) &&
-	    srclimit_check_allow(sock, notify_pipe) == 1) {
-		if (last_drop != 0 &&
-		    startups < options.max_startups_begin - 1) {
-			/* XXX maybe need better hysteresis here */
-			logit("exited MaxStartups throttling after %s, "
-			    "%u connections dropped",
-			    fmt_timeframe(now - first_drop), ndropped);
-			last_drop = 0;
-		}
-		return 0;
+	/* PerSourcePenalties */
+	if (!srclimit_penalty_check_allow(sock, &subreason)) {
+		reason = "PerSourcePenalties";
+		rl = &ratelimit_penalty;
+	} else {
+		/* MaxStartups */
+		if (!should_drop_connection(startups) &&
+		    srclimit_check_allow(sock, notify_pipe) == 1)
+			return 0;
+		reason = "Maxstartups";
+		rl = &ratelimit_maxstartups;
 	}
 
-#define SSHD_MAXSTARTUPS_LOG_INTERVAL	(5 * 60)
-	if (last_drop == 0) {
-		error("beginning MaxStartups throttling");
-		drop_level = SYSLOG_LEVEL_INFO;
-		first_drop = now;
-		ndropped = 0;
-	} else if (last_drop + SSHD_MAXSTARTUPS_LOG_INTERVAL < now) {
-		/* Periodic logs */
-		error("in MaxStartups throttling for %s, "
-		    "%u connections dropped",
-		    fmt_timeframe(now - first_drop), ndropped + 1);
-		drop_level = SYSLOG_LEVEL_INFO;
-	}
-	last_drop = now;
-	ndropped++;
-	reason = "past Maxstartups";
-
- handle:
 	laddr = get_local_ipaddr(sock);
 	raddr = get_peer_ipaddr(sock);
-	do_log2(drop_level, "drop connection #%d from [%s]:%d on [%s]:%d %s",
+	ratelimited = log_ratelimit(rl, time(NULL), NULL, &ndropped);
+	do_log2(ratelimited ? SYSLOG_LEVEL_DEBUG3 : SYSLOG_LEVEL_INFO,
+	    "drop connection #%d from [%s]:%d on [%s]:%d %s",
 	    startups,
 	    raddr, get_peer_port(sock),
 	    laddr, get_local_port(sock),
-	    reason);
+	    subreason != NULL ? subreason : reason);
 	free(laddr);
 	free(raddr);
+	if (ndropped != 0) {
+		logit("%s logging rate-limited: additional %u connections "
+		    "dropped", reason, ndropped);
+	}
+
 	/* best-effort notification to client */
 	(void)write(sock, msg, sizeof(msg) - 1);
 	return 1;
@@ -1139,12 +1139,13 @@ main(int ac, char **av)
 	int r, opt, do_dump_cfg = 0, keytype, already_daemon, have_agent = 0;
 	int sock_in = -1, sock_out = -1, newsock = -1, rexec_argc = 0;
 	int devnull, config_s[2] = { -1 , -1 }, have_connection_info = 0;
-	char *fp, *line, *logfile = NULL, **rexec_argv = NULL;
+	char *args, *fp, *line, *logfile = NULL, **rexec_argv = NULL;
 	struct stat sb;
 	u_int i, j;
 	mode_t new_umask;
 	struct sshkey *key;
 	struct sshkey *pubkey;
+	struct utsname utsname;
 	struct connection_info connection_info;
 	sigset_t sigmask;
 
@@ -1164,6 +1165,7 @@ main(int ac, char **av)
 	initialize_server_options(&options);
 
 	/* Parse command-line arguments. */
+	args = argv_assemble(ac, av); /* logged later */
 	while ((opt = getopt(ac, av,
 	    "C:E:b:c:f:g:h:k:o:p:u:46DGQRTdeiqrtV")) != -1) {
 		switch (opt) {
@@ -1277,7 +1279,7 @@ main(int ac, char **av)
 			break;
 		}
 	}
-	if (!test_flag && !do_dump_cfg && !path_absolute(av[0]))
+	if (!test_flag && !inetd_flag && !do_dump_cfg && !path_absolute(av[0]))
 		fatal("sshd requires execution with an absolute path");
 
 	closefrom(STDERR_FILENO + 1);
@@ -1328,6 +1330,16 @@ main(int ac, char **av)
 		fatal("Config test connection parameter (-C) provided without "
 		    "test mode (-T)");
 
+	debug("sshd version %s, %s", SSH_VERSION, SSH_OPENSSL_VERSION);
+	if (uname(&utsname) != 0) {
+		memset(&utsname, 0, sizeof(utsname));
+		strlcpy(utsname.sysname, "UNKNOWN", sizeof(utsname.sysname));
+	}
+	debug3("Running on %s %s %s %s", utsname.sysname, utsname.release,
+	    utsname.version, utsname.machine);
+	debug3("Started with: %s", args);
+	free(args);
+
 	/* Fetch our configuration */
 	if ((cfg = sshbuf_new()) == NULL)
 		fatal("sshbuf_new config failed");
@@ -1374,8 +1386,6 @@ main(int ac, char **av)
 		fprintf(stderr, "Extra argument %s.\n", av[optind]);
 		exit(1);
 	}
-
-	debug("sshd version %s, %s", SSH_VERSION, SSH_OPENSSL_VERSION);
 
 	if (do_dump_cfg)
 		print_config(&connection_info);
@@ -1565,6 +1575,13 @@ main(int ac, char **av)
 	if (stat(rexec_argv[0], &sb) != 0 || !(sb.st_mode & (S_IXOTH|S_IXUSR)))
 		fatal("%s does not exist or is not executable", rexec_argv[0]);
 	debug3("using %s for re-exec", rexec_argv[0]);
+
+	/* Ensure that the privsep binary exists now too. */
+	if (stat(options.sshd_auth_path, &sb) != 0 ||
+	    !(sb.st_mode & (S_IXOTH|S_IXUSR))) {
+		fatal("%s does not exist or is not executable",
+		    options.sshd_auth_path);
+	}
 
 	listener_proctitle = prepare_proctitle(ac, av);
 

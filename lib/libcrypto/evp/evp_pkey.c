@@ -1,4 +1,4 @@
-/* $OpenBSD: evp_pkey.c,v 1.30 2024/07/14 16:06:31 tb Exp $ */
+/* $OpenBSD: evp_pkey.c,v 1.33 2025/02/04 04:51:34 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -58,6 +58,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <openssl/err.h>
 #include <openssl/x509.h>
@@ -84,7 +85,8 @@ EVP_PKCS82PKEY(const PKCS8_PRIV_KEY_INFO *p8)
 
 	if (!EVP_PKEY_set_type(pkey, OBJ_obj2nid(algoid))) {
 		EVPerror(EVP_R_UNSUPPORTED_PRIVATE_KEY_ALGORITHM);
-		i2t_ASN1_OBJECT(obj_tmp, 80, algoid);
+		if (i2t_ASN1_OBJECT(obj_tmp, sizeof(obj_tmp), algoid) == 0)
+			(void)strlcpy(obj_tmp, "unknown", sizeof(obj_tmp));
 		ERR_asprintf_error_data("TYPE=%s", obj_tmp);
 		goto error;
 	}
@@ -140,114 +142,3 @@ error:
 	return NULL;
 }
 LCRYPTO_ALIAS(EVP_PKEY2PKCS8);
-
-/*
- * XXX - This is only used by openssl(1) pkcs12 for the Microsoft-specific
- * NID_ms_csp_name and NID_LocalKeySet. This turns out to be the only reason
- * why attributes hangs off the EVP_PKEY struct.
- */
-int
-EVP_PKEY_add1_attr_by_NID(EVP_PKEY *pkey, int nid, int type,
-    const unsigned char *bytes, int len)
-{
-	STACK_OF(X509_ATTRIBUTE) *attrs = NULL;
-	X509_ATTRIBUTE *attr = NULL;
-	int ret = 0;
-
-	if ((attr = X509_ATTRIBUTE_create_by_NID(NULL, nid, type,
-	    bytes, len)) == NULL)
-		goto err;
-
-	if ((attrs = pkey->attributes) == NULL)
-		attrs = sk_X509_ATTRIBUTE_new_null();
-	if (attrs == NULL)
-		goto err;
-
-	if (sk_X509_ATTRIBUTE_push(attrs, attr) <= 0)
-		goto err;
-	attr = NULL;
-
-	pkey->attributes = attrs;
-	attrs = NULL;
-
-	ret = 1;
-
- err:
-	X509_ATTRIBUTE_free(attr);
-	if (attrs != pkey->attributes)
-		sk_X509_ATTRIBUTE_pop_free(attrs, X509_ATTRIBUTE_free);
-
-	return ret;
-}
-LCRYPTO_ALIAS(EVP_PKEY_add1_attr_by_NID);
-
-/*
- * XXX - delete all the garbage below in the next bump.
- */
-
-int
-EVP_PKEY_get_attr_count(const EVP_PKEY *key)
-{
-	EVPerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EVP_PKEY_get_attr_count);
-
-int
-EVP_PKEY_get_attr_by_NID(const EVP_PKEY *key, int nid, int lastpos)
-{
-	EVPerror(ERR_R_DISABLED);
-	return -1;
-}
-LCRYPTO_ALIAS(EVP_PKEY_get_attr_by_NID);
-
-int
-EVP_PKEY_get_attr_by_OBJ(const EVP_PKEY *key, const ASN1_OBJECT *obj,
-    int lastpos)
-{
-	EVPerror(ERR_R_DISABLED);
-	return -1;
-}
-LCRYPTO_ALIAS(EVP_PKEY_get_attr_by_OBJ);
-
-X509_ATTRIBUTE *
-EVP_PKEY_get_attr(const EVP_PKEY *key, int loc)
-{
-	EVPerror(ERR_R_DISABLED);
-	return NULL;
-}
-LCRYPTO_ALIAS(EVP_PKEY_get_attr);
-
-X509_ATTRIBUTE *
-EVP_PKEY_delete_attr(EVP_PKEY *key, int loc)
-{
-	EVPerror(ERR_R_DISABLED);
-	return NULL;
-}
-LCRYPTO_ALIAS(EVP_PKEY_delete_attr);
-
-int
-EVP_PKEY_add1_attr(EVP_PKEY *key, X509_ATTRIBUTE *attr)
-{
-	EVPerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EVP_PKEY_add1_attr);
-
-int
-EVP_PKEY_add1_attr_by_OBJ(EVP_PKEY *key, const ASN1_OBJECT *obj, int type,
-    const unsigned char *bytes, int len)
-{
-	EVPerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EVP_PKEY_add1_attr_by_OBJ);
-
-int
-EVP_PKEY_add1_attr_by_txt(EVP_PKEY *key, const char *attrname, int type,
-    const unsigned char *bytes, int len)
-{
-	EVPerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EVP_PKEY_add1_attr_by_txt);

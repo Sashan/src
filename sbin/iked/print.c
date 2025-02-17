@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.4 2023/06/13 12:34:12 tb Exp $	*/
+/*	$OpenBSD: print.c,v 1.6 2024/12/26 18:25:51 sthen Exp $	*/
 
 /*
  * Copyright (c) 2019-2021 Tobias Heider <tobias.heider@stusta.de>
@@ -87,6 +87,9 @@ print_policy(struct iked_policy *pol)
 		print_verbose(" transport");
 	else
 		print_verbose(" tunnel");
+
+	if (pol->pol_flags & IKED_POLICY_NATT_FORCE)
+		print_verbose(" natt");
 
 	print_verbose(" %s", print_xf(pol->pol_saproto, 0, saxfs));
 
@@ -225,7 +228,9 @@ print_policy(struct iked_policy *pol)
 
 	for (i = 0; i < pol->pol_ncfg; i++) {
 		cfg = &pol->pol_cfg[i];
-		print_verbose(" config %s %s", print_xf(cfg->cfg_type,
+		print_verbose(" %s %s %s",
+		    cfg->cfg_action == IKEV2_CP_REPLY ? "config" : "request",
+		    print_xf(cfg->cfg_type,
 		    cfg->cfg.address.addr_af, cpxfs),
 		    print_addr(&cfg->cfg.address.addr));
 	}

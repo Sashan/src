@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_pmeth.c,v 1.21 2023/12/28 22:12:37 tb Exp $ */
+/* $OpenBSD: ec_pmeth.c,v 1.24 2025/01/05 16:07:08 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -57,6 +57,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <openssl/asn1t.h>
@@ -322,7 +323,7 @@ pkey_ec_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2)
 			if (!ec_key->group)
 				return -2;
 			/* If cofactor is 1 cofactor mode does nothing */
-			if (BN_is_one(&ec_key->group->cofactor))
+			if (BN_is_one(ec_key->group->cofactor))
 				return 1;
 			if (!dctx->co_key) {
 				dctx->co_key = EC_KEY_dup(ec_key);
@@ -380,16 +381,19 @@ pkey_ec_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2)
 
 	case EVP_PKEY_CTRL_MD:
 		/* RFC 3279, RFC 5758 and NIST CSOR. */
-		if (EVP_MD_type((const EVP_MD *) p2) != NID_sha1 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_ecdsa_with_SHA1 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha224 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha256 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha384 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha512 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha3_224 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha3_256 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha3_384 &&
-		    EVP_MD_type((const EVP_MD *) p2) != NID_sha3_512) {
+		switch (EVP_MD_type(p2)) {
+		case NID_sha1:
+		case NID_ecdsa_with_SHA1:
+		case NID_sha224:
+		case NID_sha256:
+		case NID_sha384:
+		case NID_sha512:
+		case NID_sha3_224:
+		case NID_sha3_256:
+		case NID_sha3_384:
+		case NID_sha3_512:
+			break;
+		default:
 			ECerror(EC_R_INVALID_DIGEST_TYPE);
 			return 0;
 		}
@@ -445,10 +449,15 @@ pkey_ec_ctrl_str(EVP_PKEY_CTX *ctx, const char *type, const char *value)
 		}
 		return EVP_PKEY_CTX_set_ecdh_kdf_md(ctx, md);
 	} else if (strcmp(type, "ecdh_cofactor_mode") == 0) {
-		int co_mode;
-		co_mode = atoi(value);
-		return EVP_PKEY_CTX_set_ecdh_cofactor_mode(ctx, co_mode);
+		int cofactor_mode;
+		const char *errstr;
+
+		cofactor_mode = strtonum(value, -1, 1, &errstr);
+		if (errstr != NULL)
+			return -2;
+		return EVP_PKEY_CTX_set_ecdh_cofactor_mode(ctx, cofactor_mode);
 	}
+
 	return -2;
 }
 

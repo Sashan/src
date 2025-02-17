@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.367 2024/08/06 08:44:54 claudio Exp $	*/
+/*	$OpenBSD: proc.h,v 1.381 2025/02/17 10:07:10 claudio Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -50,6 +50,7 @@
 #include <sys/resource.h>		/* For struct rusage */
 #include <sys/rwlock.h>			/* For struct rwlock */
 #include <sys/sigio.h>			/* For struct sigio */
+#include <sys/refcnt.h>			/* For struct refcnt */
 
 #ifdef _KERNEL
 #include <sys/atomic.h>
@@ -87,7 +88,7 @@ struct	pgrp {
 
 /*
  * time usage: accumulated times in ticks
- * Each thread is immediatly accumulated here. For processes only the
+ * Each thread is immediately accumulated here. For processes only the
  * time of exited threads is accumulated and to get the proper process
  * time usage tuagg_get_process() needs to be called.
  * Accounting of threads is done lockless by curproc using the tu_gen
@@ -142,6 +143,8 @@ struct pinsyscall {
  *	T	itimer_mtx
  */
 struct process {
+	struct refcnt ps_refcnt;
+
 	/*
 	 * ps_mainproc is the original thread in the process.
 	 * It's only still special for the handling of
@@ -154,7 +157,7 @@ struct process {
 	TAILQ_HEAD(,proc) ps_threads;	/* [K|m] Threads in this process. */
 
 	LIST_ENTRY(process) ps_pglist;	/* List of processes in pgrp. */
-	struct	process *ps_pptr; 	/* Pointer to parent process. */
+	struct	process *ps_pptr; 	/* [K|m] Pointer to parent process. */
 	LIST_ENTRY(process) ps_sibling;	/* List of sibling processes. */
 	LIST_HEAD(, process) ps_children;/* Pointer to list of children. */
 	LIST_ENTRY(process) ps_hash;    /* Hash chain. */
@@ -173,7 +176,7 @@ struct process {
 	struct	vnode *ps_textvp;	/* Vnode of executable. */
 	struct	filedesc *ps_fd;	/* Ptr to open files structure */
 	struct	vmspace *ps_vmspace;	/* Address space */
-	pid_t	ps_pid;			/* Process identifier. */
+	pid_t	ps_pid;			/* [I] Process identifier. */
 
 	struct	futex_list ps_ftlist;	/* futexes attached to this process */
 	struct	tslpqueue ps_tslpqueue;	/* [p] queue of threads in thrsleep */
@@ -197,10 +200,10 @@ struct process {
 	u_int	ps_xexit;		/* Exit status for wait */
 	int	ps_xsig;		/* Stopping or killing signal */
 
-	pid_t	ps_ppid;		/* [a] Cached parent pid */
-	pid_t	ps_oppid;	 	/* [a] Save parent pid during ptrace. */
+	pid_t	ps_ppid;		/* [K|m] Cached parent pid */
 	int	ps_ptmask;		/* Ptrace event mask */
 	struct	ptrace_state *ps_ptstat;/* Ptrace state */
+	struct	process *ps_opptr; 	/* [K|m] Old parent during ptrace. */
 
 	struct	rusage *ps_ru;		/* sum of stats for dead threads. */
 	struct	tusage ps_tu;		/* [m] accumul times of dead threads. */
@@ -224,7 +227,7 @@ struct process {
 /* The following fields are all copied upon creation in process_new. */
 #define	ps_startcopy	ps_limit
 	struct	plimit *ps_limit;	/* [m,R] Process limits. */
-	struct	pgrp *ps_pgrp;		/* Pointer to process group. */
+	struct	pgrp *ps_pgrp;		/* [K|m] Pointer to process group. */
 
 	char	ps_comm[_MAXCOMLEN];	/* command name, incl NUL */
 
@@ -300,18 +303,19 @@ struct process {
 #define	PS_CHROOT	0x01000000	/* Process is chrooted */
 #define	PS_NOBTCFI	0x02000000	/* No Branch Target CFI */
 #define	PS_ITIMER	0x04000000	/* Virtual interval timers running */
-#define	PS_PIN		0x08000000	/* ld.so or static syscall pin */
-#define	PS_LIBCPIN	0x10000000	/* libc.so syscall pin */
+#define	PS_WAITEVENT	0x10000000	/* wait(2) event pending */
 #define	PS_CONTINUED	0x20000000	/* Continued proc not yet waited for */
+#define	PS_STOPPED	0x40000000	/* Stopped process */
+#define	PS_TRAPPED	0x80000000	/* Stopped due to tracing event */
 
 #define	PS_BITS \
     ("\20" "\01CONTROLT" "\02EXEC" "\03INEXEC" "\04EXITING" "\05SUGID" \
      "\06SUGIDEXEC" "\07PPWAIT" "\010ISPWAIT" "\011PROFIL" "\012TRACED" \
      "\013WAITED" "\014COREDUMP" "\015SINGLEEXIT" "\016SINGLEUNWIND" \
-     "\017NOZOMBIE" "\020STOPPED" "\021SYSTEM" "\022EMBRYO" "\023ZOMBIE" \
+     "\017NOZOMBIE" "\020STOPPING" "\021SYSTEM" "\022EMBRYO" "\023ZOMBIE" \
      "\024NOBROADCASTKILL" "\025PLEDGE" "\026WXNEEDED" "\027EXECPLEDGE" \
-     "\030ORPHAN" "\031CHROOT" "\032NOBTCFI" "\033ITIMER" "\034PIN" \
-     "\035LIBCPIN" "\036CONTINUED")
+     "\030ORPHAN" "\031CHROOT" "\032NOBTCFI" "\033ITIMER" "\035WAITEVENT" \
+     "\036CONTINUED" "\037STOPPED" "\040TRAPPED")
 
 struct kcov_dev;
 struct lock_list_entry;
@@ -392,6 +396,7 @@ struct proc {
 	u_char	p_usrpri;	/* [S] Priority based on p_estcpu & ps_nice */
 	u_int	p_estcpu;		/* [S] Time averaged val of p_cpticks */
 	int	p_pledge_syscall;	/* Cache of current syscall */
+	uint64_t p_pledge;		/* [o] copy of p_p->ps_pledge */
 
 	struct	ucred *p_ucred;		/* [o] cached credentials */
 	struct	sigaltstack p_sigstk;	/* sp & on stack state variable */
@@ -435,6 +440,7 @@ struct proc {
 #define	P_SINTR		0x00000080	/* Sleep is interruptible. */
 #define	P_SYSTEM	0x00000200	/* No sigs, stats or swapping. */
 #define	P_TIMEOUT	0x00000400	/* Timing out during sleep. */
+#define	P_TRACESINGLE	0x00001000	/* Ptrace: keep single threaded. */
 #define	P_WEXIT		0x00002000	/* Working on exiting. */
 #define	P_OWEUPC	0x00008000	/* Owe proc an addupc() at next ast. */
 #define	P_SUSPSINGLE	0x00080000	/* Need to stop for single threading. */
@@ -445,8 +451,8 @@ struct proc {
 #define	P_BITS \
     ("\20" "\01INKTR" "\02PROFPEND" "\03ALRMPEND" "\04SIGSUSPEND" \
      "\05CANTSLEEP" "\06WSLEEP" "\010SINTR" "\012SYSTEM" "\013TIMEOUT" \
-     "\016WEXIT" "\020OWEUPC" "\024SUSPSINGLE" "\033THREAD" \
-     "\034SUSPSIG" "\037CPUPEG")
+     "\015TRACESINGLE" "\016WEXIT" "\020OWEUPC" "\024SUSPSINGLE" \
+     "\033THREAD" "\034SUSPSIG" "\037CPUPEG")
 
 #define	THREAD_PID_OFFSET	100000
 
@@ -596,8 +602,9 @@ refreshcreds(struct proc *p)
 
 int	single_thread_set(struct proc *, int);
 int	single_thread_wait(struct process *, int);
-void	single_thread_clear(struct proc *, int);
-int	single_thread_check(struct proc *, int);
+void	single_thread_clear(struct proc *);
+
+int	proc_suspend_check(struct proc *, int);
 
 void	child_return(void *);
 

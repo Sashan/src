@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_swap.c,v 1.170 2024/04/16 10:06:37 claudio Exp $	*/
+/*	$OpenBSD: uvm_swap.c,v 1.173 2024/11/07 09:04:55 jsg Exp $	*/
 /*	$NetBSD: uvm_swap.c,v 1.40 2000/11/17 11:39:39 mrg Exp $	*/
 
 /*
@@ -1007,7 +1007,7 @@ swap_on(struct proc *p, struct swapdev *sdp)
 	 * Lock down the last region of primary disk swap, in case
 	 * hibernate needs to place a signature there.
 	 */
-	if (dev == swdevt[0].sw_dev && vp->v_type == VBLK && size > 3 ) {
+	if (dev == swdevt[0] && vp->v_type == VBLK && size > 3 ) {
 		if (blist_fill(sdp->swd_blist, npages - 1, 1) != 1)
 			panic("hibernate reserve");
 	}
@@ -1520,7 +1520,7 @@ ReTry:	/* XXXMRG */
  * smaller than the size of a cluster.
  *
  * As long as some swap slots are being used by pages currently in memory,
- * it is possible to reuse them.  Even if the swap space has been completly
+ * it is possible to reuse them.  Even if the swap space has been completely
  * filled we do not consider it full.
  */
 int
@@ -1624,7 +1624,7 @@ uvm_swap_free(int startslot, int nslots)
 
 					key = SWD_KEY(sdp, startslot + i);
 					if (key->refcount != 0)
-						SWAP_KEY_PUT(sdp, key);
+						swap_key_put(key);
 				}
 
 			/* Mark range as not decrypt */
@@ -1813,7 +1813,7 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 
 			if (encrypt) {
 				key = SWD_KEY(sdp, startslot + i);
-				SWAP_KEY_GET(sdp, key);	/* add reference */
+				swap_key_get(key);	/* add reference */
 
 				swap_encrypt(key, src, dst, block, PAGE_SIZE);
 				block += btodb(PAGE_SIZE);
@@ -1964,7 +1964,7 @@ swapmount(void)
 	struct swapdev *sdp;
 	struct swappri *spp;
 	struct vnode *vp;
-	dev_t swap_dev = swdevt[0].sw_dev;
+	dev_t swap_dev = swdevt[0];
 	char *nam;
 	char path[MNAMELEN + 1];
 
@@ -2037,7 +2037,7 @@ uvm_hibswap(dev_t dev, u_long *sp, u_long *ep)
 	struct swappri *spp;
 
 	/* no swap devices configured yet? */
-	if (uvmexp.nswapdev < 1 || dev != swdevt[0].sw_dev)
+	if (uvmexp.nswapdev < 1 || dev != swdevt[0])
 		return (1);
 
 	LIST_FOREACH(spp, &swap_priority, spi_swappri) {

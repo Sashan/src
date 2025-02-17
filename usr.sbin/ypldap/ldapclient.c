@@ -1,4 +1,4 @@
-/* $OpenBSD: ldapclient.c,v 1.50 2024/05/21 05:00:48 jsg Exp $ */
+/* $OpenBSD: ldapclient.c,v 1.55 2024/11/21 13:38:15 claudio Exp $ */
 
 /*
  * Copyright (c) 2008 Alexander Schrijver <aschrijver@openbsd.org>
@@ -141,17 +141,18 @@ client_dispatch_dns(int fd, short events, void *p)
 		fatalx("unknown event");
 
 	if (events & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)
 			shut = 1;
 	}
 	if (events & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)
-			shut = 1;
-		goto done;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -217,7 +218,6 @@ client_dispatch_dns(int fd, short events, void *p)
 		imsg_compose_event(env->sc_iev, IMSG_END_UPDATE, 0, 0, -1,
 		    NULL, 0);
 
-done:
 	if (!shut)
 		imsg_event_add(iev);
 	else {
@@ -241,17 +241,18 @@ client_dispatch_parent(int fd, short events, void *p)
 		fatalx("unknown event");
 
 	if (events & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)
 			shut = 1;
 	}
 	if (events & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)
-			shut = 1;
-		goto done;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -303,7 +304,6 @@ client_dispatch_parent(int fd, short events, void *p)
 		imsg_free(&imsg);
 	}
 
-done:
 	if (!shut)
 		imsg_event_add(iev);
 	else {
@@ -393,7 +393,8 @@ ldapclient(int pipe_main2client[2])
 
 	env.sc_iev->events = EV_READ;
 	env.sc_iev->data = &env;
-	imsg_init(&env.sc_iev->ibuf, pipe_main2client[1]);
+	if (imsgbuf_init(&env.sc_iev->ibuf, pipe_main2client[1]) == -1)
+		fatal(NULL);
 	env.sc_iev->handler = client_dispatch_parent;
 	event_set(&env.sc_iev->ev, env.sc_iev->ibuf.fd, env.sc_iev->events,
 	    env.sc_iev->handler, &env);
@@ -401,7 +402,8 @@ ldapclient(int pipe_main2client[2])
 
 	env.sc_iev_dns->events = EV_READ;
 	env.sc_iev_dns->data = &env;
-	imsg_init(&env.sc_iev_dns->ibuf, pipe_dns[0]);
+	if (imsgbuf_init(&env.sc_iev_dns->ibuf, pipe_dns[0]) == -1)
+		fatal(NULL);
 	env.sc_iev_dns->handler = client_dispatch_dns;
 	event_set(&env.sc_iev_dns->ev, env.sc_iev_dns->ibuf.fd,
 	    env.sc_iev_dns->events, env.sc_iev_dns->handler, &env);

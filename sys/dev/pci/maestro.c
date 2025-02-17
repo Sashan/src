@@ -1,4 +1,4 @@
-/*	$OpenBSD: maestro.c,v 1.52 2024/05/24 06:02:58 jsg Exp $	*/
+/*	$OpenBSD: maestro.c,v 1.56 2024/09/20 02:00:46 jsg Exp $	*/
 /* $FreeBSD: /c/ncvs/src/sys/dev/sound/pci/maestro.c,v 1.3 2000/11/21 12:22:11 julian Exp $ */
 /*
  * FreeBSD's ESS Agogo/Maestro driver 
@@ -627,7 +627,7 @@ maestro_attach(struct device *parent, struct device *self, void *aux)
 	    0, &sc->iot, &sc->ioh, NULL, NULL, 0)) != 0) {
 		printf(", can't map i/o space\n");
 		goto bad;
-	};
+	}
 
 	/* Allocate fixed DMA segment :-( */
 	sc->dmasize = MAESTRO_BUFSIZ * 16;
@@ -991,7 +991,7 @@ maestro_open(void *hdl, int flags)
 	if ((flags & (FWRITE | FREAD)) == (FWRITE | FREAD))
 		return ENXIO;	/* XXX */
 
-/* XXX work around VM brokeness */
+/* XXX work around VM brokenness */
 #if 0
 	if ((OFLAGS(flags) & O_ACCMODE) != O_WRONLY)
 		return (EINVAL);
@@ -1349,9 +1349,11 @@ int
 maestro_activate(struct device *self, int act)
 {
 	struct maestro_softc *sc = (struct maestro_softc *)self;
+	int rv;
 
 	switch (act) {
 	case DVACT_SUSPEND:
+		rv = config_activate_children(self, act);
 		/* Power down device on shutdown. */
 		DPRINTF(("maestro: power down\n"));
 		if (sc->record.mode & MAESTRO_RUNNING) {
@@ -1382,9 +1384,13 @@ maestro_activate(struct device *self, int act)
 		if (sc->record.mode & MAESTRO_RUNNING)
 			maestro_channel_start(&sc->record);
 		maestro_update_timer(sc);
+		rv = config_activate_children(self, act);
+		break;
+	default:
+		rv = config_activate_children(self, act);
 		break;
 	}
-	return 0;
+	return rv;
 }
 
 void

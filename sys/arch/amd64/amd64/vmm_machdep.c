@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm_machdep.c,v 1.31 2024/07/26 15:59:04 bluhm Exp $ */
+/* $OpenBSD: vmm_machdep.c,v 1.41 2024/11/27 10:09:51 mpi Exp $ */
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -17,7 +17,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/signalvar.h>
 #include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/pool.h>
@@ -73,7 +72,6 @@ int vmm_quiesce_vmx(void);
 int vm_run(struct vm_run_params *);
 int vm_intr_pending(struct vm_intr_params *);
 int vm_rwregs(struct vm_rwregs_params *, int);
-int vm_mprotect_ept(struct vm_mprotect_ept_params *);
 int vm_rwvmparams(struct vm_rwvmparams_params *, int);
 int vcpu_readregs_vmx(struct vcpu *, uint64_t, int, struct vcpu_reg_state *);
 int vcpu_readregs_svm(struct vcpu *, uint64_t, struct vcpu_reg_state *);
@@ -83,9 +81,9 @@ int vcpu_reset_regs(struct vcpu *, struct vcpu_reg_state *);
 int vcpu_reset_regs_vmx(struct vcpu *, struct vcpu_reg_state *);
 int vcpu_reset_regs_svm(struct vcpu *, struct vcpu_reg_state *);
 int vcpu_reload_vmcs_vmx(struct vcpu *);
-int vcpu_init(struct vcpu *);
+int vcpu_init(struct vcpu *, struct vm_create_params *);
 int vcpu_init_vmx(struct vcpu *);
-int vcpu_init_svm(struct vcpu *);
+int vcpu_init_svm(struct vcpu *, struct vm_create_params *);
 int vcpu_run_vmx(struct vcpu *, struct vm_run_params *);
 int vcpu_run_svm(struct vcpu *, struct vm_run_params *);
 void vcpu_deinit(struct vcpu *);
@@ -126,8 +124,6 @@ int svm_fault_page(struct vcpu *, paddr_t);
 int vmx_fault_page(struct vcpu *, paddr_t);
 int vmx_handle_np_fault(struct vcpu *);
 int svm_handle_np_fault(struct vcpu *);
-int vmx_mprotect_ept(struct vcpu *, vm_map_t, paddr_t, paddr_t, int);
-pt_entry_t *vmx_pmap_find_pte_ept(pmap_t, paddr_t);
 int vmm_alloc_vpid(uint16_t *);
 void vmm_free_vpid(uint16_t);
 const char *vcpu_state_decode(u_int);
@@ -441,9 +437,6 @@ vmmioctl_machdep(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	case VMM_IOC_INTR:
 		ret = vm_intr_pending((struct vm_intr_params *)data);
 		break;
-	case VMM_IOC_MPROTECT_EPT:
-		ret = vm_mprotect_ept((struct vm_mprotect_ept_params *)data);
-		break;
 	default:
 		DPRINTF("%s: unknown ioctl code 0x%lx\n", __func__, cmd);
 		ret = ENOTTY;
@@ -457,7 +450,6 @@ pledge_ioctl_vmm_machdep(struct proc *p, long com)
 {
 	switch (com) {
 	case VMM_IOC_INTR:
-	case VMM_IOC_MPROTECT_EPT:
 		return (0);
 	}
 
@@ -623,311 +615,6 @@ vm_rwregs(struct vm_rwregs_params *vrwp, int dir)
 out:
 	refcnt_rele_wake(&vm->vm_refcnt);
 	return (ret);
-}
-
-/*
- * vm_mprotect_ept
- *
- * IOCTL handler to sets the access protections of the ept
- *
- * Parameters:
- *   vmep: describes the memory for which the protect will be applied..
- *
- * Return values:
- *  0: if successful
- *  ENOENT: if the VM defined by 'vmep' cannot be found
- *  EINVAL: if the sgpa or size is not page aligned, the prot is invalid,
- *          size is too large (512GB), there is wraparound
- *          (like start = 512GB-1 and end = 512GB-2),
- *          the address specified is not within the vm's mem range
- *          or the address lies inside reserved (MMIO) memory
- */
-int
-vm_mprotect_ept(struct vm_mprotect_ept_params *vmep)
-{
-	struct vm *vm;
-	struct vcpu *vcpu;
-	vaddr_t sgpa;
-	size_t size;
-	vm_prot_t prot;
-	uint64_t msr;
-	int ret = 0, memtype;
-
-	/* If not EPT or RVI, nothing to do here */
-	if (!(vmm_softc->mode == VMM_MODE_EPT
-	    || vmm_softc->mode == VMM_MODE_RVI))
-		return (0);
-
-	/* Find the desired VM */
-	ret = vm_find(vmep->vmep_vm_id, &vm);
-
-	/* Not found? exit. */
-	if (ret != 0) {
-		DPRINTF("%s: vm id %u not found\n", __func__,
-		    vmep->vmep_vm_id);
-		return (ret);
-	}
-
-	vcpu = vm_find_vcpu(vm, vmep->vmep_vcpu_id);
-
-	if (vcpu == NULL) {
-		DPRINTF("%s: vcpu id %u of vm %u not found\n", __func__,
-		    vmep->vmep_vcpu_id, vmep->vmep_vm_id);
-		ret = ENOENT;
-		goto out_nolock;
-	}
-
-	rw_enter_write(&vcpu->vc_lock);
-
-	if (vcpu->vc_state != VCPU_STATE_STOPPED) {
-		DPRINTF("%s: mprotect_ept %u on vm %u attempted "
-		    "while vcpu was in state %u (%s)\n", __func__,
-		    vmep->vmep_vcpu_id, vmep->vmep_vm_id, vcpu->vc_state,
-		    vcpu_state_decode(vcpu->vc_state));
-		ret = EBUSY;
-		goto out;
-	}
-
-	/* Only proceed if the pmap is in the correct mode */
-	KASSERT((vmm_softc->mode == VMM_MODE_EPT &&
-	    vm->vm_map->pmap->pm_type == PMAP_TYPE_EPT) ||
-	    (vmm_softc->mode == VMM_MODE_RVI &&
-	     vm->vm_map->pmap->pm_type == PMAP_TYPE_RVI));
-
-	sgpa = vmep->vmep_sgpa;
-	size = vmep->vmep_size;
-	prot = vmep->vmep_prot;
-
-	/* No W^X permissions */
-	if ((prot & PROT_MASK) != prot &&
-	    (prot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC)) {
-		DPRINTF("%s: W+X permission requested\n", __func__);
-		ret = EINVAL;
-		goto out;
-	}
-
-	/* No Write only permissions */
-	if ((prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) == PROT_WRITE) {
-		DPRINTF("%s: No Write only permissions\n", __func__);
-		ret = EINVAL;
-		goto out;
-	}
-
-	/* No empty permissions */
-	if (prot == 0) {
-		DPRINTF("%s: No empty permissions\n", __func__);
-		ret = EINVAL;
-		goto out;
-	}
-
-	/* No execute only on EPT CPUs that don't have that capability */
-	if (vmm_softc->mode == VMM_MODE_EPT) {
-		msr = rdmsr(IA32_VMX_EPT_VPID_CAP);
-		if (prot == PROT_EXEC &&
-		    (msr & IA32_EPT_VPID_CAP_XO_TRANSLATIONS) == 0) {
-			DPRINTF("%s: Execute only permissions unsupported,"
-			   " adding read permission\n", __func__);
-
-			prot |= PROT_READ;
-		}
-	}
-
-	/* Must be page aligned */
-	if ((sgpa & PAGE_MASK) || (size & PAGE_MASK) || size == 0) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	/* size must be less then 512GB */
-	if (size >= NBPD_L4) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	/* no wraparound */
-	if (sgpa + size < sgpa) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	/*
-	 * Specifying addresses within the PCI MMIO space is forbidden.
-	 * Disallow addresses that start inside the MMIO space:
-	 * [VMM_PCI_MMIO_BAR_BASE .. VMM_PCI_MMIO_BAR_END]
-	 */
-	if (sgpa >= VMM_PCI_MMIO_BAR_BASE && sgpa <= VMM_PCI_MMIO_BAR_END) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	/*
-	 * ... and disallow addresses that end inside the MMIO space:
-	 * (VMM_PCI_MMIO_BAR_BASE .. VMM_PCI_MMIO_BAR_END]
-	 */
-	if (sgpa + size > VMM_PCI_MMIO_BAR_BASE &&
-	    sgpa + size <= VMM_PCI_MMIO_BAR_END) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	memtype = vmm_get_guest_memtype(vm, sgpa);
-	if (memtype == VMM_MEM_TYPE_UNKNOWN) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	if (vmm_softc->mode == VMM_MODE_EPT)
-		ret = vmx_mprotect_ept(vcpu, vm->vm_map, sgpa, sgpa + size,
-		    prot);
-	else if (vmm_softc->mode == VMM_MODE_RVI) {
-		pmap_write_protect(vm->vm_map->pmap, sgpa, sgpa + size, prot);
-		/* XXX requires a invlpga */
-		ret = 0;
-	} else
-		ret = EINVAL;
-out:
-	if (vcpu != NULL)
-		rw_exit_write(&vcpu->vc_lock);
-out_nolock:
-	refcnt_rele_wake(&vm->vm_refcnt);
-	return (ret);
-}
-
-/*
- * vmx_mprotect_ept
- *
- * apply the ept protections to the requested pages, faulting in the page if
- * required.
- */
-int
-vmx_mprotect_ept(struct vcpu *vcpu, vm_map_t vm_map, paddr_t sgpa, paddr_t egpa,
-    int prot)
-{
-	struct vmx_invept_descriptor vid;
-	pmap_t pmap;
-	pt_entry_t *pte;
-	paddr_t addr;
-	int ret = 0;
-
-	pmap = vm_map->pmap;
-
-	KERNEL_LOCK();
-
-	for (addr = sgpa; addr < egpa; addr += PAGE_SIZE) {
-		pte = vmx_pmap_find_pte_ept(pmap, addr);
-		if (pte == NULL) {
-			ret = uvm_fault(vm_map, addr, VM_FAULT_WIRE,
-			    PROT_READ | PROT_WRITE | PROT_EXEC);
-			if (ret)
-				printf("%s: uvm_fault returns %d, GPA=0x%llx\n",
-				    __func__, ret, (uint64_t)addr);
-
-			pte = vmx_pmap_find_pte_ept(pmap, addr);
-			if (pte == NULL) {
-				KERNEL_UNLOCK();
-				return EFAULT;
-			}
-		}
-
-		if (prot & PROT_READ)
-			*pte |= EPT_R;
-		else
-			*pte &= ~EPT_R;
-
-		if (prot & PROT_WRITE)
-			*pte |= EPT_W;
-		else
-			*pte &= ~EPT_W;
-
-		if (prot & PROT_EXEC)
-			*pte |= EPT_X;
-		else
-			*pte &= ~EPT_X;
-	}
-
-	/*
-	 * SDM 3C: 28.3.3.4 Guidelines for Use of the INVEPT Instruction
-	 * the first bullet point seems to say we should call invept.
-	 *
-	 * Software should use the INVEPT instruction with the “single-context”
-	 * INVEPT type after making any of the following changes to an EPT
-	 * paging-structure entry (the INVEPT descriptor should contain an
-	 * EPTP value that references — directly or indirectly
-	 * — the modified EPT paging structure):
-	 * —   Changing any of the privilege bits 2:0 from 1 to 0.
-	 * */
-	if (pmap->eptp != 0) {
-		memset(&vid, 0, sizeof(vid));
-		vid.vid_eptp = pmap->eptp;
-		DPRINTF("%s: flushing EPT TLB for EPTP 0x%llx\n", __func__,
-		    vid.vid_eptp);
-		invept(vcpu->vc_vmx_invept_op, &vid);
-	}
-
-	KERNEL_UNLOCK();
-
-	return ret;
-}
-
-/*
- * vmx_pmap_find_pte_ept
- *
- * find the page table entry specified by addr in the pmap supplied.
- */
-pt_entry_t *
-vmx_pmap_find_pte_ept(pmap_t pmap, paddr_t addr)
-{
-	int l4idx, l3idx, l2idx, l1idx;
-	pd_entry_t *pd;
-	paddr_t pdppa;
-	pt_entry_t *ptes, *pte;
-
-	l4idx = (addr & L4_MASK) >> L4_SHIFT; /* PML4E idx */
-	l3idx = (addr & L3_MASK) >> L3_SHIFT; /* PDPTE idx */
-	l2idx = (addr & L2_MASK) >> L2_SHIFT; /* PDE idx */
-	l1idx = (addr & L1_MASK) >> L1_SHIFT; /* PTE idx */
-
-	pd = (pd_entry_t *)pmap->pm_pdir;
-	if (pd == NULL)
-		return NULL;
-
-	/*
-	 * l4idx should always be 0 since we don't support more than 512GB
-	 * guest physical memory.
-	 */
-	if (l4idx > 0)
-		return NULL;
-
-	/*
-	 * l3idx should always be < MAXDSIZ/1GB because we don't support more
-	 * than MAXDSIZ guest phys mem.
-	 */
-	if (l3idx >= MAXDSIZ / ((paddr_t)1024 * 1024 * 1024))
-		return NULL;
-
-	pdppa = pd[l4idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pdppa = ptes[l3idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pdppa = ptes[l2idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pte = &ptes[l1idx];
-	if (*pte == 0)
-		return NULL;
-
-	return pte;
 }
 
 /*
@@ -1891,7 +1578,6 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 {
 	struct vmcb *vmcb;
 	int ret;
-	uint16_t asid;
 
 	vmcb = (struct vmcb *)vcpu->vc_control_va;
 
@@ -1964,14 +1650,7 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	svm_setmsrbr(vcpu, MSR_PSTATEDEF(0));
 
 	/* Guest VCPU ASID */
-	if (vmm_alloc_vpid(&asid)) {
-		DPRINTF("%s: could not allocate asid\n", __func__);
-		ret = EINVAL;
-		goto exit;
-	}
-
-	vmcb->v_asid = asid;
-	vcpu->vc_vpid = asid;
+	vmcb->v_asid = vcpu->vc_vpid;
 
 	/* TLB Control - First time in, flush all*/
 	vmcb->v_tlb_control = SVM_TLB_CONTROL_FLUSH_ALL;
@@ -1986,8 +1665,12 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
             PATENTRY(6, PAT_UCMINUS) | PATENTRY(7, PAT_UC);
 
 	/* NPT */
-	vmcb->v_np_enable = 1;
+	vmcb->v_np_enable = SVM_ENABLE_NP;
 	vmcb->v_n_cr3 = vcpu->vc_parent->vm_map->pmap->pm_pdirpa;
+
+	/* SEV */
+	if (vcpu->vc_sev)
+		vmcb->v_np_enable |= SVM_ENABLE_SEV;
 
 	/* Enable SVME in EFER (must always be set) */
 	vmcb->v_efer |= EFER_SVME;
@@ -1999,7 +1682,6 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 
 	vcpu->vc_parent->vm_map->pmap->eptp = 0;
 
-exit:
 	return ret;
 }
 
@@ -2259,7 +1941,7 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	uint32_t pinbased, procbased, procbased2, exit, entry;
 	uint32_t want1, want0;
 	uint64_t ctrlval, cr3, msr_misc_enable;
-	uint16_t ctrl, vpid;
+	uint16_t ctrl;
 	struct vmx_msr_store *msr_store;
 
 	rw_assert_wrlock(&vcpu->vc_lock);
@@ -2522,30 +2204,12 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	    IA32_VMX_ACTIVATE_SECONDARY_CONTROLS, 1)) {
 		if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED2_CTLS,
 		    IA32_VMX_ENABLE_VPID, 1)) {
-
-			/* We may sleep during allocation, so reload VMCS. */
-			vcpu->vc_last_pcpu = curcpu();
-			ret = vmm_alloc_vpid(&vpid);
-			if (vcpu_reload_vmcs_vmx(vcpu)) {
-				printf("%s: failed to reload vmcs\n", __func__);
-				ret = EINVAL;
-				goto exit;
-			}
-			if (ret) {
-				DPRINTF("%s: could not allocate VPID\n",
-				    __func__);
-				ret = EINVAL;
-				goto exit;
-			}
-
-			if (vmwrite(VMCS_GUEST_VPID, vpid)) {
+			if (vmwrite(VMCS_GUEST_VPID, vcpu->vc_vpid)) {
 				DPRINTF("%s: error setting guest VPID\n",
 				    __func__);
 				ret = EINVAL;
 				goto exit;
 			}
-
-			vcpu->vc_vpid = vpid;
 		}
 	}
 
@@ -2838,13 +2502,19 @@ vcpu_init_vmx(struct vcpu *vcpu)
 	uint32_t cr0, cr4;
 	int ret = 0;
 
+	/* Allocate a VPID early to avoid km_alloc if we're out of VPIDs. */
+	if (vmm_alloc_vpid(&vcpu->vc_vpid))
+		return (ENOMEM);
+
 	/* Allocate VMCS VA */
 	vcpu->vc_control_va = (vaddr_t)km_alloc(PAGE_SIZE, &kv_page, &kp_zero,
 	    &kd_waitok);
 	vcpu->vc_vmx_vmcs_state = VMCS_CLEARED;
 
-	if (!vcpu->vc_control_va)
-		return (ENOMEM);
+	if (!vcpu->vc_control_va) {
+		ret = ENOMEM;
+		goto exit;
+	}
 
 	/* Compute VMCS PA */
 	if (!pmap_extract(pmap_kernel(), vcpu->vc_control_va,
@@ -2941,11 +2611,6 @@ vcpu_init_vmx(struct vcpu *vcpu)
 		ret = EINVAL;
 		goto exit;
 	}
-	if (msr & IA32_EPT_VPID_CAP_INVEPT_CONTEXT)
-		vcpu->vc_vmx_invept_op = IA32_VMX_INVEPT_SINGLE_CTX;
-	else
-		vcpu->vc_vmx_invept_op = IA32_VMX_INVEPT_GLOBAL_CTX;
-
 	if (msr & IA32_EPT_VPID_CAP_WB) {
 		/* WB cache type supported */
 		eptp |= IA32_EPT_PAGING_CACHE_TYPE_WB;
@@ -3087,6 +2752,7 @@ vcpu_reset_regs(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
  *
  * Parameters:
  *  vcpu: the VCPU structure being initialized
+ *  vcp: parameters provided by vmd(8)
  *
  * Return values:
  *  0: the VCPU was initialized successfully
@@ -3094,16 +2760,22 @@ vcpu_reset_regs(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
  *  EINVAL: an error occurred during VCPU initialization
  */
 int
-vcpu_init_svm(struct vcpu *vcpu)
+vcpu_init_svm(struct vcpu *vcpu, struct vm_create_params *vcp)
 {
 	int ret = 0;
+
+	/* Allocate an ASID early to avoid km_alloc if we're out of ASIDs. */
+	if (vmm_alloc_vpid(&vcpu->vc_vpid))
+		return (ENOMEM);
 
 	/* Allocate VMCB VA */
 	vcpu->vc_control_va = (vaddr_t)km_alloc(PAGE_SIZE, &kv_page, &kp_zero,
 	    &kd_waitok);
 
-	if (!vcpu->vc_control_va)
-		return (ENOMEM);
+	if (!vcpu->vc_control_va) {
+		ret = ENOMEM;
+		goto exit;
+	}
 
 	/* Compute VMCB PA */
 	if (!pmap_extract(pmap_kernel(), vcpu->vc_control_va,
@@ -3177,6 +2849,13 @@ vcpu_init_svm(struct vcpu *vcpu)
 	    (uint64_t)vcpu->vc_svm_ioio_va,
 	    (uint64_t)vcpu->vc_svm_ioio_pa);
 
+	/* Shall we enable SEV? */
+	vcpu->vc_sev = vcp->vcp_sev;
+
+	/* Inform vmd(8) about ASID and C bit position. */
+	vcp->vcp_poscbit = amd64_pos_cbit;
+	vcp->vcp_asid[vcpu->vc_id] = vcpu->vc_vpid;
+
 exit:
 	if (ret)
 		vcpu_deinit_svm(vcpu);
@@ -3190,7 +2869,7 @@ exit:
  * Calls the architecture-specific VCPU init routine
  */
 int
-vcpu_init(struct vcpu *vcpu)
+vcpu_init(struct vcpu *vcpu, struct vm_create_params *vcp)
 {
 	int ret = 0;
 
@@ -3208,7 +2887,7 @@ vcpu_init(struct vcpu *vcpu)
 	if (vmm_softc->mode == VMM_MODE_EPT)
 		ret = vcpu_init_vmx(vcpu);
 	else if (vmm_softc->mode == VMM_MODE_RVI)
-		ret = vcpu_init_svm(vcpu);
+		ret = vcpu_init_svm(vcpu, vcp);
 	else
 		panic("%s: unknown vmm mode: %d", __func__, vmm_softc->mode);
 
@@ -3249,8 +2928,7 @@ vcpu_deinit_vmx(struct vcpu *vcpu)
 	}
 #endif
 
-	if (vcpu->vc_vmx_vpid_enabled)
-		vmm_free_vpid(vcpu->vc_vpid);
+	vmm_free_vpid(vcpu->vc_vpid);
 }
 
 /*
@@ -3991,10 +3669,15 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 			ci = curcpu();
 			vcpu->vc_last_pcpu = ci;
 
+			/* We're now using this vcpu's EPT pmap on this cpu. */
+			atomic_swap_ptr(&ci->ci_ept_pmap,
+			    vcpu->vc_parent->vm_map->pmap);
+
 			/* Invalidate EPT cache. */
 			vid_ept.vid_reserved = 0;
 			vid_ept.vid_eptp = vcpu->vc_parent->vm_map->pmap->eptp;
-			if (invept(vcpu->vc_vmx_invept_op, &vid_ept)) {
+			if (invept(ci->ci_vmm_cap.vcc_vmx.vmx_invept_mode,
+			    &vid_ept)) {
 				printf("%s: invept\n", __func__);
 				return (EINVAL);
 			}
@@ -4186,7 +3869,8 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 				break;
 			}
 			if (!(exitinfo & VMX_EXIT_INFO_HAVE_REASON)) {
-				printf("%s: cant read exit reason\n", __func__);
+				printf("%s: can't read exit reason\n",
+				    __func__);
 				ret = EINVAL;
 				break;
 			}
@@ -4858,9 +4542,10 @@ svm_get_guest_faulttype(struct vmcb *vmcb)
 int
 svm_fault_page(struct vcpu *vcpu, paddr_t gpa)
 {
+	paddr_t pa = trunc_page(gpa);
 	int ret;
 
-	ret = uvm_fault(vcpu->vc_parent->vm_map, gpa, VM_FAULT_WIRE,
+	ret = uvm_fault_wire(vcpu->vc_parent->vm_map, pa, pa + PAGE_SIZE,
 	    PROT_READ | PROT_WRITE | PROT_EXEC);
 	if (ret)
 		printf("%s: uvm_fault returns %d, GPA=0x%llx, rip=0x%llx\n",
@@ -4927,12 +4612,13 @@ svm_handle_np_fault(struct vcpu *vcpu)
  *  0: if successful
  *  EINVAL: if fault type could not be determined or VMCS reload fails
  *  EAGAIN: if a protection fault occurred, ie writing to a read-only page
- *  errno: if uvm_fault(9) fails to wire in the page
+ *  errno: if uvm_fault_wire() fails to wire in the page
  */
 int
 vmx_fault_page(struct vcpu *vcpu, paddr_t gpa)
 {
 	int fault_type, ret;
+	paddr_t pa = trunc_page(gpa);
 
 	fault_type = vmx_get_guest_faulttype();
 	switch (fault_type) {
@@ -4947,9 +4633,9 @@ vmx_fault_page(struct vcpu *vcpu, paddr_t gpa)
 		break;
 	}
 
-	/* We may sleep during uvm_fault(9), so reload VMCS. */
+	/* We may sleep during uvm_fault_wire(), so reload VMCS. */
 	vcpu->vc_last_pcpu = curcpu();
-	ret = uvm_fault(vcpu->vc_parent->vm_map, gpa, VM_FAULT_WIRE,
+	ret = uvm_fault_wire(vcpu->vc_parent->vm_map, pa, pa + PAGE_SIZE,
 	    PROT_READ | PROT_WRITE | PROT_EXEC);
 	if (vcpu_reload_vmcs_vmx(vcpu)) {
 		printf("%s: failed to reload vmcs\n", __func__);
@@ -6286,7 +5972,8 @@ vmm_handle_cpuid(struct vcpu *vcpu)
 		*rdx = 0;
 		break;
 	case 0x80000000:	/* Extended function level */
-		*rax = 0x80000008; /* curcpu()->ci_pnfeatset */
+		/* We don't emulate past 0x8000001f currently. */
+		*rax = min(curcpu()->ci_pnfeatset, 0x8000001f);
 		*rbx = 0;
 		*rcx = 0;
 		*rdx = 0;
@@ -6341,6 +6028,12 @@ vmm_handle_cpuid(struct vcpu *vcpu)
 		*rdx = edx;
 		break;
 	case 0x8000001d:	/* cache topology (AMD) */
+		*rax = eax;
+		*rbx = ebx;
+		*rcx = ecx;
+		*rdx = edx;
+		break;
+	case 0x8000001f:	/* encryption features (AMD) */
 		*rax = eax;
 		*rbx = ebx;
 		*rcx = ecx;
@@ -7401,16 +7094,6 @@ vmx_dump_vmcs(struct vcpu *vcpu)
 			vmx_dump_vmcs_field(VMCS_EOI_EXIT_BITMAP_3,
 			    "EOI Exit Bitmap 3");
 			DPRINTF("\n");
-		}
-
-		if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED2_CTLS,
-		    IA32_VMX_ENABLE_VM_FUNCTIONS, 1)) {
-			/* We assume all CPUs have the same VMFUNC caps */
-			if (curcpu()->ci_vmm_cap.vcc_vmx.vmx_vm_func & 0x1) {
-				vmx_dump_vmcs_field(VMCS_EPTP_LIST_ADDRESS,
-				    "EPTP List Addr");
-				DPRINTF("\n");
-			}
 		}
 
 		if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED2_CTLS,

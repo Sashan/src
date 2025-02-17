@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_utl.c,v 1.19 2024/07/08 06:57:37 jca Exp $ */
+/* $OpenBSD: x509_utl.c,v 1.26 2025/01/26 13:51:41 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -68,6 +68,13 @@
 #include <openssl/x509v3.h>
 
 #include "bytestring.h"
+#include "conf_local.h"
+
+/*
+ * Match reference identifiers starting with "." to any sub-domain. This
+ * flag is set implicitly when the subject reference identity is a DNS name.
+ */
+#define _X509_CHECK_FLAG_DOT_SUBDOMAINS 0x8000
 
 static char *bn_to_string(const BIGNUM *bn);
 static char *strip_spaces(char *name);
@@ -85,42 +92,54 @@ static int ipv6_hex(unsigned char *out, const char *in, int inlen);
 /* Add a CONF_VALUE name-value pair to stack. */
 int
 X509V3_add_value(const char *name, const char *value,
-    STACK_OF(CONF_VALUE) **extlist)
+    STACK_OF(CONF_VALUE) **out_extlist)
 {
-	CONF_VALUE *vtmp = NULL;
-	STACK_OF(CONF_VALUE) *free_exts = NULL;
+	STACK_OF(CONF_VALUE) *extlist = NULL;
+	CONF_VALUE *conf_value = NULL;
+	int ret = 0;
 
-	if ((vtmp = calloc(1, sizeof(CONF_VALUE))) == NULL)
+	if ((conf_value = calloc(1, sizeof(*conf_value))) == NULL) {
+		X509V3error(ERR_R_MALLOC_FAILURE);
 		goto err;
+	}
 	if (name != NULL) {
-		if ((vtmp->name = strdup(name)) == NULL)
+		if ((conf_value->name = strdup(name)) == NULL) {
+			X509V3error(ERR_R_MALLOC_FAILURE);
 			goto err;
+		}
 	}
 	if (value != NULL) {
-		if ((vtmp->value = strdup(value)) == NULL)
+		if ((conf_value->value = strdup(value)) == NULL) {
+			X509V3error(ERR_R_MALLOC_FAILURE);
 			goto err;
+		}
 	}
 
-	if (*extlist == NULL) {
-		if ((free_exts = *extlist = sk_CONF_VALUE_new_null()) == NULL)
-			goto err;
-	}
-
-	if (!sk_CONF_VALUE_push(*extlist, vtmp))
+	if ((extlist = *out_extlist) == NULL)
+		extlist = sk_CONF_VALUE_new_null();
+	if (extlist == NULL) {
+		X509V3error(ERR_R_MALLOC_FAILURE);
 		goto err;
+	}
 
-	return 1;
+	if (!sk_CONF_VALUE_push(extlist, conf_value)) {
+		X509V3error(ERR_R_MALLOC_FAILURE);
+		goto err;
+	}
+	conf_value = NULL;
+
+	*out_extlist = extlist;
+	extlist = NULL;
+
+	ret = 1;
 
  err:
-	X509V3error(ERR_R_MALLOC_FAILURE);
-	X509V3_conf_free(vtmp);
-	if (free_exts != NULL) {
-		sk_CONF_VALUE_free(*extlist);
-		*extlist = NULL;
-	}
-	return 0;
+	if (extlist != *out_extlist)
+		sk_CONF_VALUE_pop_free(extlist, X509V3_conf_free);
+	X509V3_conf_free(conf_value);
+
+	return ret;
 }
-LCRYPTO_ALIAS(X509V3_add_value);
 
 int
 X509V3_add_value_uchar(const char *name, const unsigned char *value,
@@ -128,7 +147,6 @@ X509V3_add_value_uchar(const char *name, const unsigned char *value,
 {
 	return X509V3_add_value(name, (const char *)value, extlist);
 }
-LCRYPTO_ALIAS(X509V3_add_value_uchar);
 
 /* Free function for STACK_OF(CONF_VALUE) */
 
@@ -152,17 +170,6 @@ X509V3_add_value_bool(const char *name, int asn1_bool,
 		return X509V3_add_value(name, "TRUE", extlist);
 	return X509V3_add_value(name, "FALSE", extlist);
 }
-LCRYPTO_ALIAS(X509V3_add_value_bool);
-
-int
-X509V3_add_value_bool_nf(const char *name, int asn1_bool,
-    STACK_OF(CONF_VALUE) **extlist)
-{
-	if (asn1_bool)
-		return X509V3_add_value(name, "TRUE", extlist);
-	return 1;
-}
-LCRYPTO_ALIAS(X509V3_add_value_bool_nf);
 
 static char *
 bn_to_string(const BIGNUM *bn)
@@ -305,7 +312,6 @@ X509V3_add_value_int(const char *name, const ASN1_INTEGER *aint,
 	free(strtmp);
 	return ret;
 }
-LCRYPTO_ALIAS(X509V3_add_value_int);
 
 int
 X509V3_get_value_bool(const CONF_VALUE *value, int *asn1_bool)
@@ -331,7 +337,6 @@ X509V3_get_value_bool(const CONF_VALUE *value, int *asn1_bool)
 	X509V3_conf_err(value);
 	return 0;
 }
-LCRYPTO_ALIAS(X509V3_get_value_bool);
 
 int
 X509V3_get_value_int(const CONF_VALUE *value, ASN1_INTEGER **aint)
@@ -345,7 +350,6 @@ X509V3_get_value_int(const CONF_VALUE *value, ASN1_INTEGER **aint)
 	*aint = itmp;
 	return 1;
 }
-LCRYPTO_ALIAS(X509V3_get_value_int);
 
 #define HDR_NAME	1
 #define HDR_VALUE	2
@@ -392,7 +396,8 @@ X509V3_parse_list(const char *line)
 					X509V3error(X509V3_R_INVALID_NULL_NAME);
 					goto err;
 				}
-				X509V3_add_value(ntmp, NULL, &values);
+				if (!X509V3_add_value(ntmp, NULL, &values))
+					goto err;
 			}
 			break;
 
@@ -405,7 +410,8 @@ X509V3_parse_list(const char *line)
 					X509V3error(X509V3_R_INVALID_NULL_VALUE);
 					goto err;
 				}
-				X509V3_add_value(ntmp, vtmp, &values);
+				if (!X509V3_add_value(ntmp, vtmp, &values))
+					goto err;
 				ntmp = NULL;
 				q = p + 1;
 			}
@@ -419,14 +425,16 @@ X509V3_parse_list(const char *line)
 			X509V3error(X509V3_R_INVALID_NULL_VALUE);
 			goto err;
 		}
-		X509V3_add_value(ntmp, vtmp, &values);
+		if (!X509V3_add_value(ntmp, vtmp, &values))
+			goto err;
 	} else {
 		ntmp = strip_spaces(q);
 		if (!ntmp) {
 			X509V3error(X509V3_R_INVALID_NULL_NAME);
 			goto err;
 		}
-		X509V3_add_value(ntmp, NULL, &values);
+		if (!X509V3_add_value(ntmp, NULL, &values))
+			goto err;
 	}
 	free(linebuf);
 	return values;
@@ -435,7 +443,6 @@ X509V3_parse_list(const char *line)
 	free(linebuf);
 	sk_CONF_VALUE_pop_free(values, X509V3_conf_free);
 	return NULL;
-
 }
 LCRYPTO_ALIAS(X509V3_parse_list);
 

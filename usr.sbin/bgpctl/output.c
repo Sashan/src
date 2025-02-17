@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.51 2024/05/22 08:42:34 claudio Exp $ */
+/*	$OpenBSD: output.c,v 1.59 2025/01/29 13:14:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -66,7 +66,7 @@ show_head(struct parse_result *res)
 			break;
 		printf("flags: "
 		    "* = Valid, > = Selected, I = via IBGP, A = Announced,\n"
-		    "       S = Stale, E = Error\n");
+		    "       S = Stale, E = Error, F = Filtered, L = Leaked\n");
 		printf("origin validation state: "
 		    "N = not-found, V = valid, ! = invalid\n");
 		printf("aspa validation state: "
@@ -119,7 +119,7 @@ show_summary(struct peer *p)
 	    p->stats.msg_sent_open + p->stats.msg_sent_notification +
 	    p->stats.msg_sent_update + p->stats.msg_sent_keepalive +
 	    p->stats.msg_sent_rrefresh,
-	    p->wbuf.queued,
+	    p->stats.msg_queue_len,
 	    fmt_monotime(p->stats.last_updown));
 	if (p->state == STATE_ESTABLISHED) {
 		printf("%6u", p->stats.prefix_cnt);
@@ -182,9 +182,11 @@ show_neighbor_capa_restart(struct capabilities *capa)
 	int	comma;
 	uint8_t	i;
 
-	printf("    Graceful Restart");
+	printf("    Graceful Restart: ");
 	if (capa->grestart.timeout)
-		printf(": Timeout: %d, ", capa->grestart.timeout);
+		printf("timeout: %d, ", capa->grestart.timeout);
+	if (capa->grestart.grnotification)
+		printf("graceful notification, ");
 	for (i = AID_MIN, comma = 0; i < AID_MAX; i++)
 		if (capa->grestart.flags[i] & CAPA_GR_PRESENT) {
 			if (!comma &&
@@ -302,7 +304,7 @@ show_neighbor_full(struct peer *p, struct parse_result *res)
 		ina.s_addr = htonl(p->remote_bgpid);
 		printf("  BGP version 4, remote router-id %s",
 		    inet_ntoa(ina));
-		printf("%s\n", fmt_auth_method(p->auth.method));
+		printf("%s\n", fmt_auth_method(p->auth_conf.method));
 	}
 	printf("  BGP state = %s", statenames[p->state]);
 	if (p->conf.down) {
@@ -342,6 +344,8 @@ show_neighbor_full(struct peer *p, struct parse_result *res)
 			printf("    Route Refresh\n");
 		if (p->capa.peer.enhanced_rr)
 			printf("    Enhanced Route Refresh\n");
+		if (p->capa.peer.ext_msg)
+			printf("    Extended message\n");
 		if (p->capa.peer.grestart.restart)
 			show_neighbor_capa_restart(&p->capa.peer);
 		if (hascapaap)
@@ -372,6 +376,8 @@ show_neighbor_full(struct peer *p, struct parse_result *res)
 			printf("    Route Refresh\n");
 		if (p->capa.neg.enhanced_rr)
 			printf("    Enhanced Route Refresh\n");
+		if (p->capa.neg.ext_msg)
+			printf("    Extended message\n");
 		if (p->capa.neg.grestart.restart)
 			show_neighbor_capa_restart(&p->capa.neg);
 		if (hascapaap)
@@ -1128,8 +1134,9 @@ show_rtr(struct ctl_show_rtr *rtr)
 	if (rtr->local_addr.aid != AID_UNSPEC)
 		printf(" Local Address: %s\n", log_addr(&rtr->local_addr));
 	if (rtr->session_id != -1)
-		printf(" Version: %u Session ID: %d Serial #: %u\n",
-		    rtr->version, rtr->session_id, rtr->serial);
+		printf(" Version: %u min %u Session ID: %d Serial #: %u\n",
+		    rtr->version, rtr->min_version, rtr->session_id,
+		    rtr->serial);
 	printf(" Refresh: %u, Retry: %u, Expire: %u\n",
 	    rtr->refresh, rtr->retry, rtr->expire);
 

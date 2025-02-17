@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf2.c,v 1.45 2020/12/12 11:48:54 jan Exp $	*/
+/*	$OpenBSD: uipc_mbuf2.c,v 1.47 2024/08/29 16:42:30 bluhm Exp $	*/
 /*	$KAME: uipc_mbuf2.c,v 1.29 2001/02/14 13:42:10 itojun Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.40 1999/04/01 00:23:25 thorpej Exp $	*/
 
@@ -66,6 +66,7 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/pool.h>
+#include <sys/percpu.h>
 #include <sys/mbuf.h>
 
 extern struct pool mtagpool;
@@ -117,6 +118,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	if (len <= n->m_len - off) {
 		struct mbuf *mlast;
 
+		counters_inc(mbstat, MBSTAT_PULLDOWN_ALLOC);
 		o = m_dup1(n, off, n->m_len - off, M_DONTWAIT);
 		if (o == NULL) {
 			m_freem(m);
@@ -158,6 +160,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 */
 	if ((off == 0 || offp) && m_trailingspace(n) >= tlen &&
 	    !sharedcluster) {
+		counters_inc(mbstat, MBSTAT_PULLDOWN_COPY);
 		m_copydata(n->m_next, 0, tlen, mtod(n, caddr_t) + n->m_len);
 		n->m_len += tlen;
 		m_adj(n->m_next, tlen);
@@ -167,7 +170,8 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	    !sharedcluster && n->m_next->m_len >= tlen) {
 		n->m_next->m_data -= hlen;
 		n->m_next->m_len += hlen;
-		memmove(mtod(n->m_next, caddr_t), mtod(n, caddr_t) + off, hlen);
+		counters_inc(mbstat, MBSTAT_PULLDOWN_COPY);
+		memcpy(mtod(n->m_next, caddr_t), mtod(n, caddr_t) + off, hlen);
 		n->m_len -= hlen;
 		n = n->m_next;
 		off = 0;
@@ -182,6 +186,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		m_freem(m);
 		return (NULL);
 	}
+	counters_inc(mbstat, MBSTAT_PULLDOWN_ALLOC);
 	MGET(o, M_DONTWAIT, m->m_type);
 	if (o && len > MLEN) {
 		MCLGETL(o, M_DONTWAIT, len);
@@ -196,7 +201,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	}
 	/* get hlen from <n, off> into <o, 0> */
 	o->m_len = hlen;
-	memmove(mtod(o, caddr_t), mtod(n, caddr_t) + off, hlen);
+	memcpy(mtod(o, caddr_t), mtod(n, caddr_t) + off, hlen);
 	n->m_len -= hlen;
 	/* get tlen from <n->m_next, 0> into <o, hlen> */
 	m_copydata(n->m_next, 0, tlen, mtod(o, caddr_t) + o->m_len);

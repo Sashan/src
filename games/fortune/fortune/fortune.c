@@ -1,4 +1,4 @@
-/*	$OpenBSD: fortune.c,v 1.64 2024/05/21 05:00:47 jsg Exp $	*/
+/*	$OpenBSD: fortune.c,v 1.67 2024/10/21 06:39:03 tb Exp $	*/
 /*	$NetBSD: fortune.c,v 1.8 1995/03/23 08:28:40 cgd Exp $	*/
 
 /*-
@@ -163,8 +163,11 @@ main(int ac, char *av[])
 
 	init_prob();
 	if ((Short_only && minlen_in_list(File_list) > SLEN) ||
-	    (Long_only && maxlen_in_list(File_list) <= SLEN))
+	    (Long_only && maxlen_in_list(File_list) <= SLEN)) {
+		fprintf(stderr,
+		    "no fortunes matching length constraint found\n");
 		return 1;
+	}
 
 	do {
 		get_fort();
@@ -413,6 +416,7 @@ add_file(int percent, char *file, char *dir, FILEDESC **head, FILEDESC **tail,
 			if (was_malloc)
 				free(path);
 			path = offensive;
+			offensive = NULL;
 			file = off_name(file);
 			was_malloc = true;
 		}
@@ -430,9 +434,9 @@ over:
 		 * we'll pick up the -o file anyway.
 		 */
 		if (All_forts && offensive != NULL) {
-			path = offensive;
 			if (was_malloc)
 				free(path);
+			path = offensive;
 			offensive = NULL;
 			was_malloc = true;
 			DPRINTF(1, (stderr, "\ttrying \"%s\"\n", path));
@@ -1115,6 +1119,8 @@ find_matches(void)
 
 	Found_one = false;
 	matches_in_list(File_list);
+	free(Fortbuf);
+	Fortbuf = NULL;
 	return Found_one;
 }
 

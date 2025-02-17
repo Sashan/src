@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_timeout.c,v 1.98 2024/08/05 23:51:11 dlg Exp $	*/
+/*	$OpenBSD: kern_timeout.c,v 1.101 2025/01/13 03:21:10 mvs Exp $	*/
 /*
  * Copyright (c) 2001 Thomas Nordin <nordin@openbsd.org>
  * Copyright (c) 2000-2001 Artur Grabowski <art@openbsd.org>
@@ -332,18 +332,25 @@ timeout_add(struct timeout *new, int to_ticks)
 	return ret;
 }
 
+static inline int
+timeout_add_ticks(struct timeout *to, uint64_t to_ticks, int notzero)
+{
+	if (to_ticks > INT_MAX)
+		to_ticks = INT_MAX;
+	else if (to_ticks == 0 && notzero)
+		to_ticks = 1;
+
+	return timeout_add(to, (int)to_ticks);
+}
+
 int
 timeout_add_tv(struct timeout *to, const struct timeval *tv)
 {
 	uint64_t to_ticks;
 
 	to_ticks = (uint64_t)hz * tv->tv_sec + tv->tv_usec / tick;
-	if (to_ticks > INT_MAX)
-		to_ticks = INT_MAX;
-	if (to_ticks == 0 && tv->tv_usec > 0)
-		to_ticks = 1;
 
-	return timeout_add(to, (int)to_ticks);
+	return timeout_add_ticks(to, to_ticks, tv->tv_usec > 0);
 }
 
 int
@@ -352,37 +359,28 @@ timeout_add_sec(struct timeout *to, int secs)
 	uint64_t to_ticks;
 
 	to_ticks = (uint64_t)hz * secs;
-	if (to_ticks > INT_MAX)
-		to_ticks = INT_MAX;
-	if (to_ticks == 0)
-		to_ticks = 1;
 
-	return timeout_add(to, (int)to_ticks);
+	return timeout_add_ticks(to, to_ticks, 1);
 }
 
 int
-timeout_add_msec(struct timeout *to, int msecs)
+timeout_add_msec(struct timeout *to, uint64_t msecs)
 {
 	uint64_t to_ticks;
 
-	to_ticks = (uint64_t)msecs * 1000 / tick;
-	if (to_ticks > INT_MAX)
-		to_ticks = INT_MAX;
-	if (to_ticks == 0 && msecs > 0)
-		to_ticks = 1;
+	to_ticks = msecs * 1000 / tick;
 
-	return timeout_add(to, (int)to_ticks);
+	return timeout_add_ticks(to, to_ticks, msecs > 0);
 }
 
 int
-timeout_add_usec(struct timeout *to, int usecs)
+timeout_add_usec(struct timeout *to, uint64_t usecs)
 {
-	int to_ticks = usecs / tick;
+	uint64_t to_ticks;
 
-	if (to_ticks == 0 && usecs > 0)
-		to_ticks = 1;
+	to_ticks = usecs / tick;
 
-	return timeout_add(to, to_ticks);
+	return timeout_add_ticks(to, to_ticks, usecs > 0);
 }
 
 int
@@ -391,12 +389,8 @@ timeout_add_nsec(struct timeout *to, uint64_t nsecs)
 	uint64_t to_ticks;
 
 	to_ticks = nsecs / (tick * 1000);
-	if (to_ticks > INT_MAX)
-	    to_ticks = INT_MAX;
-	if (to_ticks == 0 && nsecs > 0)
-		to_ticks = 1;
 
-	return timeout_add(to, (int)to_ticks);
+	return timeout_add_ticks(to, to_ticks, nsecs > 0);
 }
 
 int
@@ -463,8 +457,7 @@ timeout_del_barrier(struct timeout *to)
 	timeout_sync_order(ISSET(to->to_flags, TIMEOUT_PROC));
 
 	removed = timeout_del(to);
-	if (!removed)
-		timeout_barrier(to);
+	timeout_barrier(to);
 
 	return removed;
 }
@@ -943,7 +936,7 @@ db_show_timeout(struct timeout *to, struct circq *bucket)
 	char buf[8];
 	db_expr_t offset;
 	struct circq *wheel;
-	char *name, *where;
+	const char *name, *where;
 	int width = sizeof(long) * 2;
 
 	db_find_sym_and_offset((vaddr_t)to->to_func, &name, &offset);

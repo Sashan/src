@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_urtwn.c,v 1.110 2024/05/23 03:21:09 jsg Exp $	*/
+/*	$OpenBSD: if_urtwn.c,v 1.112 2024/10/22 22:21:25 jsg Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -239,7 +239,6 @@ static const struct urtwn_type {
 	struct usb_devno        dev;
 	uint32_t		chip;
 } urtwn_devs[] = {
-	URTWN_DEV_8192CU(ABOCOM,	RTL8188CU_1),
 	URTWN_DEV_8192CU(ABOCOM,	RTL8188CU_1),
 	URTWN_DEV_8192CU(ABOCOM,	RTL8188CU_2),
 	URTWN_DEV_8192CU(ABOCOM,	RTL8192CU),
@@ -2494,7 +2493,7 @@ urtwn_burstlen_init(struct urtwn_softc *sc)
 		urtwn_write_1(sc, R92C_USTIME_TSF, 0x28);
 		urtwn_write_1(sc, R88F_USTIME_EDCA, 0x28);
 
-		/* To prevent mac is reseted by bus. */
+		/* To prevent bus resetting the mac. */
 		urtwn_write_1(sc, R92C_RSV_CTRL,
 		    urtwn_read_1(sc, R92C_RSV_CTRL) |
 		    R92C_RSV_CTRL_R_DIS_PRST_0 | R92C_RSV_CTRL_R_DIS_PRST_1);

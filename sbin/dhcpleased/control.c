@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.4 2021/08/01 09:07:03 florian Exp $	*/
+/*	$OpenBSD: control.c,v 1.12 2024/11/21 13:35:20 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -156,7 +156,12 @@ control_accept(int listenfd, short event, void *bula)
 		return;
 	}
 
-	imsg_init(&c->iev.ibuf, connfd);
+	if (imsgbuf_init(&c->iev.ibuf, connfd) == -1) {
+		log_warn("%s: imsgbuf_init", __func__);
+		close(connfd);
+		free(c);
+		return;
+	}
 	c->iev.handler = control_dispatch_imsg;
 	c->iev.events = EV_READ;
 	event_set(&c->iev.ev, c->iev.ibuf.fd, c->iev.events,
@@ -202,7 +207,7 @@ control_close(int fd)
 		return;
 	}
 
-	msgbuf_clear(&c->iev.ibuf.w);
+	imsgbuf_clear(&c->iev.ibuf);
 	TAILQ_REMOVE(&ctl_conns, c, entry);
 
 	event_del(&c->iev.ev);
@@ -224,6 +229,8 @@ control_dispatch_imsg(int fd, short event, void *bula)
 	struct imsg	 imsg;
 	ssize_t		 n;
 	int		 verbose;
+	uint32_t	 if_index, type;
+	pid_t		 pid;
 
 	if ((c = control_connbyfd(fd)) == NULL) {
 		log_warnx("%s: fd %d: not found", __func__, fd);
@@ -231,14 +238,13 @@ control_dispatch_imsg(int fd, short event, void *bula)
 	}
 
 	if (event & EV_READ) {
-		if (((n = imsg_read(&c->iev.ibuf)) == -1 && errno != EAGAIN) ||
-		    n == 0) {
+		if (imsgbuf_read(&c->iev.ibuf) != 1) {
 			control_close(fd);
 			return;
 		}
 	}
 	if (event & EV_WRITE) {
-		if (msgbuf_write(&c->iev.ibuf.w) <= 0 && errno != EAGAIN) {
+		if (imsgbuf_write(&c->iev.ibuf) == -1) {
 			control_close(fd);
 			return;
 		}
@@ -252,40 +258,47 @@ control_dispatch_imsg(int fd, short event, void *bula)
 		if (n == 0)
 			break;
 
-		switch (imsg.hdr.type) {
+		type = imsg_get_type(&imsg);
+		pid = imsg_get_pid(&imsg);
+
+		switch (type) {
 		case IMSG_CTL_RELOAD:
-			frontend_imsg_compose_main(imsg.hdr.type, 0, NULL, 0);
+			frontend_imsg_compose_main(type, 0, NULL, 0);
 			break;
 		case IMSG_CTL_LOG_VERBOSE:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(verbose))
+			if (imsg_get_data(&imsg, &verbose,
+			    sizeof(verbose)) == -1)
 				break;
-			c->iev.ibuf.pid = imsg.hdr.pid;
-			/* Forward to all other processes. */
-			frontend_imsg_compose_main(imsg.hdr.type, imsg.hdr.pid,
-			    imsg.data, IMSG_DATA_SIZE(imsg));
-			frontend_imsg_compose_engine(imsg.hdr.type, 0,
-			    imsg.hdr.pid, imsg.data, IMSG_DATA_SIZE(imsg));
 
-			memcpy(&verbose, imsg.data, sizeof(verbose));
+			c->iev.ibuf.pid = pid;
+			/* Forward to all other processes. */
+			frontend_imsg_compose_main(type, pid, &verbose,
+			    sizeof(verbose));
+			frontend_imsg_compose_engine(type, 0, pid, &verbose,
+			    sizeof(verbose));
+
 			log_setverbose(verbose);
 			break;
 		case IMSG_CTL_SHOW_INTERFACE_INFO:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(uint32_t))
+			if (imsg_get_data(&imsg, &if_index,
+			    sizeof(if_index)) == -1)
 				break;
-			c->iev.ibuf.pid = imsg.hdr.pid;
-			frontend_imsg_compose_engine(imsg.hdr.type, 0,
-			    imsg.hdr.pid, imsg.data, IMSG_DATA_SIZE(imsg));
+
+			c->iev.ibuf.pid = pid;
+			frontend_imsg_compose_engine(type, 0, pid, &if_index,
+			    sizeof(if_index));
 			break;
 		case IMSG_CTL_SEND_REQUEST:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(uint32_t))
+			if (imsg_get_data(&imsg, &if_index,
+			    sizeof(if_index)) == -1)
 				break;
-			c->iev.ibuf.pid = imsg.hdr.pid;
+
+			c->iev.ibuf.pid = pid;
 			frontend_imsg_compose_engine(IMSG_REQUEST_REBOOT, 0,
-			    imsg.hdr.pid, imsg.data, IMSG_DATA_SIZE(imsg));
+			    pid, &if_index, sizeof(if_index));
 			break;
 		default:
-			log_debug("%s: error handling imsg %d", __func__,
-			    imsg.hdr.type);
+			log_debug("%s: error handling imsg %d", __func__, type);
 			break;
 		}
 		imsg_free(&imsg);
@@ -299,9 +312,8 @@ control_imsg_relay(struct imsg *imsg)
 {
 	struct ctl_conn	*c;
 
-	if ((c = control_connbypid(imsg->hdr.pid)) == NULL)
+	if ((c = control_connbypid(imsg_get_pid(imsg))) == NULL)
 		return (0);
 
-	return (imsg_compose_event(&c->iev, imsg->hdr.type, 0, imsg->hdr.pid,
-	    -1, imsg->data, IMSG_DATA_SIZE(*imsg)));
+	return (imsg_forward_event(&c->iev, imsg));
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_amap.h,v 1.33 2021/01/19 13:21:36 mpi Exp $	*/
+/*	$OpenBSD: uvm_amap.h,v 1.35 2024/12/04 09:19:11 mpi Exp $	*/
 /*	$NetBSD: uvm_amap.h,v 1.14 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -191,10 +191,10 @@ struct vm_amap {
  */
 
 /*
- * defines for handling of large sparce amaps:
+ * defines for handling of large sparse amaps:
  * 
  * one of the problems of array-based amaps is that if you allocate a
- * large sparcely-used area of virtual memory you end up allocating
+ * large sparsely-used area of virtual memory you end up allocating
  * large arrays that, for the most part, don't get used.  this is a
  * problem for BSD in that the kernel likes to make these types of
  * allocations to "reserve" memory for possible future use.
@@ -262,8 +262,8 @@ struct vm_amap {
 #define amap_flags(AMAP)	((AMAP)->am_flags)
 #define amap_refs(AMAP)		((AMAP)->am_ref)
 
-#define amap_lock(AMAP)		rw_enter_write((AMAP)->am_lock)
-#define amap_unlock(AMAP)	rw_exit_write((AMAP)->am_lock)
+#define amap_lock(AMAP, RWLT)	rw_enter((AMAP)->am_lock, (RWLT))
+#define amap_unlock(AMAP)	rw_exit((AMAP)->am_lock)
 
 #endif /* _KERNEL */
 

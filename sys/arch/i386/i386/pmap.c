@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.223 2024/04/03 18:43:32 miod Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.226 2024/11/08 13:18:29 jsg Exp $	*/
 /*	$NetBSD: pmap.c,v 1.91 2000/06/02 17:46:37 thorpej Exp $	*/
 
 /*
@@ -885,6 +885,25 @@ pmap_kremove(vaddr_t sva, vsize_t len)
 }
 
 /*
+ * Allocate a new PD for Intel's U-K.
+ */
+void
+pmap_alloc_pdir_intel_x86(struct pmap *pmap)
+{
+	vaddr_t va;
+
+	KASSERT(pmap->pm_pdir_intel == 0);
+
+	va = (vaddr_t)km_alloc(NBPG, &kv_any, &kp_zero, &kd_waitok);
+	if (va == 0)
+		panic("kernel_map out of virtual space");
+	pmap->pm_pdir_intel = va;
+	if (!pmap_extract(pmap_kernel(), (vaddr_t)pmap->pm_pdir_intel,
+	    &pmap->pm_pdirpa_intel))
+		panic("can't locate PD page");
+}
+
+/*
  * p m a p   i n i t   f u n c t i o n s
  *
  * pmap_bootstrap and pmap_init are called during system startup
@@ -1350,6 +1369,8 @@ pmap_create(void)
 	pmap->pm_ptphint = NULL;
 	pmap->pm_hiexec = 0;
 	pmap->pm_flags = 0;
+	pmap->pm_pdir_intel = 0;
+	pmap->pm_pdirpa_intel = 0;
 
 	initcodesegment(&pmap->pm_codeseg);
 
@@ -1363,7 +1384,7 @@ pmap_pinit_pd_86(struct pmap *pmap)
 	/* allocate PDP */
 	pmap->pm_pdir = (vaddr_t)km_alloc(NBPG, &kv_any, &kp_dirty, &kd_waitok);
 	if (pmap->pm_pdir == 0)
-		panic("pmap_pinit_pd_86: kernel_map out of virtual space!");
+		panic("kernel_map out of virtual space");
 	pmap_extract(pmap_kernel(), (vaddr_t)pmap->pm_pdir,
 			    &pmap->pm_pdirpa);
 	pmap->pm_pdirsize = NBPG;
@@ -1393,15 +1414,7 @@ pmap_pinit_pd_86(struct pmap *pmap)
 	 * execution, one that lacks all kernel mappings.
 	 */
 	if (cpu_meltdown) {
-		pmap->pm_pdir_intel = (vaddr_t)km_alloc(NBPG, &kv_any, &kp_zero,
-		    &kd_waitok);
-		if (pmap->pm_pdir_intel == 0)
-			panic("%s: kernel_map out of virtual space!", __func__);
-
-		if (!pmap_extract(pmap_kernel(), (vaddr_t)pmap->pm_pdir_intel,
-		    &pmap->pm_pdirpa_intel))
-			panic("%s: unknown PA mapping for meltdown PD",
-			    __func__);
+		pmap_alloc_pdir_intel_x86(pmap);
 
 		/* Copy PDEs from pmap_kernel's U-K view */
 		bcopy((void *)pmap_kernel()->pm_pdir_intel,
@@ -1411,9 +1424,6 @@ pmap_pinit_pd_86(struct pmap *pmap)
 		    "pdir_intel 0x%lx pdirpa_intel 0x%lx\n",
 		    __func__, pmap, pmap->pm_pdir, pmap->pm_pdirpa,
 		    pmap->pm_pdir_intel, pmap->pm_pdirpa_intel);
-	} else {
-		pmap->pm_pdir_intel = 0;
-		pmap->pm_pdirpa_intel = 0;
 	}
 
 	mtx_enter(&pmaps_lock);
@@ -1599,32 +1609,6 @@ pmap_zero_phys_86(paddr_t pa)
 	pmap_update_pg((vaddr_t)zerova);	/* flush TLB */
 	pagezero(zerova, PAGE_SIZE);		/* zero */
 	*zpte = 0;
-}
-
-/*
- * pmap_zero_page_uncached: the same, except uncached.
- */
-
-int
-pmap_zero_page_uncached_86(paddr_t pa)
-{
-#ifdef MULTIPROCESSOR
-	int id = cpu_number();
-#endif
-	pt_entry_t *zpte = PTESLEW(zero_pte, id);
-	caddr_t zerova = VASLEW(pmap_zerop, id);
-
-#ifdef DIAGNOSTIC
-	if (*zpte)
-		panic("pmap_zero_page_uncached_86: lock botch");
-#endif
-
-	*zpte = (pa & PG_FRAME) | PG_V | PG_RW | PG_N;	/* map in */
-	pmap_update_pg((vaddr_t)zerova);		/* flush TLB */
-	pagezero(zerova, PAGE_SIZE);		/* zero */
-	*zpte = 0;
-
-	return 1;
 }
 
 /*
@@ -2244,25 +2228,6 @@ pmap_unwire_86(struct pmap *pmap, vaddr_t va)
 }
 
 /*
- * pmap_collect: free resources held by a pmap
- *
- * => optional function.
- * => called when a process is swapped out to free memory.
- */
-
-void
-pmap_collect(struct pmap *pmap)
-{
-	/*
-	 * free all of the pt pages by removing the physical mappings
-	 * for its entire address space.
-	 */
-
-	pmap_do_remove(pmap, VM_MIN_ADDRESS, VM_MAX_ADDRESS,
-	    PMAP_REMOVE_SKIPWIRED);
-}
-
-/*
  * pmap_enter: enter a mapping into a pmap
  *
  * => must be done "now" ... no lazy-evaluation
@@ -2509,18 +2474,10 @@ pmap_enter_special_86(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int32_t flags)
 
 	/* Must be kernel VA */
 	if (va < VM_MIN_KERNEL_ADDRESS)
-		panic("%s: invalid special mapping va 0x%lx requested",
-		    __func__, va);
+		panic("invalid special mapping va 0x%lx requested", va);
 
-	if (!pmap->pm_pdir_intel) {
-		pmap->pm_pdir_intel = (vaddr_t)km_alloc(NBPG, &kv_any, &kp_zero,
-		    &kd_waitok);
-		if (pmap->pm_pdir_intel == 0)
-			panic("%s: kernel_map out of virtual space!", __func__);
-		if (!pmap_extract(pmap, pmap->pm_pdir_intel,
-		    &pmap->pm_pdirpa_intel))
-			panic("%s: can't locate PD page", __func__);
-	}
+	if (!pmap->pm_pdir_intel)
+		pmap_alloc_pdir_intel_x86(pmap);
 
 	DPRINTF("%s: pm_pdir_intel 0x%x pm_pdirpa_intel 0x%x\n", __func__,
 	    (uint32_t)pmap->pm_pdir_intel, (uint32_t)pmap->pm_pdirpa_intel);
@@ -2899,7 +2856,5 @@ void		(*pmap_write_protect_p)(struct pmap *, vaddr_t, vaddr_t,
     vm_prot_t) = pmap_write_protect_86;
 void		(*pmap_pinit_pd_p)(pmap_t) = pmap_pinit_pd_86;
 void		(*pmap_zero_phys_p)(paddr_t) = pmap_zero_phys_86;
-int		(*pmap_zero_page_uncached_p)(paddr_t) =
-    pmap_zero_page_uncached_86;
 void		(*pmap_copy_page_p)(struct vm_page *, struct vm_page *) =
     pmap_copy_page_86;

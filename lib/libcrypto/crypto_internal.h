@@ -1,4 +1,4 @@
-/*	$OpenBSD: crypto_internal.h,v 1.10 2024/04/17 14:43:37 jsing Exp $ */
+/*	$OpenBSD: crypto_internal.h,v 1.15 2025/01/19 07:51:41 jsing Exp $ */
 /*
  * Copyright (c) 2023 Joel Sing <jsing@openbsd.org>
  *
@@ -20,11 +20,81 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "crypto_arch.h"
+
 #ifndef HEADER_CRYPTO_INTERNAL_H
 #define HEADER_CRYPTO_INTERNAL_H
 
 #define CTASSERT(x) \
     extern char _ctassert[(x) ? 1 : -1] __attribute__((__unused__))
+
+/*
+ * Constant time functions for size_t.
+ */
+#ifndef HAVE_CRYPTO_CT_NE_ZERO
+static inline int
+crypto_ct_ne_zero(size_t v)
+{
+	return (v | ~(v - 1)) >> ((sizeof(v) * 8) - 1);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_NE_ZERO_MASK
+static inline size_t
+crypto_ct_ne_zero_mask(size_t v)
+{
+	return 0 - crypto_ct_ne_zero(v);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_EQ_ZERO
+static inline int
+crypto_ct_eq_zero(size_t v)
+{
+	return 1 - crypto_ct_ne_zero(v);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_EQ_ZERO_MASK_U8
+static inline size_t
+crypto_ct_eq_zero_mask(size_t v)
+{
+	return 0 - crypto_ct_eq_zero(v);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_LT
+static inline int
+crypto_ct_lt(size_t a, size_t b)
+{
+	return (((a - b) | (b & ~a)) & (b | ~a)) >>
+	    (sizeof(size_t) * 8 - 1);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_LT_MASK
+static inline size_t
+crypto_ct_lt_mask(size_t a, size_t b)
+{
+	return 0 - crypto_ct_lt(a, b);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_GT
+static inline int
+crypto_ct_gt(size_t a, size_t b)
+{
+	return crypto_ct_lt(b, a);
+}
+#endif
+
+#ifndef HAVE_CRYPTO_CT_GT_MASK
+static inline size_t
+crypto_ct_gt_mask(size_t a, size_t b)
+{
+	return 0 - crypto_ct_gt(a, b);
+}
+#endif
 
 /*
  * Constant time operations for uint8_t.
@@ -186,6 +256,16 @@ crypto_store_htole32(uint8_t *dst, uint32_t v)
 }
 #endif
 
+#ifndef HAVE_CRYPTO_ADD_U32DW_U64
+static inline void
+crypto_add_u32dw_u64(uint32_t *h, uint32_t *l, uint64_t v)
+{
+	v += ((uint64_t)*h << 32) | *l;
+	*h = v >> 32;
+	*l = v;
+}
+#endif
+
 #ifndef HAVE_CRYPTO_ROL_U32
 static inline uint32_t
 crypto_rol_u32(uint32_t v, size_t shift)
@@ -217,5 +297,9 @@ crypto_ror_u64(uint64_t v, size_t shift)
 	return (v << (64 - shift)) | (v >> shift);
 }
 #endif
+
+void crypto_cpu_caps_init(void);
+
+uint64_t crypto_cpu_caps_ia32(void);
 
 #endif

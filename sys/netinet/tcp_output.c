@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_output.c,v 1.145 2024/05/14 09:39:02 bluhm Exp $	*/
+/*	$OpenBSD: tcp_output.c,v 1.153 2025/02/17 12:46:02 bluhm Exp $	*/
 /*	$NetBSD: tcp_output.c,v 1.16 1997/06/03 16:17:09 kml Exp $	*/
 
 /*
@@ -103,8 +103,6 @@
 extern struct mbuf *m_copypack();
 #endif
 
-extern int tcprexmtthresh;
-
 #ifdef TCP_SACK_DEBUG
 void tcp_print_holes(struct tcpcb *tp);
 
@@ -195,14 +193,14 @@ int
 tcp_output(struct tcpcb *tp)
 {
 	struct socket *so = tp->t_inpcb->inp_socket;
-	long len, win, txmaxseg;
+	long len, win, rcv_hiwat, txmaxseg;
 	int off, flags, error;
 	struct mbuf *m;
 	struct tcphdr *th;
 	u_int32_t optbuf[howmany(MAX_TCPOPTLEN, sizeof(u_int32_t))];
 	u_char *opt = (u_char *)optbuf;
 	unsigned int optlen, hdrlen, packetlen;
-	int idle, sendalot = 0;
+	int doing_sosend, idle, sendalot = 0;
 	int i, sack_rxmit = 0;
 	struct sackhole *p;
 	uint64_t now;
@@ -210,6 +208,7 @@ tcp_output(struct tcpcb *tp)
 	unsigned int sigoff;
 #endif /* TCP_SIGNATURE */
 #ifdef TCP_ECN
+	int do_ecn = atomic_load_int(&tcp_do_ecn);
 	int needect;
 #endif
 	int tso;
@@ -227,6 +226,10 @@ tcp_output(struct tcpcb *tp)
 
 	now = tcp_now();
 
+	mtx_enter(&so->so_snd.sb_mtx);
+	doing_sosend = soissending(so);
+	mtx_leave(&so->so_snd.sb_mtx);
+
 	/*
 	 * Determine length of data that should be transmitted,
 	 * and flags that will be used.
@@ -243,7 +246,7 @@ tcp_output(struct tcpcb *tp)
 		tp->snd_cwnd = 2 * tp->t_maxseg;
 
 	/* remember 'idle' for next invocation of tcp_output */
-	if (idle && soissending(so)) {
+	if (idle && doing_sosend) {
 		tp->t_flags |= TF_LASTIDLE;
 		idle = 0;
 	} else
@@ -350,7 +353,7 @@ again:
 	txmaxseg = ulmin(so->so_snd.sb_hiwat / 2, tp->t_maxseg);
 
 	if (len > txmaxseg) {
-		if (tcp_do_tso &&
+		if (atomic_load_int(&tcp_do_tso) &&
 		    tp->t_inpcb->inp_options == NULL &&
 		    tp->t_inpcb->inp_outputopts6 == NULL &&
 #ifdef TCP_SIGNATURE
@@ -373,7 +376,10 @@ again:
 	if (off + len < so->so_snd.sb_cc)
 		flags &= ~TH_FIN;
 
-	win = sbspace(so, &so->so_rcv);
+	mtx_enter(&so->so_rcv.sb_mtx);
+	win = sbspace_locked(&so->so_rcv);
+	rcv_hiwat = (long) so->so_rcv.sb_hiwat;
+	mtx_leave(&so->so_rcv.sb_mtx);
 
 	/*
 	 * Sender silly window avoidance.  If connection is idle
@@ -389,7 +395,7 @@ again:
 		if (len >= txmaxseg)
 			goto send;
 		if ((idle || (tp->t_flags & TF_NODELAY)) &&
-		    len + off >= so->so_snd.sb_cc && !soissending(so) &&
+		    len + off >= so->so_snd.sb_cc && !doing_sosend &&
 		    (tp->t_flags & TF_NOPUSH) == 0)
 			goto send;
 		if (tp->t_force)
@@ -420,7 +426,7 @@ again:
 
 		if (adv >= (long) (2 * tp->t_maxseg))
 			goto send;
-		if (2 * adv >= (long) so->so_rcv.sb_hiwat)
+		if (2 * adv >= rcv_hiwat)
 			goto send;
 	}
 
@@ -722,7 +728,7 @@ send:
 		 * give data to the user when a buffer fills or
 		 * a PUSH comes in.)
 		 */
-		if (off + len == so->so_snd.sb_cc && !soissending(so))
+		if (off + len == so->so_snd.sb_cc && !doing_sosend)
 			flags |= TH_PUSH;
 		tp->t_sndtime = now;
 	} else {
@@ -816,7 +822,7 @@ send:
 		th->th_off = (sizeof (struct tcphdr) + optlen) >> 2;
 	}
 #ifdef TCP_ECN
-	if (tcp_do_ecn) {
+	if (do_ecn) {
 		/*
 		 * if we have received congestion experienced segs,
 		 * set ECE bit.
@@ -854,7 +860,7 @@ send:
 	 * Calculate receive window.  Don't shrink window,
 	 * but avoid silly window syndrome.
 	 */
-	if (win < (long)(so->so_rcv.sb_hiwat / 4) && win < (long)tp->t_maxseg)
+	if (win < (rcv_hiwat / 4) && win < (long)tp->t_maxseg)
 		win = 0;
 	if (win > (long)TCP_MAXWIN << tp->rcv_scale)
 		win = (long)TCP_MAXWIN << tp->rcv_scale;
@@ -1049,7 +1055,7 @@ send:
 	 * but don't set ECT for a pure ack, a retransmit or a window probe.
 	 */
 	needect = 0;
-	if (tcp_do_ecn && (tp->t_flags & TF_ECN_PERMIT)) {
+	if (do_ecn && (tp->t_flags & TF_ECN_PERMIT)) {
 		if (len == 0 || SEQ_LT(tp->snd_nxt, tp->snd_max) ||
 		    (tp->t_force && len == 1)) {
 			/* don't set ECT */
@@ -1065,6 +1071,10 @@ send:
 
 #if NPF > 0
 	pf_mbuf_link_inpcb(m, tp->t_inpcb);
+#endif
+#if NSTOEPLITZ > 0
+	m->m_pkthdr.ph_flowid = tp->t_inpcb->inp_flowid;
+	SET(m->m_pkthdr.csum_flags, M_FLOWID);
 #endif
 
 	switch (tp->pf) {
@@ -1083,10 +1093,6 @@ send:
 				ip->ip_tos |= IPTOS_ECN_ECT0;
 #endif
 		}
-#if NSTOEPLITZ > 0
-		m->m_pkthdr.ph_flowid = tp->t_inpcb->inp_flowid;
-		SET(m->m_pkthdr.csum_flags, M_FLOWID);
-#endif
 		error = ip_output(m, tp->t_inpcb->inp_options,
 		    &tp->t_inpcb->inp_route,
 		    (ip_mtudisc ? IP_MTUDISC : 0), NULL,

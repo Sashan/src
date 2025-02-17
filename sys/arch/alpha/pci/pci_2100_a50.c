@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci_2100_a50.c,v 1.24 2017/09/08 05:36:51 deraadt Exp $	*/
+/*	$OpenBSD: pci_2100_a50.c,v 1.26 2024/09/20 02:00:46 jsg Exp $	*/
 /*	$NetBSD: pci_2100_a50.c,v 1.12 1996/11/13 21:13:29 cgd Exp $	*/
 
 /*
@@ -139,8 +139,8 @@ dec_2100_a50_intr_map(pa, ihp)
 		case PCI_INTERRUPT_PIN_C:
 			pirq = 1;
 			break;
-		};
-			break;
+		}
+		break;
 
 	case 12:				/* slot 2 */
 		switch (buspin) {
@@ -155,8 +155,8 @@ dec_2100_a50_intr_map(pa, ihp)
 		case PCI_INTERRUPT_PIN_C:
 			pirq = 2;
 			break;
-	};
-	break;
+		}
+		break;
 
 	case 13:				/* slot 3 */
 		switch (buspin) {
@@ -171,7 +171,7 @@ dec_2100_a50_intr_map(pa, ihp)
 		case PCI_INTERRUPT_PIN_C:
 			pirq = 0;
 			break;
-		};
+		}
 		break;
 
 	default:

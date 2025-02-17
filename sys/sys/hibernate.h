@@ -1,4 +1,4 @@
-/*	$OpenBSD: hibernate.h,v 1.46 2024/06/04 20:31:35 krw Exp $	*/
+/*	$OpenBSD: hibernate.h,v 1.49 2025/01/13 17:50:54 krw Exp $	*/
 
 /*
  * Copyright (c) 2011 Ariane van der Steldt <ariane@stack.nl>
@@ -22,7 +22,6 @@
 #include <sys/types.h>
 #include <sys/tree.h>
 #include <lib/libz/zlib.h>
-#include <machine/vmparam.h>
 #include <crypto/sha2.h>
 
 #define HIB_PHYSSEG_MAX		22
@@ -116,7 +115,6 @@ union hibernate_info {
 void	*hib_alloc(struct hiballoc_arena*, size_t);
 void	 hib_free(struct hiballoc_arena*, void*);
 int	 hiballoc_init(struct hiballoc_arena*, void*, size_t len);
-void	 uvm_pmr_zero_everything(void);
 void	 uvm_pmr_dirty_everything(void);
 int	 uvm_pmr_alloc_pig(paddr_t*, psize_t, paddr_t);
 int	 uvm_pmr_alloc_piglet(vaddr_t*, paddr_t*, vsize_t, paddr_t);
@@ -155,6 +153,7 @@ int	hibernate_alloc(void);
 void	hibernate_free(void);
 void	hib_getentropy(char **, size_t *);
 
+int	hibernate_write(union hibernate_info *, daddr_t, vaddr_t, size_t, int);
 void	hibernate_sort_ranges(union hibernate_info *);
 void	hibernate_suspend_bufcache(void);
 void	hibernate_resume_bufcache(void);

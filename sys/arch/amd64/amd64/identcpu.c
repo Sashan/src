@@ -1,4 +1,4 @@
-/*	$OpenBSD: identcpu.c,v 1.146 2024/07/08 14:46:47 mpi Exp $	*/
+/*	$OpenBSD: identcpu.c,v 1.148 2024/10/07 20:30:17 dv Exp $	*/
 /*	$NetBSD: identcpu.c,v 1.1 2003/04/26 18:39:28 fvdl Exp $	*/
 
 /*
@@ -66,7 +66,7 @@ char cpu_model[48];
 int cpuspeed;
 
 int amd64_has_xcrypt;
-int amd64_pos_cbit;
+int amd64_pos_cbit;	/* C bit position for SEV */
 int has_rdrand;
 int has_rdseed;
 
@@ -952,11 +952,6 @@ cpu_check_vmm_cap(struct cpu_info *ci)
 			/* EPT available? */
 			if (msr & (IA32_VMX_ENABLE_EPT) << 32)
 				ci->ci_vmm_flags |= CI_VMM_EPT;
-			/* VM Functions available? */
-			if (msr & (IA32_VMX_ENABLE_VM_FUNCTIONS) << 32) {
-				ci->ci_vmm_cap.vcc_vmx.vmx_vm_func =
-				    rdmsr(IA32_VMX_VMFUNC);
-			}
 		}
 	}
 

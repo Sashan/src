@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci_machdep.c,v 1.87 2021/03/11 11:16:57 jsg Exp $	*/
+/*	$OpenBSD: pci_machdep.c,v 1.89 2025/01/23 11:24:34 kettenis Exp $	*/
 /*	$NetBSD: pci_machdep.c,v 1.28 1997/06/06 23:29:17 thorpej Exp $	*/
 
 /*-
@@ -204,7 +204,7 @@ pci_mcfg_init(bus_space_tag_t iot, bus_addr_t addr, int segment,
 }
 
 pci_chipset_tag_t
-pci_lookup_segment(int segment)
+pci_lookup_segment(int segment, int bus)
 {
 	KASSERT(segment == 0);
 	return NULL;
@@ -323,6 +323,11 @@ pci_attach_hook(struct device *parent, struct device *self,
 		}
 		break;
 	}
+
+	/* Enable MSI for QEMU */
+	id = pci_conf_read(pc, tag, PCI_SUBSYS_ID_REG);
+	if (PCI_VENDOR(id) == PCI_VENDOR_QUMRANET)
+		pba->pba_flags |= PCI_FLAGS_MSI_ENABLED;
 
 	/*
 	 * Don't enable MSI on a HyperTransport bus.  In order to

@@ -1,4 +1,4 @@
-/*	$OpenBSD: slaacd.h,v 1.38 2022/07/12 16:55:00 florian Exp $	*/
+/*	$OpenBSD: slaacd.h,v 1.41 2024/08/25 07:04:05 florian Exp $	*/
 
 /*
  * Copyright (c) 2017 Florian Obser <florian@openbsd.org>
@@ -26,8 +26,6 @@
 #define SLAACD_SOIIKEY_LEN	16
 
 #define	MAX_RDNS_COUNT		8 /* max nameserver in a RTM_PROPOSAL */
-
-#define	IMSG_DATA_SIZE(imsg)	((imsg).hdr.len - IMSG_HEADER_SIZE)
 
 struct imsgev {
 	struct imsgbuf	 ibuf;
@@ -204,8 +202,11 @@ struct imsg_dup_addr {
 void		imsg_event_add(struct imsgev *);
 int		imsg_compose_event(struct imsgev *, uint16_t, uint32_t, pid_t,
 		    int, void *, uint16_t);
+int		imsg_forward_event(struct imsgev *, struct imsg *);
 #ifndef	SMALL
 const char	*sin6_to_str(struct sockaddr_in6 *);
+const char	*i2s(uint32_t);
 #else
-#define	sin6_to_str(x...)	""
+#define	sin6_to_str(x)	""
+#define	i2s(x)		""
 #endif	/* SMALL */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.303 2024/05/29 10:36:32 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.313 2025/01/27 15:22:11 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -143,6 +143,7 @@ enum attrtypes {
 	ATTR_EXT_COMMUNITIES=16,
 	ATTR_AS4_PATH=17,
 	ATTR_AS4_AGGREGATOR=18,
+	ATTR_PMSI_TUNNEL=22,
 	ATTR_LARGE_COMMUNITIES=32,
 	ATTR_OTC=35,
 	ATTR_FIRST_UNKNOWN,	/* after this all attributes are unknown */
@@ -157,7 +158,7 @@ enum attrtypes {
 /* by default mask the reserved bits and the ext len bit */
 #define ATTR_DEFMASK		(ATTR_RESERVED | ATTR_EXTLEN)
 
-/* default attribute flags for well known attributes */
+/* default attribute flags for well-known attributes */
 #define ATTR_WELL_KNOWN		ATTR_TRANSITIVE
 
 struct attr {
@@ -281,19 +282,21 @@ struct prefix {
 	time_t				 lastchange;
 	uint32_t			 path_id;
 	uint32_t			 path_id_tx;
+	uint16_t			 flags;
 	uint8_t				 validation_state;
 	uint8_t				 nhflags;
 	int8_t				 dmetric;	/* decision metric */
-	uint8_t				 flags;
-#define	PREFIX_FLAG_WITHDRAW	0x01	/* enqueued on withdraw queue */
-#define	PREFIX_FLAG_UPDATE	0x02	/* enqueued on update queue */
-#define	PREFIX_FLAG_DEAD	0x04	/* locked but removed */
-#define	PREFIX_FLAG_STALE	0x08	/* stale entry (graceful reload) */
-#define	PREFIX_FLAG_MASK	0x0f	/* mask for the prefix types */
-#define	PREFIX_FLAG_ADJOUT	0x10	/* prefix is in the adj-out rib */
-#define	PREFIX_FLAG_EOR		0x20	/* prefix is EoR */
-#define	PREFIX_NEXTHOP_LINKED	0x40	/* prefix is linked onto nexthop list */
-#define	PREFIX_FLAG_LOCKED	0x80	/* locked by rib walker */
+};
+#define	PREFIX_FLAG_WITHDRAW	0x0001	/* enqueued on withdraw queue */
+#define	PREFIX_FLAG_UPDATE	0x0002	/* enqueued on update queue */
+#define	PREFIX_FLAG_DEAD	0x0004	/* locked but removed */
+#define	PREFIX_FLAG_STALE	0x0008	/* stale entry (for addpath) */
+#define	PREFIX_FLAG_MASK	0x000f	/* mask for the prefix types */
+#define	PREFIX_FLAG_ADJOUT	0x0010	/* prefix is in the adj-out rib */
+#define	PREFIX_FLAG_EOR		0x0020	/* prefix is EoR */
+#define	PREFIX_NEXTHOP_LINKED	0x0040	/* prefix is linked onto nexthop list */
+#define	PREFIX_FLAG_LOCKED	0x0080	/* locked by rib walker */
+#define	PREFIX_FLAG_FILTERED	0x0100	/* prefix is filtered (ineligible) */
 
 #define	PREFIX_DMETRIC_NONE	0
 #define	PREFIX_DMETRIC_INVALID	1
@@ -301,7 +304,6 @@ struct prefix {
 #define	PREFIX_DMETRIC_AS_WIDE	3
 #define	PREFIX_DMETRIC_ECMP	4
 #define	PREFIX_DMETRIC_BEST	5
-};
 
 /* possible states for nhflags */
 #define	NEXTHOP_SELF		0x01
@@ -353,7 +355,9 @@ int		rde_match_peer(struct rde_peer *, struct ctl_neighbor *);
 /* rde_peer.c */
 int		 peer_has_as4byte(struct rde_peer *);
 int		 peer_has_add_path(struct rde_peer *, uint8_t, int);
-int		 peer_accept_no_as_set(struct rde_peer *);
+int		 peer_has_ext_msg(struct rde_peer *);
+int		 peer_has_ext_nexthop(struct rde_peer *, uint8_t);
+int		 peer_permit_as_set(struct rde_peer *);
 void		 peer_init(struct filter_head *);
 void		 peer_shutdown(void);
 void		 peer_foreach(void (*)(struct rde_peer *, void *), void *);
@@ -367,16 +371,25 @@ void		 rde_generate_updates(struct rib_entry *, struct prefix *,
 		    struct prefix *, enum eval_mode);
 
 void		 peer_up(struct rde_peer *, struct session_up *);
-void		 peer_down(struct rde_peer *, void *);
+void		 peer_down(struct rde_peer *);
+void		 peer_delete(struct rde_peer *);
 void		 peer_flush(struct rde_peer *, uint8_t, time_t);
 void		 peer_stale(struct rde_peer *, uint8_t, int);
+void		 peer_blast(struct rde_peer *, uint8_t);
 void		 peer_dump(struct rde_peer *, uint8_t);
 void		 peer_begin_rrefresh(struct rde_peer *, uint8_t);
+int		 peer_work_pending(void);
+void		 peer_reaper(struct rde_peer *);
 
 void		 peer_imsg_push(struct rde_peer *, struct imsg *);
 int		 peer_imsg_pop(struct rde_peer *, struct imsg *);
-int		 peer_imsg_pending(void);
 void		 peer_imsg_flush(struct rde_peer *);
+
+static inline int
+peer_is_up(struct rde_peer *peer)
+{
+	return (peer->state == PEER_UP);
+}
 
 RB_PROTOTYPE(peer_tree, rde_peer, entry, peer_cmp);
 
@@ -579,7 +592,8 @@ struct prefix	*prefix_adjout_lookup(struct rde_peer *, struct bgpd_addr *,
 		    int);
 struct prefix	*prefix_adjout_match(struct rde_peer *, struct bgpd_addr *);
 int		 prefix_update(struct rib *, struct rde_peer *, uint32_t,
-		    uint32_t, struct filterstate *, struct bgpd_addr *, int);
+		    uint32_t, struct filterstate *, int, struct bgpd_addr *,
+		    int);
 int		 prefix_withdraw(struct rib *, struct rde_peer *, uint32_t,
 		    struct bgpd_addr *, int);
 int		 prefix_flowspec_update(struct rde_peer *, struct filterstate *,
@@ -593,6 +607,8 @@ void		 prefix_adjout_update(struct prefix *, struct rde_peer *,
 		    struct filterstate *, struct pt_entry *, uint32_t);
 void		 prefix_adjout_withdraw(struct prefix *);
 void		 prefix_adjout_destroy(struct prefix *);
+void		 prefix_adjout_flush_pending(struct rde_peer *);
+int		 prefix_adjout_reaper(struct rde_peer *);
 int		 prefix_dump_new(struct rde_peer *, uint8_t, unsigned int,
 		    void *, void (*)(struct prefix *, void *),
 		    void (*)(void *, uint8_t), int (*)(void *));
@@ -669,6 +685,12 @@ prefix_re(struct prefix *p)
 	return (p->entry.list.re);
 }
 
+static inline int
+prefix_filtered(struct prefix *p)
+{
+	return ((p->flags & PREFIX_FLAG_FILTERED) != 0);
+}
+
 void		 nexthop_shutdown(void);
 int		 nexthop_pending(void);
 void		 nexthop_runner(void);
@@ -688,8 +710,8 @@ void		 up_generate_addpath_all(struct rde_peer *, struct rib_entry *,
 		    struct prefix *, struct prefix *);
 void		 up_generate_default(struct rde_peer *, uint8_t);
 int		 up_is_eor(struct rde_peer *, uint8_t);
-int		 up_dump_withdraws(struct ibuf *, struct rde_peer *, uint8_t);
-int		 up_dump_update(struct ibuf *, struct rde_peer *, uint8_t);
+struct ibuf	*up_dump_withdraws(struct rde_peer *, uint8_t);
+struct ibuf	*up_dump_update(struct rde_peer *, uint8_t);
 
 /* rde_aspa.c */
 void		 aspa_validation(struct rde_aspa *, struct aspath *,

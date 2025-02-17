@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.231 2024/07/13 12:22:46 yasuoka Exp $	*/
+/*	$OpenBSD: iked.h,v 1.233 2024/11/04 02:44:28 dlg Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -250,16 +250,17 @@ struct iked_policy {
 #define IKED_SKIP_COUNT			 4
 	struct iked_policy		*pol_skip[IKED_SKIP_COUNT];
 
-	uint8_t				 pol_flags;
-#define IKED_POLICY_PASSIVE		 0x00
-#define IKED_POLICY_DEFAULT		 0x01
-#define IKED_POLICY_ACTIVE		 0x02
-#define IKED_POLICY_REFCNT		 0x04
-#define IKED_POLICY_QUICK		 0x08
-#define IKED_POLICY_SKIP		 0x10
-#define IKED_POLICY_IPCOMP		 0x20
-#define IKED_POLICY_TRANSPORT		 0x40
-#define IKED_POLICY_ROUTING		 0x80
+	unsigned int			 pol_flags;
+#define IKED_POLICY_PASSIVE		 0x000
+#define IKED_POLICY_DEFAULT		 0x001
+#define IKED_POLICY_ACTIVE		 0x002
+#define IKED_POLICY_REFCNT		 0x004
+#define IKED_POLICY_QUICK		 0x008
+#define IKED_POLICY_SKIP		 0x010
+#define IKED_POLICY_IPCOMP		 0x020
+#define IKED_POLICY_TRANSPORT		 0x040
+#define IKED_POLICY_ROUTING		 0x080
+#define IKED_POLICY_NATT_FORCE		 0x100
 
 	int				 pol_refcnt;
 
@@ -491,6 +492,7 @@ struct iked_sa {
 	char				*sa_eapid;	/* EAP identity */
 	struct iked_id			 sa_eap;	/* EAP challenge */
 	struct ibuf			*sa_eapmsk;	/* EAK session key */
+	struct ibuf			*sa_eapclass;	/* EAP/RADIUS class */
 
 	struct iked_proposals		 sa_proposals;	/* SA proposals */
 	struct iked_childsas		 sa_childsas;	/* IPsec Child SAs */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufs_vnops.c,v 1.162 2024/05/13 11:17:41 semarie Exp $	*/
+/*	$OpenBSD: ufs_vnops.c,v 1.164 2024/10/18 05:52:33 miod Exp $	*/
 /*	$NetBSD: ufs_vnops.c,v 1.18 1996/05/11 18:28:04 mycroft Exp $	*/
 
 /*
@@ -1395,6 +1395,11 @@ ufs_readdir(void *v)
 		memset(u.dn.d_name + u.dn.d_namlen, 0, u.dn.d_reclen
 		    - u.dn.d_namlen - offsetof(struct dirent, d_name));
 
+		if (memchr(u.dn.d_name, '/', u.dn.d_namlen) != NULL) {
+			error = EINVAL;
+			break;
+		}
+
 		error = uiomove(&u.dn, u.dn.d_reclen, uio);
 		dp = (struct direct *)((char *)dp + dp->d_reclen);
 	}
@@ -1516,7 +1521,7 @@ ufs_strategy(void *v)
 int
 ufs_print(void *v)
 {
-#ifdef DIAGNOSTIC
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 
 	struct vnode *vp = ap->a_vp;
@@ -1534,8 +1539,7 @@ ufs_print(void *v)
 		fifo_printinfo(vp);
 #endif /* FIFO */
 	printf("\n");
-
-#endif /* DIAGNOSTIC */
+#endif
 
 	return (0);
 }

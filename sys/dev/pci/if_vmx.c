@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vmx.c,v 1.88 2024/06/17 11:13:43 bluhm Exp $	*/
+/*	$OpenBSD: if_vmx.c,v 1.90 2025/01/24 10:29:43 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2013 Tsubai Masanari
@@ -1135,7 +1135,7 @@ vmxnet3_rxintr(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 		done[rid]++;
 
 		/*
-		 * A receive descriptor of type 4 which is flaged as start of
+		 * A receive descriptor of type 4 which is flagged as start of
 		 * packet, contains the number of TCP segment of an LRO packet.
 		 */
 		if (letoh32((rxcd->rxc_word3 & VMXNET3_RXC_TYPE_M) >>
@@ -1621,10 +1621,8 @@ vmxnet3_start(struct ifqueue *ifq)
 	for (;;) {
 		int hdrlen;
 
-		if (free <= NTXSEGS) {
-			ifq_set_oactive(ifq);
+		if (free <= NTXSEGS)
 			break;
-		}
 
 		m = ifq_dequeue(ifq);
 		if (m == NULL)
@@ -1672,6 +1670,11 @@ vmxnet3_start(struct ifqueue *ifq)
 		bus_dmamap_sync(sc->sc_dmat, map, 0,
 		    map->dm_mapsize, BUS_DMASYNC_PREWRITE);
 
+		free -= map->dm_nsegs;
+		/* set oactive here since txintr may be triggered in parallel */
+		if (free <= NTXSEGS)
+			ifq_set_oactive(ifq);
+
 		gen = rgen ^ VMX_TX_GEN;
 		sop = &ring->txd[prod];
 		for (i = 0; i < map->dm_nsegs; i++) {
@@ -1699,7 +1702,6 @@ vmxnet3_start(struct ifqueue *ifq)
 		    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_POSTWRITE);
 		sop->tx_word2 ^= VMX_TX_GEN;
 
-		free -= i;
 		post = 1;
 	}
 

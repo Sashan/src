@@ -1,4 +1,4 @@
-/* $OpenBSD: conf_sap.c,v 1.16 2024/04/09 13:56:30 beck Exp $ */
+/* $OpenBSD: conf_sap.c,v 1.18 2024/10/18 11:12:10 tb Exp $ */
 /* Written by Stephen Henson (steve@openssl.org) for the OpenSSL
  * project 2001.
  */
@@ -67,6 +67,8 @@
 #include <openssl/err.h>
 #include <openssl/x509.h>
 
+#include "conf_local.h"
+
 /* This is the automatic configuration loader: it is called automatically by
  * OpenSSL when any of a number of standard initialisation functions are called,
  * unless this is overridden by calling OPENSSL_no_config()
@@ -76,11 +78,12 @@ static pthread_once_t openssl_configured = PTHREAD_ONCE_INIT;
 
 static const char *openssl_config_name;
 
+void ASN1_add_oid_module(void);
+
 static void
 OPENSSL_config_internal(void)
 {
-	OPENSSL_load_builtin_modules();
-	/* Add others here? */
+	ASN1_add_oid_module();
 
 	ERR_clear_error();
 	if (CONF_modules_load_file(NULL, openssl_config_name,

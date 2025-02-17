@@ -1,4 +1,4 @@
-/* $OpenBSD: disksubr.c,v 1.62 2022/10/14 13:22:57 krw Exp $ */
+/* $OpenBSD: disksubr.c,v 1.65 2024/12/28 00:00:32 aoyama Exp $ */
 /* $NetBSD: disksubr.c,v 1.12 2002/02/19 17:09:44 wiz Exp $ */
 
 /*
@@ -76,8 +76,8 @@
  * Mach writedisklabel logic seems to fail when no BSD label is found.
  *
  * Kernel handles disklabel in this way;
- *	- searchs BSD label at offset 64
- *	- if not found, searchs UniOS/ISI label at the end of block
+ *	- searches BSD label at offset 64
+ *	- if not found, searches UniOS/ISI label at the end of block
  *	- kernel can distinguish whether it was SunOS label or UniOS/ISI
  *	  label and understand both
  *	- kernel writes UniOS/ISI label combined with BSD label to update
@@ -116,7 +116,7 @@ readdisklabel(dev_t dev, void (*strat)(struct buf *),
 	bp->b_dev = dev;
 
 	if (spoofonly)
-		goto done;
+		goto doslabel;
 
 	error = readdisksector(bp, strat, lp, DL_BLKTOSEC(lp, LABELSECTOR));
 	if (error)
@@ -130,6 +130,11 @@ readdisklabel(dev_t dev, void (*strat)(struct buf *),
 
 	error = checkdisklabel(bp->b_dev, bp->b_data + LABELOFFSET, lp, 0,
 	    DL_GETDSIZE(lp));
+	if (error == 0)
+		goto done;
+
+ doslabel:
+	error = readdoslabel(bp, strat, lp, NULL, spoofonly);
 	if (error == 0)
 		goto done;
 

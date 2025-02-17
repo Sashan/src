@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.41 2024/04/29 10:07:37 jsg Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.45 2025/02/03 17:59:40 jca Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Brian Bamsch <bbamsch@google.com>
@@ -276,7 +276,7 @@ VP_IDX3(vaddr_t va)
  * On RISC-V, the encodings for write permission without read
  * permission (r=0, w=1, x=0, or r=0, w=1, x=1) are reserved, so
  * PROT_WRITE implies PROT_READ.  We need to handle PROT_NONE
- * seperately (see pmap_pte_update()) since r=0, w=0, x=0 is reserved
+ * separately (see pmap_pte_update()) since r=0, w=0, x=0 is reserved
  * for non-leaf page table entries.
  */
 const pt_entry_t ap_bits_user[8] = {
@@ -388,6 +388,53 @@ pmap_vp_enter(pmap_t pm, vaddr_t va, struct pte_desc *pted, int flags)
 
 	vp3->vp[VP_IDX3(va)] = pted;
 	return 0;
+}
+
+void
+pmap_vp_populate(pmap_t pm, vaddr_t va)
+{
+	struct pte_desc *pted;
+	struct pmapvp1 *vp1;
+	struct pmapvp2 *vp2;
+	struct pmapvp3 *vp3;
+	void *vp;
+
+	pted = pool_get(&pmap_pted_pool, PR_WAITOK | PR_ZERO);
+	vp = pool_get(&pmap_vp_pool, PR_WAITOK | PR_ZERO);
+
+	pmap_lock(pm);
+
+	vp1 = pm->pm_vp.l1;
+
+	vp2 = vp1->vp[VP_IDX1(va)];
+	if (vp2 == NULL) {
+		vp2 = vp; vp = NULL;
+		pmap_set_l2(pm, va, vp2, 0);
+	}
+	
+	if (vp == NULL) {
+		pmap_unlock(pm);
+		vp = pool_get(&pmap_vp_pool, PR_WAITOK | PR_ZERO);
+		pmap_lock(pm);
+	}
+
+	vp3 = vp2->vp[VP_IDX2(va)];
+	if (vp3 == NULL) {
+		vp3 = vp; vp = NULL;
+		pmap_set_l3(pm, va, vp3, 0);
+	}
+
+	if (vp3->vp[VP_IDX3(va)] == NULL) {
+		vp3->vp[VP_IDX3(va)] = pted;
+		pted = NULL;
+	}
+
+	pmap_unlock(pm);
+
+	if (vp)
+		pool_put(&pmap_vp_pool, vp);
+	if (pted)
+		pool_put(&pmap_pted_pool, pted);
 }
 
 void *
@@ -563,6 +610,11 @@ out:
 	return error;
 }
 
+void
+pmap_populate(pmap_t pm, vaddr_t va)
+{
+	pmap_vp_populate(pm, va);
+}
 
 /*
  * Remove the given range of mapping entries.
@@ -606,10 +658,6 @@ pmap_remove_pted(pmap_t pm, struct pte_desc *pted)
 
 	pmap_pte_remove(pted, pm != pmap_kernel());
 	tlb_flush_page(pm, pted->pted_va & ~PAGE_MASK);
-
-	if (pted->pted_va & PTED_VA_EXEC_M) {
-		pted->pted_va &= ~PTED_VA_EXEC_M;
-	}
 
 	if (PTED_MANAGED(pted))
 		pmap_remove_pv(pted);
@@ -710,9 +758,6 @@ pmap_kremove_pg(vaddr_t va)
 	pmap_pte_remove(pted, 0);
 	tlb_flush_page(pm, pted->pted_va & ~PAGE_MASK);
 
-	if (pted->pted_va & PTED_VA_EXEC_M)
-		pted->pted_va &= ~PTED_VA_EXEC_M;
-
 	if (PTED_MANAGED(pted))
 		pmap_remove_pv(pted);
 
@@ -792,12 +837,19 @@ pmap_copy_page(struct vm_page *srcpg, struct vm_page *dstpg)
 	paddr_t dstpa = VM_PAGE_TO_PHYS(dstpg);
 	vaddr_t srcva = copy_src_page + cpu_number() * PAGE_SIZE;
 	vaddr_t dstva = copy_dst_page + cpu_number() * PAGE_SIZE;
+	int s;
 
+	/*
+	 * XXX The buffer flipper (incorrectly?) uses pmap_copy_page()
+	 * (from uvm_pagerealloc_multi()) from interrupt context!
+	 */
+	s = splbio();
 	pmap_kenter_pa(srcva, srcpa, PROT_READ);
 	pmap_kenter_pa(dstva, dstpa, PROT_READ|PROT_WRITE);
 	memcpy((void *)dstva, (void *)srcva, PAGE_SIZE);
 	pmap_kremove_pg(srcva);
 	pmap_kremove_pg(dstva);
+	splx(s);
 }
 
 void

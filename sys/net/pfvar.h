@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar.h,v 1.538 2024/05/13 01:15:53 jsg Exp $ */
+/*	$OpenBSD: pfvar.h,v 1.542 2024/12/26 10:15:27 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -36,7 +36,6 @@
 
 #include <sys/queue.h>
 #include <sys/tree.h>
-#include <sys/rwlock.h>
 #include <sys/syslimits.h>
 #include <sys/refcnt.h>
 #include <sys/timeout.h>
@@ -999,10 +998,6 @@ struct pfr_ktable {
 #define pfrkt_nomatch	pfrkt_ts.pfrts_nomatch
 #define pfrkt_tzero	pfrkt_ts.pfrts_tzero
 
-RB_HEAD(pf_state_tree_ext_gwy, pf_state_key);
-RB_PROTOTYPE(pf_state_tree_ext_gwy, pf_state_key,
-    entry_ext_gwy, pf_state_compare_ext_gwy)
-
 RB_HEAD(pfi_ifhead, pfi_kif);
 
 struct pf_anchor;
@@ -1245,7 +1240,7 @@ struct pf_status {
 #define PF_PRIO_ZERO		0xff		/* match "prio 0" packets */
 
 struct pf_queue_bwspec {
-	u_int		absolute;
+	uint64_t	absolute;
 	u_int		percent;
 };
 
@@ -1880,7 +1875,7 @@ void			 pf_mbuf_unlink_inpcb(struct mbuf *);
 u_int8_t*		 pf_find_tcpopt(u_int8_t *, u_int8_t *, size_t,
 			    u_int8_t, u_int8_t);
 u_int8_t		 pf_get_wscale(struct pf_pdesc *);
-u_int16_t		 pf_get_mss(struct pf_pdesc *);
+u_int16_t		 pf_get_mss(struct pf_pdesc *, uint16_t);
 struct mbuf *		 pf_build_tcp(const struct pf_rule *, sa_family_t,
 			    const struct pf_addr *, const struct pf_addr *,
 			    u_int16_t, u_int16_t, u_int32_t, u_int32_t,

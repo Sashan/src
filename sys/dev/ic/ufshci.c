@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufshci.c,v 1.39 2024/06/27 21:35:34 mglocker Exp $ */
+/*	$OpenBSD: ufshci.c,v 1.46 2025/01/18 19:42:39 mglocker Exp $ */
 
 /*
  * Copyright (c) 2022 Marcus Glocker <mglocker@openbsd.org>
@@ -21,6 +21,8 @@
  * on the JEDEC JESD223C.pdf and JESD220C-2_1.pdf specifications.
  */
 
+#include "kstat.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
@@ -30,6 +32,7 @@
 #include <sys/queue.h>
 #include <sys/mutex.h>
 #include <sys/pool.h>
+#include <sys/kstat.h>
 
 #include <sys/atomic.h>
 
@@ -50,11 +53,7 @@
 #endif
 
 #ifdef UFSHCI_DEBUG
-int ufshci_dbglvl = 1;
-#define DPRINTF(l, x...)	do { if ((l) <= ufshci_dbglvl) printf(x); } \
-				    while (0)
-#else
-#define DPRINTF(l, x...)
+int ufshci_debug = 1;
 #endif
 
 struct cfdriver ufshci_cd = {
@@ -97,9 +96,6 @@ void			 ufshci_ccb_put(void *, void *);
 void			 ufshci_ccb_free(struct ufshci_softc*, int);
 
 void			 ufshci_scsi_cmd(struct scsi_xfer *);
-void			 ufshci_minphys(struct buf *, struct scsi_link *);
-int			 ufshci_scsi_probe(struct scsi_link *);
-void			 ufshci_scsi_free(struct scsi_link *);
 
 void			 ufshci_scsi_inquiry(struct scsi_xfer *);
 void			 ufshci_scsi_capacity16(struct scsi_xfer *);
@@ -111,9 +107,15 @@ void			 ufshci_scsi_io_done(struct ufshci_softc *,
 void			 ufshci_scsi_done(struct ufshci_softc *,
 			     struct ufshci_ccb *);
 
-#if HIBERNATE
+#ifdef HIBERNATE
 int			 ufshci_hibernate_io(dev_t, daddr_t, vaddr_t, size_t,
 			     int, void *);
+#endif
+
+#if NKSTAT > 0
+void			 ufshci_kstat_attach(struct ufshci_softc *);
+int			 ufshci_kstat_read_ccb(struct kstat *);
+int			 ufshci_kstat_read_slot(struct kstat *);
 #endif
 
 const struct scsi_adapter ufshci_switch = {
@@ -128,7 +130,6 @@ ufshci_intr(void *arg)
 	int handled = 0;
 
 	status = UFSHCI_READ_4(sc, UFSHCI_REG_IS);
-	DPRINTF(3, "%s: status=0x%08x\n", __func__, status);
 
 	if (status == 0)
 		return handled;
@@ -137,12 +138,9 @@ ufshci_intr(void *arg)
 	UFSHCI_WRITE_4(sc, UFSHCI_REG_IS, status);
 
 	if (status & UFSHCI_REG_IS_UCCS) {
-		DPRINTF(3, "%s: UCCS interrupt\n", __func__);
 		handled = 1;
 	}
 	if (status & UFSHCI_REG_IS_UTRCS) {
-	  	DPRINTF(3, "%s: UTRCS interrupt\n", __func__);
-
 		ufshci_xfer_complete(sc);
 
 		handled = 1;
@@ -195,21 +193,21 @@ ufshci_attach(struct ufshci_softc *sc)
 	sc->sc_rtt = UFSHCI_REG_CAP_RTT(sc->sc_cap) + 1;
 	sc->sc_nutrs = UFSHCI_REG_CAP_NUTRS(sc->sc_cap) + 1;
 
-	DPRINTF(1, "Capabilities (0x%08x):\n", sc->sc_cap);
-	DPRINTF(1, "CS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_CS ? 1 : 0);
-	DPRINTF(1, "UICDMETMS=%d\n",
-	    sc->sc_cap & UFSHCI_REG_CAP_UICDMETMS ? 1 : 0);
-	DPRINTF(1, "OODDS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_OODDS ? 1 : 0);
-	DPRINTF(1, "64AS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_64AS ? 1 : 0);
-	DPRINTF(1, "AUTOH8=%d\n", sc->sc_cap & UFSHCI_REG_AUTOH8 ? 1 : 0);
-	DPRINTF(1, "NUTMRS=%d\n", sc->sc_nutmrs);
-	DPRINTF(1, "RTT=%d\n", sc->sc_rtt);
-	DPRINTF(1, "NUTRS=%d\n", sc->sc_nutrs);
-	DPRINTF(1, "HCPID=0x%08x\n", sc->sc_hcpid);
-	DPRINTF(1, "HCMID (0x%08x):\n", sc->sc_hcmid);
-	DPRINTF(1, " BI=0x%04x\n", UFSHCI_REG_HCMID_BI(sc->sc_hcmid));
-	DPRINTF(1, " MIC=0x%04x\n", UFSHCI_REG_HCMID_MIC(sc->sc_hcmid));
-
+#ifdef UFSHCI_DEBUG
+	printf("Capabilities (0x%08x):\n", sc->sc_cap);
+	printf(" CS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_CS ? 1 : 0);
+	printf(" UICDMETMS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_UICDMETMS ? 1 :0);
+	printf(" OODDS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_OODDS ? 1 : 0);
+	printf(" 64AS=%d\n", sc->sc_cap & UFSHCI_REG_CAP_64AS ? 1 : 0);
+	printf(" AUTOH8=%d\n", sc->sc_cap & UFSHCI_REG_AUTOH8 ? 1 : 0);
+	printf(" NUTMRS=%d\n", sc->sc_nutmrs);
+	printf(" RTT=%d\n", sc->sc_rtt);
+	printf(" NUTRS=%d\n", sc->sc_nutrs);
+	printf(" HCPID=0x%08x\n", sc->sc_hcpid);
+	printf("HCMID (0x%08x):\n", sc->sc_hcmid);
+	printf(" BI=0x%04x\n", UFSHCI_REG_HCMID_BI(sc->sc_hcmid));
+	printf(" MIC=0x%04x\n", UFSHCI_REG_HCMID_MIC(sc->sc_hcmid));
+#endif
 	if (sc->sc_nutrs < UFSHCI_SLOTS_MIN ||
 	    sc->sc_nutrs > UFSHCI_SLOTS_MAX) {
 		printf("%s: Invalid NUTRS value %d (must be %d-%d)!\n",
@@ -270,7 +268,9 @@ ufshci_attach(struct ufshci_softc *sc)
 	saa.saa_pool = &sc->sc_iopool;
 	saa.saa_quirks = saa.saa_flags = 0;
 	saa.saa_wwpn = saa.saa_wwnn = 0;
-
+#if NKSTAT > 0
+	ufshci_kstat_attach(sc);
+#endif
 	config_found(&sc->sc_dev, &saa, scsiprint);
 
 	return 0;
@@ -313,8 +313,6 @@ ufshci_is_poll(struct ufshci_softc *sc, uint32_t type)
 	uint32_t status;
 	int i, retry = 25;
 
-	DPRINTF(3, "%s\n", __func__);
-
 	for (i = 0; i < retry; i++) {
 		status = UFSHCI_READ_4(sc, UFSHCI_REG_IS);
 		if (status & type)
@@ -347,7 +345,7 @@ ufshci_dmamem_alloc(struct ufshci_softc *sc, size_t size)
 
 	if (bus_dmamap_create(sc->sc_dmat, size, 1, size, 0,
 	    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW |
-	    (sc->sc_cap & UFSHCI_REG_CAP_64AS) ? BUS_DMA_64BIT : 0,
+	    ((sc->sc_cap & UFSHCI_REG_CAP_64AS) ? BUS_DMA_64BIT : 0),
 	    &udm->udm_map) != 0)
 		goto udmfree;
 
@@ -545,8 +543,6 @@ ufshci_doorbell_poll(struct ufshci_softc *sc, int slot, uint32_t timeout_ms)
 	uint32_t reg;
 	uint64_t timeout_us;
 
-	DPRINTF(3, "%s\n", __func__);
-
 	for (timeout_us = timeout_ms * 1000; timeout_us != 0;
 	    timeout_us -= 1000) {
 		reg = UFSHCI_READ_4(sc, UFSHCI_REG_UTRLDBR);
@@ -576,7 +572,6 @@ ufshci_utr_cmd_nop(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -616,7 +611,6 @@ ufshci_utr_cmd_nop(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -669,7 +663,6 @@ ufshci_utr_cmd_lun(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -717,7 +710,6 @@ ufshci_utr_cmd_lun(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -779,7 +771,6 @@ ufshci_utr_cmd_inquiry(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -825,7 +816,6 @@ ufshci_utr_cmd_inquiry(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd) + (sizeof(*ucd) * slot);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -887,7 +877,6 @@ ufshci_utr_cmd_capacity16(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -937,7 +926,6 @@ ufshci_utr_cmd_capacity16(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd) + (sizeof(*ucd) * slot);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -999,7 +987,6 @@ ufshci_utr_cmd_capacity(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -1048,7 +1035,6 @@ ufshci_utr_cmd_capacity(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd) + (sizeof(*ucd) * slot);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -1112,7 +1098,6 @@ ufshci_utr_cmd_io(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -1171,7 +1156,6 @@ ufshci_utr_cmd_io(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd) + (sizeof(*ucd) * slot);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -1210,7 +1194,10 @@ ufshci_utr_cmd_io(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	    sizeof(*utrd) * slot, sizeof(*utrd), BUS_DMASYNC_PREWRITE);
 	bus_dmamap_sync(sc->sc_dmat, UFSHCI_DMA_MAP(sc->sc_dmamem_ucd),
 	    sizeof(*ucd) * slot, sizeof(*ucd), BUS_DMASYNC_PREWRITE);
-
+#if NKSTAT > 0
+	if (sc->sc_stats_slots)
+		sc->sc_stats_slots[slot]++;
+#endif
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 14) */
 	ccb->ccb_status = CCB_STATUS_INPROGRESS;
 	ufshci_doorbell_write(sc, slot);
@@ -1232,7 +1219,6 @@ ufshci_utr_cmd_sync(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 	utrd = UFSHCI_DMA_KVA(sc->sc_dmamem_utrd);
 	utrd += slot;
 	memset(utrd, 0, sizeof(*utrd));
-	DPRINTF(3, "%s: slot=%d\n", __func__, slot);
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 2a) */
 	utrd->dw0 = UFSHCI_UTRD_DW0_CT_UFS;
@@ -1282,7 +1268,6 @@ ufshci_utr_cmd_sync(struct ufshci_softc *sc, struct ufshci_ccb *ccb,
 
 	/* 7.2.1 Basic Steps when Building a UTP Transfer Request: 3) */
 	dva = UFSHCI_DMA_DVA(sc->sc_dmamem_ucd) + (sizeof(*ucd) * slot);
-	DPRINTF(3, "%s: ucd dva=%llu\n", __func__, dva);
 	utrd->dw4 = (uint32_t)dva;
 	utrd->dw5 = (uint32_t)(dva >> 32);
 
@@ -1352,10 +1337,8 @@ ufshci_xfer_complete(struct ufshci_softc *sc)
 		/* 7.2.3: Clear completion notification 3b) */
 		UFSHCI_WRITE_4(sc, UFSHCI_REG_UTRLCNR, (1U << i));
 
-		/* 7.2.3: Mark software slot for re-use 3c) */
+		/* 7.2.3: Mark software slot for reuse 3c) */
 		ccb->ccb_status = CCB_STATUS_READY2FREE;
-
-		DPRINTF(3, "slot %d completed\n", i);
 	}
 
 	/* 7.2.3: Reset Interrupt Aggregation Counter and Timer 4) */
@@ -1380,8 +1363,9 @@ ufshci_xfer_complete(struct ufshci_softc *sc)
 }
 
 int
-ufshci_activate(struct ufshci_softc *sc, int act)
+ufshci_activate(struct device *self, int act)
 {
+	struct ufshci_softc *sc = (struct ufshci_softc *)self;
 	int rv = 0;
 
 	switch (act) {
@@ -1428,7 +1412,7 @@ ufshci_ccb_alloc(struct ufshci_softc *sc, int nccbs)
 		if (bus_dmamap_create(sc->sc_dmat, UFSHCI_UCD_PRDT_MAX_XFER,
 		    UFSHCI_UCD_PRDT_MAX_SEGS, UFSHCI_UCD_PRDT_MAX_XFER, 0,
 		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW |
-	    	    (sc->sc_cap & UFSHCI_REG_CAP_64AS) ? BUS_DMA_64BIT : 0,
+	    	    ((sc->sc_cap & UFSHCI_REG_CAP_64AS) ? BUS_DMA_64BIT : 0),
 		    &ccb->ccb_dmamap) != 0)
 			goto free_maps;
 
@@ -1452,8 +1436,6 @@ ufshci_ccb_get(void *cookie)
 	struct ufshci_softc *sc = cookie;
 	struct ufshci_ccb *ccb;
 
-	DPRINTF(3, "%s\n", __func__);
-
 	mtx_enter(&sc->sc_ccb_mtx);
 	ccb = SIMPLEQ_FIRST(&sc->sc_ccb_list);
 	if (ccb != NULL)
@@ -1469,8 +1451,6 @@ ufshci_ccb_put(void *cookie, void *io)
 	struct ufshci_softc *sc = cookie;
 	struct ufshci_ccb *ccb = io;
 
-	DPRINTF(3, "%s\n", __func__);
-
 	mtx_enter(&sc->sc_ccb_mtx);
 	SIMPLEQ_INSERT_HEAD(&sc->sc_ccb_list, ccb, ccb_entry);
 	mtx_leave(&sc->sc_ccb_mtx);
@@ -1480,8 +1460,6 @@ void
 ufshci_ccb_free(struct ufshci_softc *sc, int nccbs)
 {
 	struct ufshci_ccb *ccb;
-
-	DPRINTF(3, "%s\n", __func__);
 
 	while ((ccb = SIMPLEQ_FIRST(&sc->sc_ccb_list)) != NULL) {
 		SIMPLEQ_REMOVE_HEAD(&sc->sc_ccb_list, ccb_entry);
@@ -1500,38 +1478,30 @@ ufshci_scsi_cmd(struct scsi_xfer *xs)
 
 	mtx_enter(&sc->sc_cmd_mtx);
 
-	DPRINTF(3, "%s: cmd=0x%x\n", __func__, xs->cmd.opcode);
-
 	switch (xs->cmd.opcode) {
 
 	case READ_COMMAND:
 	case READ_10:
 	case READ_12:
 	case READ_16:
-		DPRINTF(3, "io read\n");
 		ufshci_scsi_io(xs, SCSI_DATA_IN);
 		break;
 	case WRITE_COMMAND:
 	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
-		DPRINTF(3, "io write\n");
 		ufshci_scsi_io(xs, SCSI_DATA_OUT);
 		break;
 	case SYNCHRONIZE_CACHE:
-		DPRINTF(3, "sync\n");
 		ufshci_scsi_sync(xs);
 		break;
 	case INQUIRY:
-		DPRINTF(3, "inquiry\n");
 		ufshci_scsi_inquiry(xs);
 		break;
 	case READ_CAPACITY_16:
-		DPRINTF(3, "capacity16\n");
 		ufshci_scsi_capacity16(xs);
 		break;
 	case READ_CAPACITY:
-		DPRINTF(3, "capacity\n");
 		ufshci_scsi_capacity(xs);
 		break;
 	case TEST_UNIT_READY:
@@ -1549,26 +1519,6 @@ ufshci_scsi_cmd(struct scsi_xfer *xs)
 	}
 
 	mtx_leave(&sc->sc_cmd_mtx);
-}
-
-void
-ufshci_minphys(struct buf *bp, struct scsi_link *link)
-{
-	DPRINTF(3, "%s\n", __func__);
-}
-
-int
-ufshci_scsi_probe(struct scsi_link *link)
-{
-	DPRINTF(3, "%s\n", __func__);
-
-	return 0;
-}
-
-void
-ufshci_scsi_free(struct scsi_link *link)
-{
-	DPRINTF(3, "%s\n", __func__);
 }
 
 void
@@ -1792,10 +1742,6 @@ ufshci_scsi_io(struct scsi_xfer *xs, int dir)
 	if ((xs->flags & (SCSI_DATA_IN | SCSI_DATA_OUT)) != dir)
 		goto error1;
 
-	DPRINTF(3, "%s: %s, datalen=%d (%s)\n", __func__,
-	    ISSET(xs->flags, SCSI_DATA_IN) ? "READ" : "WRITE", xs->datalen,
-	    ISSET(xs->flags, SCSI_POLL) ? "poll"  : "no poll");
-
 	error = bus_dmamap_load(sc->sc_dmat, dmap, xs->data, xs->datalen, NULL,
 	    ISSET(xs->flags, SCSI_NOSLEEP) ? BUS_DMA_NOWAIT : BUS_DMA_WAITOK);
 	if (error) {
@@ -1914,7 +1860,7 @@ ufshci_scsi_done(struct ufshci_softc *sc, struct ufshci_ccb *ccb)
 	scsi_done(xs);
 }
 
-#if HIBERNATE
+#ifdef HIBERNATE
 int
 ufshci_hibernate_io(dev_t dev, daddr_t blkno, vaddr_t addr, size_t size,
     int op, void *page)
@@ -1951,7 +1897,7 @@ ufshci_hibernate_io(dev_t dev, daddr_t blkno, vaddr_t addr, size_t size,
 		/* Stop run queues and disable interrupts. */
 		ufshci_disable(my->sc);
 
-		/* Tell the controler the new hibernate UTRD address. */
+		/* Tell the controller the new hibernate UTRD address. */
 		pmap_extract(pmap_kernel(), (vaddr_t)page, &page_phys);
 		page_bus_phys = page_phys + ((void *)&my->utrd - page);
 		UFSHCI_WRITE_4(my->sc, UFSHCI_REG_UTRLBA,
@@ -2058,10 +2004,142 @@ ufshci_hibernate_io(dev_t dev, daddr_t blkno, vaddr_t addr, size_t size,
 		return EIO;
 	UFSHCI_WRITE_4(my->sc, UFSHCI_REG_UTRLCNR, (1U << slot));
 
-	/* Check if the command was succesfully executed. */
+	/* Check if the command was successfully executed. */
 	if (my->utrd.dw2 != UFSHCI_UTRD_DW2_OCS_SUCCESS)
 		return EIO;
 
 	return 0;
 }
 #endif /* HIBERNATE */
+
+#if NKSTAT > 0
+struct kstat_kv ufshci_counters_slot[CCB_STATUS_COUNT] = {
+	KSTAT_KV_UNIT_INITIALIZER("slots free", KSTAT_KV_T_COUNTER16,
+	    KSTAT_KV_U_NONE),
+	KSTAT_KV_UNIT_INITIALIZER("slots inpr", KSTAT_KV_T_COUNTER16,
+	    KSTAT_KV_U_NONE),
+	KSTAT_KV_UNIT_INITIALIZER("slots r2fr", KSTAT_KV_T_COUNTER16,
+	    KSTAT_KV_U_NONE),
+};
+
+void
+ufshci_kstat_attach(struct ufshci_softc *sc)
+{
+	struct kstat *ks;
+	struct kstat_kv *kvs;
+	char name[KSTAT_KV_NAMELEN];
+	int i;
+
+	/*
+	 * Allocate array to count ccb slot utilization.
+	 */
+	sc->sc_stats_slots = mallocarray(sc->sc_nutrs, sizeof(uint64_t),
+	    M_DEVBUF, M_WAITOK | M_ZERO);
+	if (sc->sc_stats_slots == NULL) {
+		printf("%s: can't allocate stats_slots array\n",
+		    sc->sc_dev.dv_xname);
+		return;
+	}
+
+	/*
+	 * Setup 'ccbs' kstat.
+	 */
+	kvs = mallocarray(sc->sc_nutrs, sizeof(*kvs), M_DEVBUF,
+	    M_WAITOK | M_ZERO);
+	if (kvs == NULL) {
+		printf("%s: can't allocate kvs ccbs array\n",
+		    sc->sc_dev.dv_xname);
+		return;
+	}
+	for (i = 0; i < sc->sc_nutrs; i++) {
+		snprintf(name, sizeof(name), "slot %d ccbs", i);
+		kstat_kv_unit_init(&kvs[i], name, KSTAT_KV_T_COUNTER64,
+		    KSTAT_KV_U_NONE);
+	}
+
+	mtx_init(&sc->sc_kstat_mtx_ccb, IPL_SOFTCLOCK);
+
+	ks = kstat_create(sc->sc_dev.dv_xname, 0, "ccbs", 0, KSTAT_T_KV, 0);
+	if (ks == NULL) {
+		printf("%s: can't create ccbs kstats\n", sc->sc_dev.dv_xname);
+		free(kvs, M_DEVBUF, sc->sc_nutrs * sizeof(*kvs));
+		return;
+	}
+
+	kstat_set_mutex(ks, &sc->sc_kstat_mtx_ccb);
+	ks->ks_softc = sc;
+	ks->ks_data = kvs;
+	ks->ks_datalen = sc->sc_nutrs * sizeof(*kvs);
+	ks->ks_read = ufshci_kstat_read_ccb;
+
+	sc->sc_kstat_ccb = ks;
+	kstat_install(ks);
+
+	/*
+	 * Setup 'slots' kstat.
+	 */
+	mtx_init(&sc->sc_kstat_mtx_slot, IPL_SOFTCLOCK);
+
+	ks = kstat_create(sc->sc_dev.dv_xname, 0, "slots", 0, KSTAT_T_KV, 0);
+	if (ks == NULL) {
+		printf("%s: can't create slots kstats\n", sc->sc_dev.dv_xname);
+		return;
+	}
+
+	kstat_set_mutex(ks, &sc->sc_kstat_mtx_slot);
+	ks->ks_softc = sc;
+	ks->ks_data = ufshci_counters_slot;
+	ks->ks_datalen = CCB_STATUS_COUNT * sizeof(*kvs);
+	ks->ks_read = ufshci_kstat_read_slot;
+
+	sc->sc_kstat_slot = ks;
+	kstat_install(ks);
+}
+
+int
+ufshci_kstat_read_ccb(struct kstat *ks)
+{
+	struct ufshci_softc *sc = ks->ks_softc;
+	struct kstat_kv *kvs = ks->ks_data;
+	int i;
+
+	for (i = 0; i < sc->sc_nutrs; i++)
+		kstat_kv_u64(&kvs[i]) = sc->sc_stats_slots[i];
+
+	return 0;
+}
+
+int
+ufshci_kstat_read_slot(struct kstat *ks)
+{
+	struct ufshci_softc *sc = ks->ks_softc;
+	struct kstat_kv *kvs = ks->ks_data;
+	struct ufshci_ccb *ccb;
+	uint16_t free, inprogress, ready2free;
+	int i;
+
+	free = inprogress = ready2free = 0;
+
+	for (i = 0; i < sc->sc_nutrs; i++) {
+		ccb = &sc->sc_ccbs[i];
+
+		switch (ccb->ccb_status) {
+		case CCB_STATUS_FREE:
+			free++;
+			break;
+		case CCB_STATUS_INPROGRESS:
+			inprogress++;
+			break;
+		case CCB_STATUS_READY2FREE:
+			ready2free++;
+			break;
+		}
+	}
+
+	kstat_kv_u16(&kvs[0]) = free;
+	kstat_kv_u16(&kvs[1]) = inprogress;
+	kstat_kv_u16(&kvs[2]) = ready2free;
+
+	return 0;
+}
+#endif /* NKSTAT > 0 */

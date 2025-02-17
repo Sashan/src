@@ -1,4 +1,4 @@
-/*	$OpenBSD: udf_vnops.c,v 1.72 2024/05/13 11:17:40 semarie Exp $	*/
+/*	$OpenBSD: udf_vnops.c,v 1.75 2024/10/18 05:52:32 miod Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 Scott Long <scottl@freebsd.org>
@@ -471,7 +471,7 @@ udf_read(void *v)
 		}
 		if (error)
 			break;
-	};
+	}
 
 	return (error);
 }
@@ -564,6 +564,12 @@ udf_uiodir(struct udf_uiodir *uiodir, struct uio *uio, long off)
 	}
 	uiodir->dirent->d_off = off;
 	uiodir->dirent->d_reclen = de_size;
+
+	if (memchr(uiodir->dirent->d_name, '/',
+	    uiodir->dirent->d_namlen) != NULL) {
+		/* illegal file name */
+		return (EINVAL);
+	}
 
 	return (uiomove(uiodir->dirent, de_size, uio));
 }
@@ -938,6 +944,7 @@ udf_islocked(void *v)
 int
 udf_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct unode *up = VTOU(vp);
@@ -948,6 +955,7 @@ udf_print(void *v)
 	printf("tag VT_UDF, hash id %u\n", up->u_ino);
 #ifdef DIAGNOSTIC
 	printf("\n");
+#endif
 #endif
 	return (0);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.135 2024/03/03 11:14:34 miod Exp $	*/
+/*	$OpenBSD: trap.c,v 1.137 2024/10/23 07:41:44 mpi Exp $	*/
 /*
  * Copyright (c) 2004, Miodrag Vallat.
  * Copyright (c) 1998 Steve Murphree, Jr.
@@ -92,7 +92,7 @@ const char *trap_type[] = {
 	"Data Access Exception",
 	"Misaligned Access",
 	"Unimplemented Opcode",
-	"Privilege Violation"
+	"Privilege Violation",
 	"Bounds Check Violation",
 	"Illegal Integer Divide",
 	"Integer Overflow",
@@ -170,9 +170,9 @@ interrupt(struct trapframe *frame)
 {
 	struct cpu_info *ci = curcpu();
 
-	ci->ci_intrdepth++;
+	ci->ci_idepth++;
 	md_interrupt_func(frame);
-	ci->ci_intrdepth--;
+	ci->ci_idepth--;
 }
 
 #ifdef M88110

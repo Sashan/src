@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.29 2024/08/01 11:13:19 sf Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.37 2025/01/09 10:55:22 sf Exp $	*/
 /*	$NetBSD: virtio.c,v 1.3 2011/11/02 23:05:52 njoly Exp $	*/
 
 /*
@@ -154,6 +154,27 @@ virtio_reset(struct virtio_softc *sc)
 	sc->sc_active_features = 0;
 }
 
+int
+virtio_attach_finish(struct virtio_softc *sc, struct virtio_attach_args *va)
+{
+	int i, ret;
+
+	ret = sc->sc_ops->attach_finish(sc, va);
+	if (ret != 0)
+		return ret;
+
+	sc->sc_ops->setup_intrs(sc);
+	for (i = 0; i < sc->sc_nvqs; i++) {
+		struct virtqueue *vq = &sc->sc_vqs[i];
+
+		if (vq->vq_num == 0)
+			continue;
+		virtio_setup_queue(sc, vq, vq->vq_dmamap->dm_segs[0].ds_addr);
+	}
+	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
+	return 0;
+}
+
 void
 virtio_reinit_start(struct virtio_softc *sc)
 {
@@ -162,12 +183,13 @@ virtio_reinit_start(struct virtio_softc *sc)
 	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_ACK);
 	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER);
 	virtio_negotiate_features(sc, NULL);
+	sc->sc_ops->setup_intrs(sc);
 	for (i = 0; i < sc->sc_nvqs; i++) {
 		int n;
 		struct virtqueue *vq = &sc->sc_vqs[i];
-		n = virtio_read_queue_size(sc, vq->vq_index);
-		if (n == 0)	/* vq disappeared */
+		if (vq->vq_num == 0)	/* not used */
 			continue;
+		n = virtio_read_queue_size(sc, vq->vq_index);
 		if (n != vq->vq_num) {
 			panic("%s: virtqueue size changed, vq index %d",
 			    sc->sc_dev.dv_xname, vq->vq_index);
@@ -254,8 +276,11 @@ virtio_check_vqs(struct virtio_softc *sc)
 	int i, r = 0;
 
 	/* going backwards is better for if_vio */
-	for (i = sc->sc_nvqs - 1; i >= 0; i--)
+	for (i = sc->sc_nvqs - 1; i >= 0; i--) {
+		if (sc->sc_vqs[i].vq_num == 0)	/* not used */
+			continue;
 		r |= virtio_check_vq(sc, &sc->sc_vqs[i]);
+	}
 
 	return r;
 }
@@ -285,6 +310,7 @@ virtio_init_vq(struct virtio_softc *sc, struct virtqueue *vq)
 	int i, j;
 	int vq_size = vq->vq_num;
 
+	VIRTIO_ASSERT(vq_size > 0);
 	memset(vq->vq_vaddr, 0, vq->vq_bytesize);
 
 	/* build the indirect descriptor chain */
@@ -311,10 +337,11 @@ virtio_init_vq(struct virtio_softc *sc, struct virtqueue *vq)
 		vq->vq_entries[i].qe_index = i;
 	}
 
+	bus_dmamap_sync(sc->sc_dmat, vq->vq_dmamap, 0, vq->vq_bytesize,
+	    BUS_DMASYNC_PREWRITE);
 	/* enqueue/dequeue status */
 	vq->vq_avail_idx = 0;
 	vq->vq_used_idx = 0;
-	vq_sync_aring(sc, vq, BUS_DMASYNC_PREWRITE);
 	vq_sync_uring(sc, vq, BUS_DMASYNC_PREREAD);
 	vq->vq_queued = 1;
 }
@@ -328,7 +355,7 @@ virtio_init_vq(struct virtio_softc *sc, struct virtqueue *vq)
  */
 int
 virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
-    int maxsegsize, int maxnsegs, const char *name)
+    int maxnsegs, const char *name)
 {
 	int vq_size, allocsize1, allocsize2, allocsize3, allocsize = 0;
 	int rsegs, r, hdrlen;
@@ -419,7 +446,6 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 	}
 
 	virtio_init_vq(sc, vq);
-	virtio_setup_queue(sc, vq, vq->vq_dmamap->dm_segs[0].ds_addr);
 
 #if VIRTIO_DEBUG
 	printf("\nallocated %u byte for virtqueue %d for %s, size %d\n",
@@ -447,6 +473,11 @@ virtio_free_vq(struct virtio_softc *sc, struct virtqueue *vq)
 {
 	struct vq_entry *qe;
 	int i = 0;
+
+	if (vq->vq_num == 0) {
+		/* virtio_alloc_vq() was never called */
+		return 0;
+	}
 
 	/* device must be already deactivated */
 	/* confirm the vq is empty */
@@ -846,22 +877,25 @@ virtio_dequeue(struct virtio_softc *sc, struct virtqueue *vq,
  *
  *                 Don't call this if you use statically allocated slots
  *                 and virtio_enqueue_trim().
+ *
+ *                 returns the number of freed slots.
  */
 int
 virtio_dequeue_commit(struct virtqueue *vq, int slot)
 {
 	struct vq_entry *qe = &vq->vq_entries[slot];
 	struct vring_desc *vd = &vq->vq_desc[0];
-	int s = slot;
+	int s = slot, r = 1;
 
 	while (vd[s].flags & VRING_DESC_F_NEXT) {
 		s = vd[s].next;
 		vq_free_entry(vq, qe);
 		qe = &vq->vq_entries[s];
+		r++;
 	}
 	vq_free_entry(vq, qe);
 
-	return 0;
+	return r;
 }
 
 /*
@@ -994,6 +1028,10 @@ virtio_vq_dump(struct virtqueue *vq)
 #endif
 	/* Common fields */
 	printf(" + addr: %p\n", vq);
+	if (vq->vq_num == 0) {
+		printf(" + vq is unused\n");
+		return;
+	}
 	printf(" + vq num: %d\n", vq->vq_num);
 	printf(" + vq mask: 0x%X\n", vq->vq_mask);
 	printf(" + vq index: %d\n", vq->vq_index);

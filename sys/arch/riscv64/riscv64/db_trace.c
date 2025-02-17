@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_trace.c,v 1.5 2022/02/22 07:46:04 visa Exp $	*/
+/*	$OpenBSD: db_trace.c,v 1.7 2024/11/07 16:02:29 miod Exp $	*/
 
 /*
  * Copyright (c) 2000, 2001 Ben Harris
@@ -32,14 +32,10 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 
-#include <sys/proc.h>
-#include <sys/stacktrace.h>
-#include <sys/user.h>
 #include <machine/db_machdep.h>
 
 #include <ddb/db_access.h>
 #include <ddb/db_interface.h>
-#include <ddb/db_variables.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_output.h>
 
@@ -58,7 +54,7 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 	char		c, *cp = modif;
 	db_expr_t	offset;
 	Elf_Sym *	sym;
-	char		*name;
+	const char	*name;
 	int		kernel_only = 1;
 
 	while ((c = *cp++) != 0) {

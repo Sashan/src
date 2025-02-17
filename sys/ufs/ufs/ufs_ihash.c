@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufs_ihash.c,v 1.27 2024/07/07 01:39:06 jsg Exp $	*/
+/*	$OpenBSD: ufs_ihash.c,v 1.31 2024/12/03 14:41:45 claudio Exp $	*/
 /*	$NetBSD: ufs_ihash.c,v 1.3 1996/02/09 22:36:04 christos Exp $	*/
 
 /*
@@ -36,10 +36,13 @@
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <sys/malloc.h>
+#include <sys/mount.h>
 
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
 #include <ufs/ufs/ufs_extern.h>
+#include <ufs/ufs/ufsmount.h>
+#include <ufs/ext2fs/ext2fs_extern.h>
 
 #include <crypto/siphash.h>
 
@@ -94,6 +97,42 @@ loop:
 			/* XXXLOCKING unlock hash list? */
 			if (vget(vp, LK_EXCLUSIVE))
 				goto loop;
+			/*
+			* Check if the inode is valid.
+			* The condition has been adapted from ufs_inactive().
+			*
+			* This is needed in case our vget above grabbed a vnode
+			* while ufs_inactive was reclaiming it.
+			*
+			* XXX this is a workaround and kind of a gross hack.
+			* realistically this should get fixed something like
+			* the previously committed vdoom() or this should be
+			* dealt with so this can't happen.
+			*/
+			if (VTOI(vp) != ip ||
+			    ((
+#ifdef EXT2FS
+			    /*
+			     * XXX DIP does not cover ext2fs so hack
+			     * around this for now since this is using
+			     * ufs_ihashget as well.
+			     */
+			    IS_EXT2_VNODE(vp) ? ip->i_e2fs_nlink <= 0 :
+#endif
+			    DIP(ip, nlink) <= 0) &&
+			     (vp->v_mount->mnt_flag & MNT_RDONLY) == 0)) {
+				/*
+				 * This should recycle the inode immediately,
+				 * unless there are other threads that
+				 * try to access it.
+				 * Pause to give the threads a chance to finish
+				 * with the inode.
+				 */
+				vput(vp);
+				yield();
+				goto loop;
+			}
+
 			return (vp);
  		}
 	}

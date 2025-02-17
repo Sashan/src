@@ -1,4 +1,4 @@
-/* $OpenBSD: viomb.c,v 1.10 2024/05/24 10:05:55 jsg Exp $	 */
+/* $OpenBSD: viomb.c,v 1.13 2024/12/20 22:18:27 sf Exp $	 */
 /* $NetBSD: viomb.c,v 1.1 2011/10/30 12:12:21 hannken Exp $	 */
 
 /*
@@ -124,8 +124,8 @@ struct cfdriver viomb_cd = {
 int
 viomb_match(struct device *parent, void *match, void *aux)
 {
-	struct virtio_softc *va = aux;
-	if (va->sc_childdevid == PCI_PRODUCT_VIRTIO_BALLOON)
+	struct virtio_attach_args *va = aux;
+	if (va->va_devid == PCI_PRODUCT_VIRTIO_BALLOON)
 		return (1);
 	return (0);
 }
@@ -135,6 +135,7 @@ viomb_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct viomb_softc *sc = (struct viomb_softc *)self;
 	struct virtio_softc *vsc = (struct virtio_softc *)parent;
+	struct virtio_attach_args *va = aux;
 	int i;
 
 	if (vsc->sc_child != NULL) {
@@ -161,12 +162,12 @@ viomb_attach(struct device *parent, struct device *self, void *aux)
 	if (virtio_negotiate_features(vsc, viomb_feature_names) != 0)
 		goto err;
 
-	if ((virtio_alloc_vq(vsc, &sc->sc_vq[VQ_INFLATE], VQ_INFLATE,
-	     sizeof(u_int32_t) * PGS_PER_REQ, 1, "inflate") != 0))
+	if ((virtio_alloc_vq(vsc, &sc->sc_vq[VQ_INFLATE], VQ_INFLATE, 1,
+	    "inflate") != 0))
 		goto err;
 	vsc->sc_nvqs++;
-	if ((virtio_alloc_vq(vsc, &sc->sc_vq[VQ_DEFLATE], VQ_DEFLATE,
-	     sizeof(u_int32_t) * PGS_PER_REQ, 1, "deflate") != 0))
+	if ((virtio_alloc_vq(vsc, &sc->sc_vq[VQ_DEFLATE], VQ_DEFLATE, 1,
+	    "deflate") != 0))
 		goto err;
 	vsc->sc_nvqs++;
 
@@ -219,8 +220,10 @@ viomb_attach(struct device *parent, struct device *self, void *aux)
 	sensordev_install(&sc->sc_sensdev);
 
 	printf("\n");
-	virtio_set_status(vsc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
+	if (virtio_attach_finish(vsc, va) != 0)
+		goto err_dmamap;
 	return;
+
 err_dmamap:
 	bus_dmamap_destroy(vsc->sc_dmat, sc->sc_req.bl_dmamap);
 err:

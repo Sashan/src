@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccp_pci.c,v 1.11 2024/06/13 17:59:08 bluhm Exp $ */
+/*	$OpenBSD: ccp_pci.c,v 1.14 2024/10/24 18:52:59 bluhm Exp $ */
 
 /*
  * Copyright (c) 2018 David Gwynne <dlg@openbsd.org>
@@ -27,16 +27,14 @@
 #include <dev/pci/pcivar.h>
 
 #include <dev/ic/ccpvar.h>
+#include <dev/ic/pspvar.h>
+
+#include "psp.h"
 
 #define CCP_PCI_BAR	0x18
 
 int	ccp_pci_match(struct device *, void *, void *);
 void	ccp_pci_attach(struct device *, struct device *, void *);
-
-#ifdef __amd64__
-void	psp_pci_attach(struct device *, struct device *, void *);
-int	psp_pci_intr(void *);
-#endif
 
 const struct cfattach ccp_pci_ca = {
 	sizeof(struct ccp_softc),
@@ -66,6 +64,9 @@ ccp_pci_attach(struct device *parent, struct device *self, void *aux)
 	struct ccp_softc *sc = (struct ccp_softc *)self;
 	struct pci_attach_args *pa = aux;
 	pcireg_t memtype;
+#if NPSP > 0
+	int psp_matched;
+#endif
 
 	memtype = pci_mapreg_type(pa->pa_pc, pa->pa_tag, CCP_PCI_BAR);
 	if (PCI_MAPREG_TYPE(memtype) != PCI_MAPREG_TYPE_MEM) {
@@ -79,65 +80,16 @@ ccp_pci_attach(struct device *parent, struct device *self, void *aux)
 		return;
 	}
 
-#ifdef __amd64__
-	psp_pci_attach(parent, self, aux);
+#if NPSP > 0
+	psp_matched = psp_pci_match(sc, aux);
+	if (psp_matched)
+		psp_pci_intr_map(sc, pa);
 #endif
 
 	ccp_attach(sc);
+
+#if NPSP > 0
+	if (psp_matched)
+		psp_pci_attach(sc, pa);
+#endif
 }
-
-#ifdef __amd64__
-void
-psp_pci_attach(struct device *parent, struct device *self, void *aux)
-{
-	struct ccp_softc *sc = (struct ccp_softc *)self;
-	struct pci_attach_args *pa = aux;
-	pci_intr_handle_t ih;
-	const char *intrstr = NULL;
-
-	sc->sc_dmat = pa->pa_dmat;
-
-	sc->sc_capabilities = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-	    PSP_REG_CAPABILITIES);
-
-	/* clear and disable interrupts */
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, PSP_REG_INTEN, 0);
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, PSP_REG_INTSTS, -1);
-
-	if (pci_intr_map_msix(pa, 0, &ih) != 0 &&
-	    pci_intr_map_msi(pa, &ih) != 0 && pci_intr_map(pa, &ih) != 0) {
-		printf(": couldn't map interrupt\n");
-		return;
-	}
-
-	intrstr = pci_intr_string(pa->pa_pc, ih);
-	sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO, psp_pci_intr,
-	    sc, sc->sc_dev.dv_xname);
-	if (sc->sc_ih != NULL)
-		printf(": %s", intrstr);
-
-	if (!psp_attach(sc)) {
-		pci_intr_disestablish(pa->pa_pc, sc->sc_ih);
-		sc->sc_ih = NULL;
-		return;
-	}
-
-	/* enable interrupts */
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, PSP_REG_INTEN, -1);
-}
-
-int
-psp_pci_intr(void *arg)
-{
-	struct ccp_softc *sc = arg;
-	uint32_t status;
-
-	status = bus_space_read_4(sc->sc_iot, sc->sc_ioh, PSP_REG_INTSTS);
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, PSP_REG_INTSTS, status);
-
-	if (sc->sc_sev_intr)
-		return (sc->sc_sev_intr(sc, status));
-
-	return (1);
-}
-#endif	/* __amd64__ */

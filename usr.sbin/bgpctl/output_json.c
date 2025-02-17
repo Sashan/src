@@ -1,4 +1,4 @@
-/*	$OpenBSD: output_json.c,v 1.44 2024/05/22 08:42:34 claudio Exp $ */
+/*	$OpenBSD: output_json.c,v 1.50 2024/12/13 19:22:01 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -57,6 +57,7 @@ json_neighbor_capabilities(struct capabilities *capa)
 	json_do_bool("as4byte", capa->as4byte);
 	json_do_bool("refresh", capa->refresh);
 	json_do_bool("enhanced_refresh", capa->enhanced_rr);
+	json_do_bool("extended_message", capa->ext_msg);
 
 	if (hascapamp) {
 		json_do_array("multiprotocol");
@@ -81,6 +82,8 @@ json_neighbor_capabilities(struct capabilities *capa)
 
 		if (capa->grestart.timeout)
 			json_do_uint("timeout", capa->grestart.timeout);
+		if (capa->grestart.grnotification)
+			json_do_bool("graceful_notification", 1);
 
 		if (present) {
 			json_do_array("protocols");
@@ -240,9 +243,9 @@ json_neighbor_full(struct peer *p)
 			json_do_uint("max_out_prefix_restart",
 			    p->conf.max_out_prefix_restart);
 	}
-	if (p->auth.method != AUTH_NONE)
+	if (p->auth_conf.method != AUTH_NONE)
 		json_do_string("authentication",
-		    fmt_auth_method(p->auth.method));
+		    fmt_auth_method(p->auth_conf.method));
 	json_do_bool("ttl_security", p->conf.ttlsec);
 	json_do_uint("holdtime", p->conf.holdtime);
 	json_do_uint("min_holdtime", p->conf.min_holdtime);
@@ -834,6 +837,8 @@ json_rib(struct ctl_show_rib *r, struct ibuf *asbuf, struct parse_result *res)
 
 	/* flags */
 	json_do_bool("valid", r->flags & F_PREF_ELIGIBLE);
+	if (r->flags & F_PREF_FILTERED)
+		json_do_bool("filtered", 1);
 	if (r->flags & F_PREF_BEST)
 		json_do_bool("best", 1);
 	if (r->flags & F_PREF_ECMP)
@@ -963,6 +968,7 @@ json_rtr(struct ctl_show_rtr *rtr)
 
 	if (rtr->session_id != -1) {
 		json_do_uint("version", rtr->version);
+		json_do_uint("minimal_version", rtr->min_version);
 		json_do_uint("session_id", rtr->session_id);
 		json_do_uint("serial", rtr->serial);
 	}

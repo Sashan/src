@@ -1,4 +1,4 @@
-/* $OpenBSD: pkcs12.c,v 1.27 2024/02/28 17:04:38 tb Exp $ */
+/* $OpenBSD: pkcs12.c,v 1.29 2024/12/26 14:10:48 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -93,14 +93,12 @@ static int alg_print(BIO *x, const X509_ALGOR *alg);
 static int set_pbe(BIO *err, int *ppbe, const char *str);
 
 static struct {
-	int add_lmk;
 	char *CAfile;
 	STACK_OF(OPENSSL_STRING) *canames;
 	char *CApath;
 	int cert_pbe;
 	char *certfile;
 	int chain;
-	char *csp_name;
 	const EVP_CIPHER *enc;
 	int export_cert;
 	int key_pbe;
@@ -322,13 +320,6 @@ static const struct option pkcs12_options[] = {
 		.value = CLCERTS,
 	},
 	{
-		.name = "CSP",
-		.argname = "name",
-		.desc = "Microsoft CSP name",
-		.type = OPTION_ARG,
-		.opt.arg = &cfg.csp_name,
-	},
-	{
 		.name = "descert",
 		.desc = "Encrypt PKCS#12 certificates with triple DES (default RC2-40)",
 		.type = OPTION_VALUE,
@@ -382,12 +373,6 @@ static const struct option pkcs12_options[] = {
 		.type = OPTION_VALUE,
 		.opt.value = &cfg.keytype,
 		.value = KEY_SIG,
-	},
-	{
-		.name = "LMK",
-		.desc = "Add local machine keyset attribute to private key",
-		.type = OPTION_FLAG,
-		.opt.flag = &cfg.add_lmk,
 	},
 	{
 		.name = "macalg",
@@ -668,8 +653,16 @@ pkcs12_main(int argc, char **argv)
 			    cfg.certfile, FORMAT_PEM, NULL,
 			    "certificates from certfile")) == NULL)
 				goto export_end;
-			while (sk_X509_num(morecerts) > 0)
-				sk_X509_push(certs, sk_X509_shift(morecerts));
+			while (sk_X509_num(morecerts) > 0) {
+				X509 *cert = sk_X509_shift(morecerts);
+
+				if (!sk_X509_push(certs, cert)) {
+					X509_free(cert);
+					sk_X509_pop_free(morecerts, X509_free);
+					goto export_end;
+				}
+			}
+
 			sk_X509_free(morecerts);
 		}
 
@@ -693,11 +686,18 @@ pkcs12_main(int argc, char **argv)
 
 			if (vret == X509_V_OK) {
 				/* Exclude verified certificate */
-				for (i = 1; i < sk_X509_num(chain2); i++)
-					sk_X509_push(certs, sk_X509_value(
-					    chain2, i));
-				/* Free first certificate */
-				X509_free(sk_X509_value(chain2, 0));
+				X509_free(sk_X509_shift(chain2));
+
+				while (sk_X509_num(chain2) > 0) {
+					X509 *cert = sk_X509_shift(chain2);
+
+					if (!sk_X509_push(certs, cert)) {
+						X509_free(cert);
+						sk_X509_pop_free(chain2,
+						    X509_free);
+						goto export_end;
+					}
+				}
 				sk_X509_free(chain2);
 			} else {
 				if (vret != X509_V_ERR_UNSPECIFIED)
@@ -707,6 +707,7 @@ pkcs12_main(int argc, char **argv)
 					    vret));
 				else
 					ERR_print_errors(bio_err);
+				sk_X509_pop_free(chain2, X509_free);
 				goto export_end;
 			}
 		}
@@ -718,15 +719,6 @@ pkcs12_main(int argc, char **argv)
 			    cfg.canames, i);
 			X509_alias_set1(sk_X509_value(certs, i), catmp, -1);
 		}
-
-		if (cfg.csp_name != NULL && key != NULL)
-			EVP_PKEY_add1_attr_by_NID(key, NID_ms_csp_name,
-			    MBSTRING_ASC,
-			    (unsigned char *) cfg.csp_name, -1);
-
-		if (cfg.add_lmk && key != NULL)
-			EVP_PKEY_add1_attr_by_NID(key, NID_LocalKeySet, 0, NULL,
-			    -1);
 
 		if (!cfg.noprompt &&
 		    EVP_read_pw_string(pass, sizeof pass,

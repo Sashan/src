@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.125 2024/03/29 21:19:30 miod Exp $	*/
+/*	$OpenBSD: trap.c,v 1.127 2024/11/08 08:43:38 miod Exp $	*/
 /*	$NetBSD: trap.c,v 1.73 2001/08/09 01:03:01 eeh Exp $ */
 
 /*
@@ -584,9 +584,6 @@ dopanic:
 	}
 
 	case T_TAGOF:
-		trapsignal(p, SIGEMT, 0, EMT_TAGOVF, sv);	/* XXX code? */
-		break;
-
 	case T_BREAKPOINT:
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
 		break;
@@ -679,7 +676,7 @@ accesstype(unsigned int type, u_long sfsr)
 	if (type == T_FDMMU_MISS || (sfsr & SFSR_FV) == 0)
 		return PROT_READ;
 	else if (sfsr & SFSR_W)
-		return PROT_READ | PROT_WRITE;
+		return PROT_WRITE;
 	return PROT_READ;
 }
 

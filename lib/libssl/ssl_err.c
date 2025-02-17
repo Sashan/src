@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_err.c,v 1.51 2024/07/14 15:56:08 tb Exp $ */
+/* $OpenBSD: ssl_err.c,v 1.53 2024/10/09 08:00:29 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1999-2011 The OpenSSL Project.  All rights reserved.
  *
@@ -392,6 +392,8 @@ static const ERR_STRING_DATA SSL_str_reasons[] = {
 	{ERR_REASON(SSL_R_SSL_SESSION_ID_HAS_BAD_LENGTH), "ssl session id has bad length"},
 	{ERR_REASON(SSL_R_SSL_SESSION_ID_IS_DIFFERENT), "ssl session id is different"},
 	{ERR_REASON(SSL_R_SSL_SESSION_ID_TOO_LONG), "ssl session id is too long"},
+	{ERR_REASON(SSL_R_TLSV13_ALERT_CERTIFICATE_REQUIRED), "tlsv13 alert certificate required"},
+	{ERR_REASON(SSL_R_TLSV13_ALERT_MISSING_EXTENSION), "tlsv13 alert missing extension"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_ACCESS_DENIED), "tlsv1 alert access denied"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_DECODE_ERROR), "tlsv1 alert decode error"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_DECRYPTION_FAILED), "tlsv1 alert decryption failed"},
@@ -400,10 +402,12 @@ static const ERR_STRING_DATA SSL_str_reasons[] = {
 	{ERR_REASON(SSL_R_TLSV1_ALERT_INAPPROPRIATE_FALLBACK), "tlsv1 alert inappropriate fallback"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_INSUFFICIENT_SECURITY), "tlsv1 alert insufficient security"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_INTERNAL_ERROR), "tlsv1 alert internal error"},
+	{ERR_REASON(SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL), "tlsv1 alert no application protocol"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_NO_RENEGOTIATION), "tlsv1 alert no renegotiation"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_PROTOCOL_VERSION), "tlsv1 alert protocol version"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_RECORD_OVERFLOW), "tlsv1 alert record overflow"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_UNKNOWN_CA), "tlsv1 alert unknown ca"},
+	{ERR_REASON(SSL_R_TLSV1_ALERT_UNKNOWN_PSK_IDENTITY), "tlsv1 alert unknown psk_identity"},
 	{ERR_REASON(SSL_R_TLSV1_ALERT_USER_CANCELLED), "tlsv1 alert user cancelled"},
 	{ERR_REASON(SSL_R_TLSV1_BAD_CERTIFICATE_HASH_VALUE), "tlsv1 bad certificate hash value"},
 	{ERR_REASON(SSL_R_TLSV1_BAD_CERTIFICATE_STATUS_RESPONSE), "tlsv1 bad certificate status response"},
@@ -417,7 +421,6 @@ static const ERR_STRING_DATA SSL_str_reasons[] = {
 	{ERR_REASON(SSL_R_TLS_INVALID_ECPOINTFORMAT_LIST), "tls invalid ecpointformat list"},
 	{ERR_REASON(SSL_R_TLS_PEER_DID_NOT_RESPOND_WITH_CERTIFICATE_LIST), "tls peer did not respond with certificate list"},
 	{ERR_REASON(SSL_R_TLS_RSA_ENCRYPTED_VALUE_LENGTH_IS_WRONG), "tls rsa encrypted value length is wrong"},
-	{ERR_REASON(SSL_R_TRIED_TO_USE_UNSUPPORTED_CIPHER), "tried to use unsupported cipher"},
 	{ERR_REASON(SSL_R_UNABLE_TO_DECODE_DH_CERTS), "unable to decode dh certs"},
 	{ERR_REASON(SSL_R_UNABLE_TO_DECODE_ECDH_CERTS), "unable to decode ecdh certs"},
 	{ERR_REASON(SSL_R_UNABLE_TO_EXTRACT_PUBLIC_KEY), "unable to extract public key"},

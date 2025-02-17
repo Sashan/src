@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.716 2024/07/14 19:51:08 sashan Exp $	*/
+/*	$OpenBSD: parse.y,v 1.718 2024/11/12 04:14:51 dlg Exp $	*/
 
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
@@ -1545,10 +1545,14 @@ bandwidth	: STRING {
 				}
 			}
 			free($1);
-			$$.bw_absolute = (u_int32_t)bps;
+			if (bps < 0 || bps > (double)LLONG_MAX) {
+				yyerror("bandwidth number too big");
+				YYERROR;
+			}
+			$$.bw_absolute = (u_int64_t)bps;
 		}
 		| NUMBER {
-			if ($1 < 0 || $1 > UINT_MAX) {
+			if ($1 < 0 || $1 > LLONG_MAX) {
 				yyerror("bandwidth number too big");
 				YYERROR;
 			}
@@ -5633,7 +5637,7 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 	char *path_cut;
 	int sz;
 	struct pfr_uktable *ukt;
-	SLIST_HEAD(, pfr_uktable) ukt_list;;
+	SLIST_HEAD(, pfr_uktable) ukt_list;
 
 	/*
 	 * Here we need to rename anchor path from temporal names such as

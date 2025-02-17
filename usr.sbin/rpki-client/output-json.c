@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-json.c,v 1.49 2024/04/21 19:27:44 claudio Exp $ */
+/*	$OpenBSD: output-json.c,v 1.51 2024/11/13 12:51:04 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -47,9 +47,11 @@ outputheader_json(struct stats *st)
 	json_do_int("roas", st->repo_tal_stats.roas);
 	json_do_int("failedroas", st->repo_tal_stats.roas_fail);
 	json_do_int("invalidroas", st->repo_tal_stats.roas_invalid);
-	json_do_int("spls", st->repo_tal_stats.spls);
-	json_do_int("failedspls", st->repo_tal_stats.spls_fail);
-	json_do_int("invalidspls", st->repo_tal_stats.spls_invalid);
+	if (experimental) {
+		json_do_int("spls", st->repo_tal_stats.spls);
+		json_do_int("failedspls", st->repo_tal_stats.spls_fail);
+		json_do_int("invalidspls", st->repo_tal_stats.spls_invalid);
+	}
 	json_do_int("aspas", st->repo_tal_stats.aspas);
 	json_do_int("failedaspas", st->repo_tal_stats.aspas_fail);
 	json_do_int("invalidaspas", st->repo_tal_stats.aspas_invalid);
@@ -99,7 +101,7 @@ print_vap(struct vap *v)
 	json_do_int("expires", v->expires);
 
 	json_do_array("providers");
-	for (i = 0; i < v->providersz; i++)
+	for (i = 0; i < v->num_providers; i++)
 		json_do_int("provider", v->providers[i]);
 
 	json_do_end();
@@ -128,7 +130,7 @@ output_spl(struct vsp_tree *vsps)
 		json_do_object("vsp", 1);
 		json_do_int("origin_as", vsp->asid);
 		json_do_array("prefixes");
-		for (i = 0; i < vsp->prefixesz; i++) {
+		for (i = 0; i < vsp->num_prefixes; i++) {
 			ip_addr_print(&vsp->prefixes[i].prefix,
 			    vsp->prefixes[i].afi, buf, sizeof(buf));
 			json_do_string("prefix", buf);

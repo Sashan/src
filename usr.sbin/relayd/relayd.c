@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.c,v 1.191 2023/06/25 08:07:38 op Exp $	*/
+/*	$OpenBSD: relayd.c,v 1.193 2025/01/30 17:00:31 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -27,6 +27,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <agentx.h>
 #include <signal.h>
 #include <string.h>
 #include <stdio.h>
@@ -224,6 +225,13 @@ main(int argc, char *argv[])
 
 	if (unveil("/", "rx") == -1)
 		err(1, "unveil /");
+	if (env->sc_conf.flags & F_AGENTX) {
+		if (unveil(env->sc_conf.agentx_path, "w") == -1)
+			err(1, "unveil %s", env->sc_conf.agentx_path);
+	} else {
+		if (unveil(AGENTX_MASTER_PATH, "w") == -1)
+			err(1, "unveil %s", env->sc_conf.agentx_path);
+	}
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
 
@@ -1358,6 +1366,14 @@ relay_load_certfiles(struct relayd *env, struct relay *rlay, const char *name)
 
 	if ((rlay->rl_conf.flags & F_TLS) == 0)
 		return (0);
+
+	if (strlen(proto->tlsclientca) && rlay->rl_tls_client_ca_fd == -1) {
+		if ((rlay->rl_tls_client_ca_fd =
+		    open(proto->tlsclientca, O_RDONLY)) == -1)
+			return (-1);
+		log_debug("%s: using client ca %s", __func__,
+		    proto->tlsclientca);
+	}
 
 	if (name == NULL &&
 	    print_host(&rlay->rl_conf.ss, hbuf, sizeof(hbuf)) == NULL)

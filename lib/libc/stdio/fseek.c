@@ -1,4 +1,4 @@
-/*	$OpenBSD: fseek.c,v 1.14 2022/05/14 05:06:32 guenther Exp $ */
+/*	$OpenBSD: fseek.c,v 1.16 2024/08/30 03:44:48 guenther Exp $ */
 /*-
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.

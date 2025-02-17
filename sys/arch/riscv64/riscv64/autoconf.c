@@ -1,4 +1,4 @@
-/*	$OpenBSD: autoconf.c,v 1.6 2022/09/08 10:22:06 kn Exp $	*/
+/*	$OpenBSD: autoconf.c,v 1.8 2024/11/11 23:48:46 jsg Exp $	*/
 
 /*
  * Copyright (c) 2009 Miodrag Vallat.
@@ -21,7 +21,7 @@
 #include <sys/reboot.h>
 #include <sys/hibernate.h>
 #include <sys/systm.h>
-#include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 
 #if defined(NFSCLIENT)
 #include <net/if.h>
@@ -101,7 +101,7 @@ const struct nam2blk nam2blk[] = {
 	{ "wd",		 0 },
 	{ "sd",		 4 },
 	{ "cd",		 6 },
-	{ "vnd",	14 },
 	{ "rd",		 8 },
+	{ "vnd",	14 },
 	{ NULL,		-1 }
 };

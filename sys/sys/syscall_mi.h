@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscall_mi.h,v 1.34 2024/06/02 15:31:57 deraadt Exp $	*/
+/*	$OpenBSD: syscall_mi.h,v 1.37 2024/12/27 11:57:16 mpi Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -34,7 +34,6 @@
 #include <sys/param.h>
 #include <sys/pledge.h>
 #include <sys/acct.h>
-#include <sys/syslog.h>
 #include <sys/tracepoint.h>
 #include <sys/syscall.h>
 #include <sys/signalvar.h>
@@ -71,7 +70,7 @@ pin_check(struct proc *p, register_t code)
 	 * by most common case:
 	 * 1) dynamic binary: syscalls in libc.so (in the ps_libcpin region)
 	 * 2a) static binary: syscalls in main program (in the ps_pin region)
-	 * 2b) dynamic binary: sysalls in ld.so (in the ps_pin region)
+	 * 2b) dynamic binary: syscalls in ld.so (in the ps_pin region)
 	 * 3) sigtramp, containing only sigreturn(2)
 	 */
 	if (plibcpin->pn_pins &&
@@ -152,9 +151,7 @@ mi_syscall(struct proc *p, register_t code, const struct sysent *callp,
 #ifdef KTRACE
 	if (KTRPOINT(p, KTR_SYSCALL)) {
 		/* convert to mask, then include with code */
-		KERNEL_LOCK();
 		ktrsyscall(p, code, callp->sy_argsize, argp);
-		KERNEL_UNLOCK();
 	}
 #endif
 
@@ -203,11 +200,8 @@ mi_syscall_return(struct proc *p, register_t code, int error,
 	userret(p);
 
 #ifdef KTRACE
-	if (KTRPOINT(p, KTR_SYSRET)) {
-		KERNEL_LOCK();
+	if (KTRPOINT(p, KTR_SYSRET))
 		ktrsysret(p, code, error, retval);
-		KERNEL_UNLOCK();
-	}
 #endif
 }
 
@@ -238,11 +232,8 @@ mi_child_return(struct proc *p)
 	userret(p);
 
 #ifdef KTRACE
-	if (KTRPOINT(p, KTR_SYSRET)) {
-		KERNEL_LOCK();
+	if (KTRPOINT(p, KTR_SYSRET))
 		ktrsysret(p, code, 0, child_retval);
-		KERNEL_UNLOCK();
-	}
 #endif
 }
 

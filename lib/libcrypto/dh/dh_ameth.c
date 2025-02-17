@@ -1,4 +1,4 @@
-/* $OpenBSD: dh_ameth.c,v 1.40 2024/01/04 17:01:26 tb Exp $ */
+/* $OpenBSD: dh_ameth.c,v 1.42 2025/01/17 05:04:25 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -185,7 +185,7 @@ dh_pub_encode(X509_PUBKEY *pk, const EVP_PKEY *pkey)
 /*
  * PKCS#8 DH is defined in PKCS#11 of all places. It is similar to DH in
  * that the AlgorithmIdentifier contains the parameters, the private key
- * is explcitly included and the pubkey must be recalculated.
+ * is explicitly included and the pubkey must be recalculated.
  */
 
 static int
@@ -496,32 +496,6 @@ DHparams_print_fp(FILE *fp, const DH *x)
 }
 LCRYPTO_ALIAS(DHparams_print_fp);
 
-static int
-dh_pkey_public_check(const EVP_PKEY *pkey)
-{
-	DH *dh = pkey->pkey.dh;
-
-	if (dh->pub_key == NULL) {
-		DHerror(DH_R_MISSING_PUBKEY);
-		return 0;
-	}
-
-	return DH_check_pub_key_ex(dh, dh->pub_key);
-}
-
-static int
-dh_pkey_param_check(const EVP_PKEY *pkey)
-{
-	DH *dh = pkey->pkey.dh;
-
-	/*
-	 * It would have made more sense to support EVP_PKEY_check() for DH
-	 * keys and call DH_check_ex() there and keeping this as a wrapper
-	 * for DH_param_check_ex(). We follow OpenSSL's choice.
-	 */
-	return DH_check_ex(dh);
-}
-
 const EVP_PKEY_ASN1_METHOD dh_asn1_meth = {
 	.base_method = &dh_asn1_meth,
 	.pkey_id = EVP_PKEY_DH,
@@ -550,8 +524,4 @@ const EVP_PKEY_ASN1_METHOD dh_asn1_meth = {
 	.param_print = dh_param_print,
 
 	.pkey_free = dh_free,
-
-	.pkey_check = NULL,
-	.pkey_public_check = dh_pkey_public_check,
-	.pkey_param_check = dh_pkey_param_check,
 };

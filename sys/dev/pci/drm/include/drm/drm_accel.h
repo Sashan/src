@@ -5,6 +5,8 @@
 
 #include <drm/drm_file.h>
 
+#define ACCEL_MAX_MINORS	256
+
 static inline int
 accel_minor_alloc(void)
 {
@@ -32,4 +34,8 @@ accel_core_exit(void)
 {
 }
 
+static inline void
+accel_debugfs_register(struct drm_device *dev)
+{
+}
 #endif

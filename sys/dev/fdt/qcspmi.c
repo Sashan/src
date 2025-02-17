@@ -1,4 +1,4 @@
-/*	$OpenBSD: qcspmi.c,v 1.5 2024/07/04 21:54:38 kettenis Exp $	*/
+/*	$OpenBSD: qcspmi.c,v 1.7 2025/01/03 14:13:25 kettenis Exp $	*/
 /*
  * Copyright (c) 2022 Patrick Wildt <patrick@blueri.se>
  *
@@ -25,8 +25,6 @@
 #include <dev/fdt/spmivar.h>
 
 #include <dev/ofw/openfirm.h>
-#include <dev/ofw/ofw_clock.h>
-#include <dev/ofw/ofw_power.h>
 #include <dev/ofw/fdt.h>
 
 /* Core registers. */
@@ -408,14 +406,23 @@ qcspmi_cmd_read(void *cookie, uint8_t sid, uint8_t cmd, uint16_t addr,
 		    SPMI_OBSV_OFF(sc, sc->sc_ee, apid) + SPMI_STATUS);
 		if (reg & SPMI_STATUS_DONE)
 			break;
+		if (reg & SPMI_STATUS_FAILURE) {
+			printf(": transaction failed\n");
+			return EIO;
+		}
+		if (reg & SPMI_STATUS_DENIED) {
+			printf(": transaction denied\n");
+			return EIO;
+		}
+		if (reg & SPMI_STATUS_DROPPED) {
+			printf(": transaction dropped\n");
+			return EIO;
+		}
 	}
-	if (i == 0)
+	if (i == 0) {
+		printf("\n");
 		return ETIMEDOUT;
-
-	if (reg & SPMI_STATUS_FAILURE ||
-	    reg & SPMI_STATUS_DENIED ||
-	    reg & SPMI_STATUS_DROPPED)
-		return EIO;
+	}
 
 	if (len > 0) {
 		reg = HREAD4(sc, QCSPMI_REG_OBSRVR,

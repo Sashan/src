@@ -1,4 +1,4 @@
-/*	$OpenBSD: cs4280.c,v 1.61 2024/05/24 06:02:53 jsg Exp $	*/
+/*	$OpenBSD: cs4280.c,v 1.63 2024/09/01 03:08:56 jsg Exp $	*/
 /*	$NetBSD: cs4280.c,v 1.5 2000/06/26 04:56:23 simonb Exp $	*/
 
 /*
@@ -470,7 +470,7 @@ cs4280_set_dac_rate(struct cs4280_softc *sc, int rate)
 	 * playback rate may range from 8000Hz to 48000Hz
 	 *
 	 * play_phase_increment = floor(rate*65536*1024/48000)
-	 * px = round(rate*65536*1024 - play_phase_incremnt*48000)
+	 * px = round(rate*65536*1024 - play_phase_increment*48000)
 	 * py=floor(px/200)
 	 * play_sample_rate_correction = px - 200*py
 	 *
@@ -1571,6 +1571,7 @@ cs4280_activate(struct device *self, int act)
 
 	switch (act) {
 	case DVACT_SUSPEND:
+		rv = config_activate_children(self, act);
 		/* should I powerdown here ? */
 		cs4280_write_codec(sc, AC97_REG_POWER, CS4280_POWER_DOWN_ALL);
 		break;

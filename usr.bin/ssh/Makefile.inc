@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.inc,v 1.94 2024/06/17 08:30:29 djm Exp $
+#	$OpenBSD: Makefile.inc,v 1.98 2024/11/24 23:47:50 djm Exp $
 
 .include <bsd.own.mk>
 
@@ -29,7 +29,7 @@ CDIAGFLAGS+=	-Wold-style-definition
 CDIAGFLAGS+=	-Werror
 .endif
 
-#CDIAGFLAGS+=	-fno-common
+#CDIAGFLAGS+=	-fno-common -Werror
 #DEBUG=-g
 #INSTALL_STRIP=
 
@@ -80,6 +80,7 @@ SRCS_KEX+=	smult_curve25519_ref.c
 SRCS_KEX+=	kexgen.c
 SRCS_KEX+=	kexsntrup761x25519.c
 SRCS_KEX+=	sntrup761.c
+SRCS_KEX+=	kexmlkem768x25519.c
 
 SRCS_KEY+=	sshkey.c
 SRCS_KEY+=	cipher.c

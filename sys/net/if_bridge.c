@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.c,v 1.371 2024/08/05 17:47:29 bluhm Exp $	*/
+/*	$OpenBSD: if_bridge.c,v 1.373 2025/02/14 13:14:13 dlg Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -262,7 +262,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 	/*
 	 * bridge(4) data structure aren't protected by the NET_LOCK().
-	 * Idealy it shouldn't be taken before calling `ifp->if_ioctl'
+	 * Ideally it shouldn't be taken before calling `ifp->if_ioctl'
 	 * but we aren't there yet.  Media ioctl run without netlock.
 	 */
 	switch (cmd) {
@@ -1646,7 +1646,8 @@ bridge_ipsec(struct ifnet *ifp, struct ether_header *eh, int hassnap,
 				    ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG);
 			} else {
 				KERNEL_LOCK();
-				error = ipsp_process_packet(m, tdb, af, 0);
+				error = ipsp_process_packet(m, tdb, af, 0,
+				    IPSP_DF_INHERIT);
 				KERNEL_UNLOCK();
 			}
 			tdb_unref(tdb);

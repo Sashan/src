@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keyscan.c,v 1.158 2024/06/14 00:25:25 djm Exp $ */
+/* $OpenBSD: ssh-keyscan.c,v 1.165 2024/12/06 15:17:15 djm Exp $ */
 /*
  * Copyright 1995, 1996 by David Mazieres <dm@lcs.mit.edu>.
  *
@@ -277,6 +277,7 @@ keygrab_ssh2(con *c)
 #endif
 	c->c_ssh->kex->kex[KEX_C25519_SHA256] = kex_gen_client;
 	c->c_ssh->kex->kex[KEX_KEM_SNTRUP761X25519_SHA512] = kex_gen_client;
+	c->c_ssh->kex->kex[KEX_KEM_MLKEM768X25519_SHA256] = kex_gen_client;
 	ssh_set_verify_host_key_callback(c->c_ssh, key_print_wrapper);
 	/*
 	 * do the key-exchange until an error occurs or until
@@ -561,7 +562,7 @@ conloop(void)
 	for (i = 0; i < maxfd; i++) {
 		if (read_wait[i].revents & (POLLHUP|POLLERR|POLLNVAL))
 			confree(i);
-		else if (read_wait[i].revents & (POLLIN|POLLHUP))
+		else if (read_wait[i].revents & (POLLIN))
 			conread(i);
 	}
 
@@ -623,20 +624,8 @@ do_host(char *host)
 			if (addr_cmp(&addr, &end_addr) == 0)
 				break;
 			addr_increment(&addr);
-		};
+		}
 	}
-}
-
-void
-sshfatal(const char *file, const char *func, int line, int showfunc,
-    LogLevel level, const char *suffix, const char *fmt, ...)
-{
-	va_list args;
-
-	va_start(args, fmt);
-	sshlogv(file, func, line, showfunc, level, suffix, fmt, args);
-	va_end(args);
-	cleanup_exit(255);
 }
 
 static void
@@ -723,7 +712,7 @@ main(int argc, char **argv)
 			get_keytypes = 0;
 			tname = strtok(optarg, ",");
 			while (tname) {
-				int type = sshkey_type_from_name(tname);
+				int type = sshkey_type_from_shortname(tname);
 
 				switch (type) {
 #ifdef WITH_DSA
@@ -785,6 +774,7 @@ main(int argc, char **argv)
 	for (j = 0; j < maxfd; j++)
 		read_wait[j].fd = -1;
 
+	ssh_signal(SIGPIPE, SIG_IGN);
 	for (j = 0; j < fopt_count; j++) {
 		if (argv[j] == NULL)
 			fp = stdin;

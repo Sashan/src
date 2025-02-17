@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.104 2024/07/14 07:57:42 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.109 2024/10/22 21:50:02 jsg Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -22,9 +22,6 @@
 #define _MACHINE_VMMVAR_H_
 
 #define VMM_HV_SIGNATURE 	"OpenBSDVMM58"
-
-#define VMM_PCI_MMIO_BAR_BASE	0xF0000000ULL
-#define VMM_PCI_MMIO_BAR_END	0xFFDFFFFFULL		/* 2 MiB below 4 GiB */
 
 /* VMX: Basic Exit Reasons */
 #define VMX_EXIT_NMI				0
@@ -492,19 +489,8 @@ struct vm_rwregs_params {
 	struct vcpu_reg_state	vrwp_regs;
 };
 
-struct vm_mprotect_ept_params {
-	/* Input parameters to VMM_IOC_MPROTECT_EPT */
-	uint32_t		vmep_vm_id;
-	uint32_t		vmep_vcpu_id;
-	vaddr_t			vmep_sgpa;
-	size_t			vmep_size;
-	int			vmep_prot;
-};
-
 /* IOCTL definitions */
 #define VMM_IOC_INTR _IOW('V', 6, struct vm_intr_params) /* Intr pending */
-/* Control the protection of ept pages*/
-#define VMM_IOC_MPROTECT_EPT _IOW('V', 11, struct vm_mprotect_ept_params)
 
 /* CPUID masks */
 /*
@@ -624,6 +610,7 @@ enum {
 
 /* Forward declarations */
 struct vm;
+struct vm_create_params;
 
 /*
  * Implementation-specific cpu state
@@ -635,6 +622,9 @@ struct vmcb_segment {
 	uint32_t			vs_lim;			/* 004h */
 	uint64_t			vs_base;		/* 008h */
 };
+
+#define SVM_ENABLE_NP	(1ULL << 0)
+#define SVM_ENABLE_SEV	(1ULL << 1)
 
 struct vmcb {
 	union {
@@ -737,20 +727,17 @@ struct vmcs {
 	uint32_t	vmcs_revision;
 };
 
-struct vmx_invvpid_descriptor
-{
+struct vmx_invvpid_descriptor {
 	uint64_t	vid_vpid;
 	uint64_t	vid_addr;
 };
 
-struct vmx_invept_descriptor
-{
+struct vmx_invept_descriptor {
 	uint64_t	vid_eptp;
 	uint64_t	vid_reserved;
 };
 
-struct vmx_msr_store
-{
+struct vmx_msr_store {
 	uint64_t	vms_index;
 	uint64_t	vms_data;
 };
@@ -762,8 +749,7 @@ struct vmx_msr_store
  * Note that vmx/svm_enter_guest depend on the layout of this struct for
  * field access.
  */
-struct vcpu_gueststate
-{
+struct vcpu_gueststate {
 	/* %rsi should be first */
 	uint64_t	vg_rsi;			/* 0x00 */
 	uint64_t	vg_rax;			/* 0x08 */
@@ -886,13 +872,13 @@ struct vcpu {
 	uint32_t vc_vmx_vmcs_state;		/* [a] */
 #define VMCS_CLEARED	0
 #define VMCS_LAUNCHED	1
-	uint64_t vc_vmx_invept_op;
 
 	/* SVM only (all requiring [v]) */
 	vaddr_t vc_svm_hsa_va;
 	paddr_t vc_svm_hsa_pa;
 	vaddr_t vc_svm_ioio_va;
 	paddr_t vc_svm_ioio_pa;
+	int vc_sev;				/* [I] */
 };
 
 SLIST_HEAD(vcpu_head, vcpu);
@@ -921,7 +907,7 @@ int	vmm_start(void);
 int	vmm_stop(void);
 int	vm_impl_init(struct vm *, struct proc *);
 void	vm_impl_deinit(struct vm *);
-int	vcpu_init(struct vcpu *);
+int	vcpu_init(struct vcpu *, struct vm_create_params *);
 void	vcpu_deinit(struct vcpu *);
 int	vm_rwregs(struct vm_rwregs_params *, int);
 int	vcpu_reset_regs(struct vcpu *, struct vcpu_reg_state *);

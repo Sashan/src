@@ -201,8 +201,14 @@ static const struct pci_matchid amdgpu_devices[] = {
 	{0x1002, 0x1435 },	/* Custom GPU 0932 */
 	{0x1002, 0x163f },	/* Custom GPU 0405 */
 
-	/* GC 10.3.6, DCN 3.1.5, APU, Ryzen 7000 "Raphael" */
+	/*
+	 * GC 10.3.6, DCN 3.1.5, APU, Ryzen 7000 "Raphael"
+	 * GC 10.3.6, DCN 3.1.5, APU, Ryzen 7045 "Dragon Range"
+	 */
 	{0x1002, 0x164e },	/* Radeon 610M */
+
+	/* GC 10.3.6, DCN 3.1.5, APU, Ryzen 9000 "Granite Ridge" */
+	{0x1002, 0x13c0 },	/* Radeon Graphics */
 
 	/* GC 10.3.7, DCN 3.1.6, APU, Ryzen 7020 "Mendocino" */
 	{0x1002, 0x1506 },	/* Radeon 610M */
@@ -224,8 +230,11 @@ static const struct pci_matchid amdgpu_devices[] = {
 				   7600, 7600 XT, Pro W7600 */
 	{0x1002, 0x7483 },	/* Radeon RX 7600M */
 	{0x1002, 0x7489 },	/* Radeon Pro W7500 */
+	{0x1002, 0x7499 },	/* Radeon RX 7300, 7400, Pro W7400 */
 
 	/* GC 11.0.3, DCN 3.2.0, dGPU, "Navi 32" */
+	{0x1002, 0x7460 },	/* Radeon Pro V710 */
+	{0x1002, 0x7461 },	/* Radeon Pro V710 */
 	{0x1002, 0x7470 },	/* Radeon Pro W7700 */
 	{0x1002, 0x747e },	/* Radeon RX 7700 XT, 7800 XT */
 
@@ -235,13 +244,12 @@ static const struct pci_matchid amdgpu_devices[] = {
 	/* GC 11.0.4, DCN 3.1.4, APU, Ryzen 8040, "Hawk Point" */
 	{0x1002, 0x1901 },	/* Radeon 740M */
 
-#ifdef notyet
-	/* GC 11.5.0, DCN 3.5.0, APU, Ryzen AI 300, "Strix Point", linux 6.7 */
+	/* GC 11.5.0, DCN 3.5.0, APU, Ryzen AI 300, "Strix Point" */
 	{0x1002, 0x150e },	/* Radeon 880M / 890M */
 
-	/* GC 11.5.1, DCN 3.5.1, APU, linux 6.9 */
+	/* GC 11.5.1, DCN 3.5.1, APU */
+	/* GC 11.5.2, DCN 3.5.1, APU */
 
-	/* GC 12.0.0, DCN 4.0.1, dGPU, linux 6.11 */
-	/* GC 12.0.1, DCN 4.0.1, dGPU, linux 6.11 */
-#endif
+	/* GC 12.0.0, DCN 4.0.1, dGPU */
+	/* GC 12.0.1, DCN 4.0.1, dGPU */
 };

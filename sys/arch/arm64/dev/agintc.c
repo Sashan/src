@@ -1,4 +1,4 @@
-/* $OpenBSD: agintc.c,v 1.59 2024/07/03 22:37:00 patrick Exp $ */
+/* $OpenBSD: agintc.c,v 1.62 2025/01/24 20:17:28 kettenis Exp $ */
 /*
  * Copyright (c) 2007, 2009, 2011, 2017 Dale Rahn <drahn@dalerahn.com>
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
@@ -163,7 +163,7 @@ struct agintc_softc {
 	bus_space_tag_t		 sc_iot;
 	bus_space_handle_t	 sc_d_ioh;
 	bus_space_handle_t	*sc_r_ioh;
-	bus_space_handle_t	 sc_redist_base;
+	bus_space_handle_t	*sc_rbase_ioh;
 	bus_dma_tag_t		 sc_dmat;
 	uint16_t		*sc_processor;
 	int			 sc_cpuremap[MAXCPUS];
@@ -178,6 +178,7 @@ struct agintc_softc {
 	struct evcount		 sc_spur;
 	int			 sc_ncells;
 	int			 sc_num_redist;
+	int			 sc_num_redist_regions;
 	struct agintc_dmamem	*sc_prop;
 	struct agintc_dmamem	*sc_pend;
 	struct interrupt_controller sc_ic;
@@ -314,7 +315,7 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	uint32_t		 affinity;
 	uint64_t		 redist_stride;
 	int			 i, nbits, nintr;
-	int			 offset, nredist;
+	int			 idx, offset, nredist;
 #ifdef MULTIPROCESSOR
 	int			 nipi, ipiirq[3];
 #endif
@@ -325,15 +326,23 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_iot = faa->fa_iot;
 	sc->sc_dmat = faa->fa_dmat;
 
-	/* First row: distributor */
+	sc->sc_num_redist_regions =
+	    OF_getpropint(faa->fa_node, "#redistributor-regions", 1);
+
+	if (faa->fa_nreg < sc->sc_num_redist_regions + 1)
+		panic("%s: missing registers", __func__);
+
 	if (bus_space_map(sc->sc_iot, faa->fa_reg[0].addr,
 	    faa->fa_reg[0].size, 0, &sc->sc_d_ioh))
-		panic("%s: ICD bus_space_map failed!", __func__);
+		panic("%s: GICD bus_space_map failed", __func__);
 
-	/* Second row: redistributor */
-	if (bus_space_map(sc->sc_iot, faa->fa_reg[1].addr,
-	    faa->fa_reg[1].size, 0, &sc->sc_redist_base))
-		panic("%s: ICP bus_space_map failed!", __func__);
+	sc->sc_rbase_ioh = mallocarray(sc->sc_num_redist_regions,
+	    sizeof(*sc->sc_rbase_ioh), M_DEVBUF, M_WAITOK);
+	for (idx = 0; idx < sc->sc_num_redist_regions; idx++) {
+		if (bus_space_map(sc->sc_iot, faa->fa_reg[1 + idx].addr,
+		    faa->fa_reg[1 + idx].size, 0, &sc->sc_rbase_ioh[idx]))
+			panic("%s: GICR bus_space_map failed", __func__);
+	}
 
 	typer = bus_space_read_4(sc->sc_iot, sc->sc_d_ioh, GICD_TYPER);
 
@@ -434,13 +443,14 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	agintc_sc = sc; /* save this for global access */
 
 	/* find the redistributors. */
+	idx = 0;
 	offset = 0;
 	redist_stride = OF_getpropint64(faa->fa_node, "redistributor-stride", 0);
-	for (nredist = 0; ; nredist++) {
+	for (nredist = 0; idx < sc->sc_num_redist_regions; nredist++) {
 		uint64_t typer;
 		int32_t sz;
 
-		typer = bus_space_read_8(sc->sc_iot, sc->sc_redist_base,
+		typer = bus_space_read_8(sc->sc_iot, sc->sc_rbase_ioh[idx],
 		    offset + GICR_TYPER);
 
 		if (redist_stride == 0) {
@@ -455,13 +465,14 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 #endif
 
 		offset += sz;
-
-		if (typer & GICR_TYPER_LAST) {
-			sc->sc_num_redist = nredist + 1;
-			break;
+		if (offset >= faa->fa_reg[1 + idx].size ||
+		    typer & GICR_TYPER_LAST) {
+			offset = 0;
+			idx++;
 		}
 	}
 
+	sc->sc_num_redist = nredist;
 	printf(" nirq %d nredist %d", nintr, sc->sc_num_redist);
 	
 	sc->sc_r_ioh = mallocarray(sc->sc_num_redist,
@@ -470,12 +481,13 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	    sizeof(*sc->sc_processor), M_DEVBUF, M_WAITOK);
 
 	/* submap and configure the redistributors. */
+	idx = 0;
 	offset = 0;
 	for (nredist = 0; nredist < sc->sc_num_redist; nredist++) {
 		uint64_t typer;
 		int32_t sz;
 
-		typer = bus_space_read_8(sc->sc_iot, sc->sc_redist_base,
+		typer = bus_space_read_8(sc->sc_iot, sc->sc_rbase_ioh[idx],
 		    offset + GICR_TYPER);
 
 		if (redist_stride == 0) {
@@ -486,7 +498,7 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 			sz = redist_stride;
 
 		affinity = bus_space_read_8(sc->sc_iot,
-		    sc->sc_redist_base, offset + GICR_TYPER) >> 32;
+		    sc->sc_rbase_ioh[idx], offset + GICR_TYPER) >> 32;
 		CPU_INFO_FOREACH(cii, ci) {
 			if (affinity == (((ci->ci_mpidr >> 8) & 0xff000000) |
 			    (ci->ci_mpidr & 0x00ffffff)))
@@ -496,27 +508,32 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 			sc->sc_cpuremap[ci->ci_cpuid] = nredist;
 
 		sc->sc_processor[nredist] = bus_space_read_8(sc->sc_iot,
-		    sc->sc_redist_base, offset + GICR_TYPER) >> 8;
+		    sc->sc_rbase_ioh[idx], offset + GICR_TYPER) >> 8;
 
-		bus_space_subregion(sc->sc_iot, sc->sc_redist_base,
+		bus_space_subregion(sc->sc_iot, sc->sc_rbase_ioh[idx],
 		    offset, sz, &sc->sc_r_ioh[nredist]);
 
 		if (sc->sc_nlpi > 0) {
-			bus_space_write_8(sc->sc_iot, sc->sc_redist_base,
+			bus_space_write_8(sc->sc_iot, sc->sc_rbase_ioh[idx],
 			    offset + GICR_PROPBASER,
 			    AGINTC_DMA_DVA(sc->sc_prop) |
 			    GICR_PROPBASER_ISH | GICR_PROPBASER_IC_NORM_NC |
 			    fls(LPI_BASE + sc->sc_nlpi - 1) - 1);
-			bus_space_write_8(sc->sc_iot, sc->sc_redist_base,
+			bus_space_write_8(sc->sc_iot, sc->sc_rbase_ioh[idx],
 			    offset + GICR_PENDBASER,
 			    AGINTC_DMA_DVA(sc->sc_pend) |
 			    GICR_PENDBASER_ISH | GICR_PENDBASER_IC_NORM_NC |
 			    GICR_PENDBASER_PTZ);
-			bus_space_write_4(sc->sc_iot, sc->sc_redist_base,
+			bus_space_write_4(sc->sc_iot, sc->sc_rbase_ioh[idx],
 			    offset + GICR_CTLR, GICR_CTLR_ENABLE_LPIS);
 		}
 
 		offset += sz;
+		if (offset >= faa->fa_reg[1 + idx].size ||
+		    typer & GICR_TYPER_LAST) {
+			offset = 0;
+			idx++;
+		}
 	}
 
 	/* Disable all interrupts, clear all pending */
@@ -696,7 +713,13 @@ unmap:
 	if (sc->sc_prop)
 		agintc_dmamem_free(sc->sc_dmat, sc->sc_prop);
 
-	bus_space_unmap(sc->sc_iot, sc->sc_redist_base, faa->fa_reg[1].size);
+	for (idx = 0; idx < sc->sc_num_redist_regions; idx++) {
+		bus_space_unmap(sc->sc_iot, sc->sc_rbase_ioh[idx],
+		     faa->fa_reg[1 + idx].size);
+	}
+	free(sc->sc_rbase_ioh, M_DEVBUF,
+	    sc->sc_num_redist_regions * sizeof(*sc->sc_rbase_ioh));
+
 	bus_space_unmap(sc->sc_iot, sc->sc_d_ioh, faa->fa_reg[0].size);
 }
 
@@ -1577,6 +1600,7 @@ struct agintc_msi_softc {
 	struct agintc_dmamem		*sc_dtt;
 	size_t				sc_dtt_pgsz;
 	uint8_t				sc_dte_sz;
+	int				sc_dtt_indirect;
 	int				sc_cidbits;
 	struct agintc_dmamem		*sc_ctt;
 	size_t				sc_ctt_pgsz;
@@ -1599,10 +1623,26 @@ struct cfdriver agintcmsi_cd = {
 void	agintc_msi_send_cmd(struct agintc_msi_softc *, struct gits_cmd *);
 void	agintc_msi_wait_cmd(struct agintc_msi_softc *);
 
+#define CPU_IMPL(midr)  (((midr) >> 24) & 0xff)
+#define CPU_PART(midr)  (((midr) >> 4) & 0xfff)
+
+#define CPU_IMPL_QCOM		0x51
+#define CPU_PART_ORYON		0x001
+
 int
 agintc_msi_match(struct device *parent, void *cfdata, void *aux)
 {
 	struct fdt_attach_args *faa = aux;
+
+	/*
+	 * XXX For some reason MSIs don't work on Qualcomm X1E SoCs in
+	 * ACPI mode.  So skip attaching the ITS in that case.  MSIs
+	 * work fine when booting with a DTB.
+	 */
+	if (OF_is_compatible(OF_peer(0), "openbsd,acpi") &&
+	    CPU_IMPL(curcpu()->ci_midr) == CPU_IMPL_QCOM &&
+	    CPU_PART(curcpu()->ci_midr) == CPU_PART_ORYON)
+		return 0;
 
 	return OF_is_compatible(faa->fa_node, "arm,gic-v3-its");
 }
@@ -1705,11 +1745,19 @@ agintc_msi_attach(struct device *parent, struct device *self, void *aux)
 		size = (1ULL << sc->sc_devbits) * sc->sc_dte_sz;
 		size = roundup(size, sc->sc_dtt_pgsz);
 
-		/* FIXME: For now, skip registering MSI controller */
-		if (size / sc->sc_dtt_pgsz > GITS_BASER_SZ_MASK + 1) {
-			printf(": cannot support %u devbits on %lu pgsz\n",
-			    sc->sc_devbits, sc->sc_dtt_pgsz);
-			return;
+		/* Might make sense to go indirect */
+		if (size > 2 * sc->sc_dtt_pgsz) {
+			bus_space_write_8(sc->sc_iot, sc->sc_ioh, GITS_BASER(i),
+			    baser | GITS_BASER_INDIRECT);
+			if (bus_space_read_8(sc->sc_iot, sc->sc_ioh,
+			    GITS_BASER(i)) & GITS_BASER_INDIRECT)
+				sc->sc_dtt_indirect = 1;
+		}
+		if (sc->sc_dtt_indirect) {
+			size = (1ULL << sc->sc_devbits);
+			size /= (sc->sc_dtt_pgsz / sc->sc_dte_sz);
+			size *= sizeof(uint64_t);
+			size = roundup(size, sc->sc_dtt_pgsz);
 		}
 
 		/* Clamp down to maximum configurable num pages */
@@ -1718,6 +1766,9 @@ agintc_msi_attach(struct device *parent, struct device *self, void *aux)
 
 		/* Calculate max deviceid based off configured size */
 		sc->sc_deviceid_max = (size / sc->sc_dte_sz) - 1;
+		if (sc->sc_dtt_indirect)
+			sc->sc_deviceid_max = ((size / sizeof(uint64_t)) *
+			    (sc->sc_dtt_pgsz / sc->sc_dte_sz)) - 1;
 
 		/* Allocate table. */
 		sc->sc_dtt = agintc_dmamem_alloc(sc->sc_dmat,
@@ -1732,7 +1783,9 @@ agintc_msi_attach(struct device *parent, struct device *self, void *aux)
 		KASSERT((dtt_pa & GITS_BASER_PA_MASK) == dtt_pa);
 		bus_space_write_8(sc->sc_iot, sc->sc_ioh, GITS_BASER(i),
 		    GITS_BASER_IC_NORM_NC | baser & GITS_BASER_PGSZ_MASK | 
-		    dtt_pa | (size / sc->sc_dtt_pgsz) - 1 | GITS_BASER_VALID);
+		    dtt_pa | (size / sc->sc_dtt_pgsz) - 1 |
+		    (sc->sc_dtt_indirect ? GITS_BASER_INDIRECT : 0) |
+		    GITS_BASER_VALID);
 	}
 
 	/* Set up collection translation table. */
@@ -1868,6 +1921,40 @@ agintc_msi_wait_cmd(struct agintc_msi_softc *sc)
 		printf("%s: command queue timeout\n", sc->sc_dev.dv_xname);
 }
 
+int
+agintc_msi_create_device_table(struct agintc_msi_softc *sc, uint32_t deviceid)
+{
+	uint64_t *table = AGINTC_DMA_KVA(sc->sc_dtt);
+	uint32_t idx = deviceid / (sc->sc_dtt_pgsz / sc->sc_dte_sz);
+	struct agintc_dmamem *dtt;
+	paddr_t dtt_pa;
+
+	/* Out of bounds */
+	if (deviceid > sc->sc_deviceid_max)
+		return ENXIO;
+
+	/* No need to adjust */
+	if (!sc->sc_dtt_indirect)
+		return 0;
+
+	/* Table already allocated */
+	if (table[idx])
+		return 0;
+
+	/* FIXME: leaks */
+	dtt = agintc_dmamem_alloc(sc->sc_dmat,
+	    sc->sc_dtt_pgsz, sc->sc_dtt_pgsz);
+	if (dtt == NULL)
+		return ENOMEM;
+
+	dtt_pa = AGINTC_DMA_DVA(dtt);
+	KASSERT((dtt_pa & GITS_BASER_PA_MASK) == dtt_pa);
+	table[idx] = dtt_pa | GITS_BASER_VALID;
+	cpu_dcache_wb_range((vaddr_t)&table[idx], sizeof(table[idx]));
+	__asm volatile("dsb sy");
+	return 0;
+}
+
 struct agintc_msi_device *
 agintc_msi_create_device(struct agintc_msi_softc *sc, uint32_t deviceid)
 {
@@ -1875,6 +1962,9 @@ agintc_msi_create_device(struct agintc_msi_softc *sc, uint32_t deviceid)
 	struct gits_cmd cmd;
 
 	if (deviceid > sc->sc_deviceid_max)
+		return NULL;
+
+	if (agintc_msi_create_device_table(sc, deviceid) != 0)
 		return NULL;
 
 	md = malloc(sizeof(*md), M_DEVBUF, M_ZERO | M_WAITOK);

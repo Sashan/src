@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_interface.c,v 1.30 2024/05/22 14:25:47 jsg Exp $	*/
+/*	$OpenBSD: db_interface.c,v 1.32 2024/11/07 16:02:29 miod Exp $	*/
 /*
  * Mach Operating System
  * Copyright (c) 1993-1991 Carnegie Mellon University
@@ -173,7 +173,7 @@ m88k_db_print_frame(addr, have_addr, count, modif)
 	char *modif;
 {
 	struct trapframe *s = (struct trapframe *)addr;
-	char *name;
+	const char *name;
 	db_expr_t offset;
 #ifdef M88100
 	int suppress1 = 0, suppress2 = 0;
@@ -553,7 +553,7 @@ m88k_db_where(addr, have_addr, count, modif)
 	db_expr_t count;
 	char *modif;
 {
-	char *name;
+	const char *name;
 	db_expr_t offset;
 	vaddr_t l;
 
@@ -642,7 +642,7 @@ m88k_db_cpu_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 		db_printf("%ccpu%d   %02x  %-14s %08lx %08lx %3u %08x\n",
 		    (cpu == cpu_number()) ? '*' : ' ', CPU_INFO_UNIT(ci),
 		    ci->ci_flags, state, (register_t)ci->ci_curproc,
-		    (register_t)ci->ci_curpcb, ci->ci_intrdepth, ci->ci_ipi);
+		    (register_t)ci->ci_curpcb, ci->ci_idepth, ci->ci_ipi);
 	}
 }
 

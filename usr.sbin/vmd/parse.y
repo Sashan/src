@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.69 2024/07/09 09:31:37 dv Exp $	*/
+/*	$OpenBSD: parse.y,v 1.71 2024/09/26 01:45:13 jsg Exp $	*/
 
 /*
  * Copyright (c) 2007-2016 Reyk Floeter <reyk@openbsd.org>
@@ -26,7 +26,6 @@
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/uio.h>
 
 #include <dev/vmm/vmm.h>
 
@@ -37,10 +36,8 @@
 
 #include <agentx.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <limits.h>
 #include <stdarg.h>
-#include <string.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <netdb.h>
@@ -126,7 +123,7 @@ typedef struct {
 %token	FORMAT GROUP
 %token	INET6 INSTANCE INTERFACE LLADDR LOCAL LOCKED MEMORY NET NIFS OWNER
 %token	PATH PREFIX RDOMAIN SIZE SOCKET SWITCH UP VM VMID STAGGERED START
-%token  PARALLEL DELAY
+%token  PARALLEL DELAY SEV
 %token	<v.number>	NUMBER
 %token	<v.string>	STRING
 %type	<v.lladdr>	lladdr
@@ -140,6 +137,7 @@ typedef struct {
 %type	<v.string>	optstring
 %type	<v.string>	string
 %type	<v.string>	vm_instance
+%type	<v.number>	sev;
 
 %%
 
@@ -413,6 +411,9 @@ vm_opts_l	: vm_opts_l vm_opts nl
 
 vm_opts		: disable			{
 			vmc_disable = $1;
+		}
+		| sev				{
+			vcp->vcp_sev = 1;
 		}
 		| DISK string image_format	{
 			if (parse_disk($2, $3) != 0) {
@@ -757,6 +758,9 @@ disable		: ENABLE			{ $$ = 0; }
 		| DISABLE			{ $$ = 1; }
 		;
 
+sev		: SEV				{ $$ = 1; }
+		;
+
 bootdevice	: CDROM				{ $$ = VMBOOTDEV_CDROM; }
 		| DISK				{ $$ = VMBOOTDEV_DISK; }
 		| NET				{ $$ = VMBOOTDEV_NET; }
@@ -841,6 +845,7 @@ lookup(char *s)
 		{ "path",		PATH },
 		{ "prefix",		PREFIX },
 		{ "rdomain",		RDOMAIN },
+		{ "sev",		SEV },
 		{ "size",		SIZE },
 		{ "socket",		SOCKET },
 		{ "staggered",		STAGGERED },

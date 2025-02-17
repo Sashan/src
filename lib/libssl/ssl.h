@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl.h,v 1.240 2024/08/03 04:50:27 tb Exp $ */
+/* $OpenBSD: ssl.h,v 1.245 2024/10/23 01:57:19 jsg Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -187,19 +187,13 @@ extern "C" {
 
 /*    VRS Additional Kerberos5 entries
  */
-#define SSL_TXT_KRB5_DES_64_CBC_SHA   SSL3_TXT_KRB5_DES_64_CBC_SHA
-#define SSL_TXT_KRB5_DES_192_CBC3_SHA SSL3_TXT_KRB5_DES_192_CBC3_SHA
 #define SSL_TXT_KRB5_RC4_128_SHA      SSL3_TXT_KRB5_RC4_128_SHA
 #define SSL_TXT_KRB5_IDEA_128_CBC_SHA SSL3_TXT_KRB5_IDEA_128_CBC_SHA
-#define SSL_TXT_KRB5_DES_64_CBC_MD5   SSL3_TXT_KRB5_DES_64_CBC_MD5
-#define SSL_TXT_KRB5_DES_192_CBC3_MD5 SSL3_TXT_KRB5_DES_192_CBC3_MD5
 #define SSL_TXT_KRB5_RC4_128_MD5      SSL3_TXT_KRB5_RC4_128_MD5
 #define SSL_TXT_KRB5_IDEA_128_CBC_MD5 SSL3_TXT_KRB5_IDEA_128_CBC_MD5
 
-#define SSL_TXT_KRB5_DES_40_CBC_SHA   SSL3_TXT_KRB5_DES_40_CBC_SHA
 #define SSL_TXT_KRB5_RC2_40_CBC_SHA   SSL3_TXT_KRB5_RC2_40_CBC_SHA
 #define SSL_TXT_KRB5_RC4_40_SHA	      SSL3_TXT_KRB5_RC4_40_SHA
-#define SSL_TXT_KRB5_DES_40_CBC_MD5   SSL3_TXT_KRB5_DES_40_CBC_MD5
 #define SSL_TXT_KRB5_RC2_40_CBC_MD5   SSL3_TXT_KRB5_RC2_40_CBC_MD5
 #define SSL_TXT_KRB5_RC4_40_MD5	      SSL3_TXT_KRB5_RC4_40_MD5
 
@@ -1107,9 +1101,7 @@ long SSL_CTX_set_timeout(SSL_CTX *ctx, long t);
 long SSL_CTX_get_timeout(const SSL_CTX *ctx);
 X509_STORE *SSL_CTX_get_cert_store(const SSL_CTX *);
 void SSL_CTX_set_cert_store(SSL_CTX *, X509_STORE *);
-#if defined(LIBRESSL_INTERNAL) || defined(LIBRESSL_NEXT_API)
 void SSL_CTX_set1_cert_store(SSL_CTX *ctx, X509_STORE *store);
-#endif
 X509 *SSL_CTX_get0_certificate(const SSL_CTX *ctx);
 EVP_PKEY *SSL_CTX_get0_privatekey(const SSL_CTX *ctx);
 int SSL_want(const SSL *s);
@@ -1128,9 +1120,7 @@ int SSL_CIPHER_get_cipher_nid(const SSL_CIPHER *c);
 int SSL_CIPHER_get_digest_nid(const SSL_CIPHER *c);
 int SSL_CIPHER_get_kx_nid(const SSL_CIPHER *c);
 int SSL_CIPHER_get_auth_nid(const SSL_CIPHER *c);
-#if defined(LIBRESSL_INTERNAL) || defined(LIBRESSL_NEXT_API)
 const EVP_MD *SSL_CIPHER_get_handshake_digest(const SSL_CIPHER *c);
-#endif
 int SSL_CIPHER_is_aead(const SSL_CIPHER *c);
 
 int	SSL_get_fd(const SSL *s);
@@ -1483,7 +1473,6 @@ const void *SSL_get_current_expansion(SSL *s);
 
 const char *SSL_COMP_get_name(const void *comp);
 void *SSL_COMP_get_compression_methods(void);
-int SSL_COMP_add_compression_method(int id, void *cm);
 
 /* TLS extensions functions */
 int SSL_set_session_ticket_ext(SSL *s, void *ext_data, int ext_len);
@@ -2244,7 +2233,10 @@ void ERR_load_SSL_strings(void);
 #define SSL_R_SSL_SESSION_ID_HAS_BAD_LENGTH		 303
 #define SSL_R_SSL_SESSION_ID_IS_DIFFERENT		 231
 #define SSL_R_SSL_SESSION_ID_TOO_LONG			 408
+#define SSL_R_TLSV13_ALERT_MISSING_EXTENSION		 1109
+#define SSL_R_TLSV13_ALERT_CERTIFICATE_REQUIRED		 1116
 #define SSL_R_TLSV1_ALERT_ACCESS_DENIED			 1049
+#define SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL	 1120
 #define SSL_R_TLSV1_ALERT_DECODE_ERROR			 1050
 #define SSL_R_TLSV1_ALERT_DECRYPTION_FAILED		 1021
 #define SSL_R_TLSV1_ALERT_DECRYPT_ERROR			 1051
@@ -2256,6 +2248,7 @@ void ERR_load_SSL_strings(void);
 #define SSL_R_TLSV1_ALERT_PROTOCOL_VERSION		 1070
 #define SSL_R_TLSV1_ALERT_RECORD_OVERFLOW		 1022
 #define SSL_R_TLSV1_ALERT_UNKNOWN_CA			 1048
+#define SSL_R_TLSV1_ALERT_UNKNOWN_PSK_IDENTITY		 1115
 #define SSL_R_TLSV1_ALERT_USER_CANCELLED		 1090
 #define SSL_R_TLSV1_BAD_CERTIFICATE_HASH_VALUE		 1114
 #define SSL_R_TLSV1_BAD_CERTIFICATE_STATUS_RESPONSE	 1113
@@ -2269,7 +2262,6 @@ void ERR_load_SSL_strings(void);
 #define SSL_R_TLS_INVALID_ECPOINTFORMAT_LIST		 157
 #define SSL_R_TLS_PEER_DID_NOT_RESPOND_WITH_CERTIFICATE_LIST 233
 #define SSL_R_TLS_RSA_ENCRYPTED_VALUE_LENGTH_IS_WRONG	 234
-#define SSL_R_TRIED_TO_USE_UNSUPPORTED_CIPHER		 235
 #define SSL_R_UNABLE_TO_DECODE_DH_CERTS			 236
 #define SSL_R_UNABLE_TO_DECODE_ECDH_CERTS		 313
 #define SSL_R_UNABLE_TO_EXTRACT_PUBLIC_KEY		 237

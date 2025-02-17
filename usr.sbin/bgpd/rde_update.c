@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_update.c,v 1.168 2024/05/30 08:29:30 claudio Exp $ */
+/*	$OpenBSD: rde_update.c,v 1.175 2025/02/04 18:16:56 denis Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -25,6 +25,7 @@
 #include <stdio.h>
 
 #include "bgpd.h"
+#include "session.h"
 #include "rde.h"
 #include "log.h"
 
@@ -89,7 +90,14 @@ up_test_update(struct rde_peer *peer, struct prefix *p)
 			return (0);
 	}
 
-	/* well known communities */
+	/*
+	 * With "transparent-as yes" set do not filter based on
+	 * well-known communities. Instead pass them on to the client.
+	 */
+	if (peer->flags & PEERFLAG_TRANS_AS)
+		return (1);
+
+	/* well-known communities */
 	if (community_match(comm, &comm_no_advertise, NULL))
 		return (0);
 	if (peer->conf.ebgp) {
@@ -158,8 +166,8 @@ up_process_prefix(struct rde_peer *peer, struct prefix *new, struct prefix *p)
 
 	/*
 	 * up_test_update() needs to run before the output filters
-	 * else the well known communities won't work properly.
-	 * The output filters would not be able to add well known
+	 * else the well-known communities won't work properly.
+	 * The output filters would not be able to add well-known
 	 * communities.
 	 */
 	if (!up_test_update(peer, new))
@@ -459,12 +467,21 @@ up_get_nexthop(struct rde_peer *peer, struct filterstate *state, uint8_t aid)
 	switch (aid) {
 	case AID_INET:
 	case AID_VPN_IPv4:
-		if (peer->local_v4_addr.aid == AID_INET)
+		if (peer_has_ext_nexthop(peer, aid) &&
+		    peer->remote_addr.aid == AID_INET6)
+			peer_local = &peer->local_v6_addr;
+		else if (peer->local_v4_addr.aid == AID_INET)
 			peer_local = &peer->local_v4_addr;
 		break;
 	case AID_INET6:
 	case AID_VPN_IPv6:
 		if (peer->local_v6_addr.aid == AID_INET6)
+			peer_local = &peer->local_v6_addr;
+		break;
+	case AID_EVPN:
+		if (peer->local_v4_addr.aid == AID_INET)
+			peer_local = &peer->local_v4_addr;
+		else if (peer->local_v6_addr.aid == AID_INET6)
 			peer_local = &peer->local_v6_addr;
 		break;
 	case AID_FLOWSPECv4:
@@ -617,6 +634,11 @@ up_generate_attr(struct ibuf *buf, struct rde_peer *peer,
 			case AID_INET:
 				if (nh == NULL)
 					return -1;
+				if (nh->exit_nexthop.aid != AID_INET) {
+					if (peer_has_ext_nexthop(peer, aid))
+						break;
+					return -1;
+				}
 				if (attr_writebuf(buf, ATTR_WELL_KNOWN,
 				    ATTR_NEXTHOP, &nh->exit_nexthop.v4,
 				    sizeof(nh->exit_nexthop.v4)) == -1)
@@ -869,7 +891,7 @@ up_generate_mp_reach(struct ibuf *buf, struct rde_peer *peer,
     struct nexthop *nh, uint8_t aid)
 {
 	struct bgpd_addr *nexthop;
-	size_t off;
+	size_t off, nhoff;
 	uint16_t len, afi;
 	uint8_t safi;
 
@@ -890,65 +912,83 @@ up_generate_mp_reach(struct ibuf *buf, struct rde_peer *peer,
 		return -1;
 	if (ibuf_add_n8(buf, safi) == -1)
 		return -1;
+	nhoff = ibuf_size(buf);
+	if (ibuf_add_zero(buf, 1) == -1)
+		return -1;
+
+	if (aid == AID_VPN_IPv4 || aid == AID_VPN_IPv6) {
+		/* write zero rd */
+		if (ibuf_add_zero(buf, sizeof(uint64_t)) == -1)
+			return -1;
+	}
 
 	switch (aid) {
-	case AID_INET6:
-		if (nh == NULL)
-			return -1;
-		/* NH LEN */
-		if (ibuf_add_n8(buf, sizeof(struct in6_addr)) == -1)
-			return -1;
-		/* write nexthop */
-		nexthop = &nh->exit_nexthop;
-		if (ibuf_add(buf, &nexthop->v6, sizeof(struct in6_addr)) == -1)
-			return -1;
-		break;
+	case AID_INET:
 	case AID_VPN_IPv4:
 		if (nh == NULL)
 			return -1;
-		/* NH LEN */
-		if (ibuf_add_n8(buf,
-		    sizeof(uint64_t) + sizeof(struct in_addr)) == -1)
-			return -1;
-		/* write zero rd */
-		if (ibuf_add_zero(buf, sizeof(uint64_t)) == -1)
-			return -1;
-		/* write nexthop */
 		nexthop = &nh->exit_nexthop;
-		if (ibuf_add(buf, &nexthop->v4, sizeof(struct in_addr)) == -1)
+		/* AID_INET must only use this path with an IPv6 nexthop */
+		if (nexthop->aid == AID_INET && aid != AID_INET) {
+			if (ibuf_add(buf, &nexthop->v4,
+			    sizeof(nexthop->v4)) == -1)
+				return -1;
+			break;
+		} else if (nexthop->aid == AID_INET6 &&
+		    peer_has_ext_nexthop(peer, aid)) {
+			if (ibuf_add(buf, &nexthop->v6,
+			    sizeof(nexthop->v6)) == -1)
+				return -1;
+		} else {
+			/* can't encode nexthop, give up and withdraw prefix */
 			return -1;
+		}
 		break;
+	case AID_INET6:
 	case AID_VPN_IPv6:
 		if (nh == NULL)
 			return -1;
-		/* NH LEN */
-		if (ibuf_add_n8(buf,
-		    sizeof(uint64_t) + sizeof(struct in6_addr)) == -1)
-			return -1;
-		/* write zero rd */
-		if (ibuf_add_zero(buf, sizeof(uint64_t)) == -1)
-			return -1;
-		/* write nexthop */
 		nexthop = &nh->exit_nexthop;
-		if (ibuf_add(buf, &nexthop->v6, sizeof(struct in6_addr)) == -1)
+		if (ibuf_add(buf, &nexthop->v6, sizeof(nexthop->v6)) == -1)
 			return -1;
+		break;
+	case AID_EVPN:
+		if (nh == NULL)
+			return -1;
+		nexthop = &nh->exit_nexthop;
+		if (nexthop->aid == AID_INET) {
+			if (ibuf_add(buf, &nexthop->v4,
+			    sizeof(nexthop->v4)) == -1)
+				return -1;
+			break;
+		} else if (nexthop->aid == AID_INET6) {
+			if (ibuf_add(buf, &nexthop->v6,
+			    sizeof(nexthop->v6)) == -1)
+				return -1;
+		} else {
+			/* can't encode nexthop, give up and withdraw prefix */
+			return -1;
+		}
 		break;
 	case AID_FLOWSPECv4:
 	case AID_FLOWSPECv6:
-		if (ibuf_add_zero(buf, 1) == -1) /* NH LEN MUST be 0 */
-			return -1;
 		/* no NH */
 		break;
 	default:
 		fatalx("up_generate_mp_reach: unknown AID");
 	}
 
+	/* update nexthop len */
+	len = ibuf_size(buf) - nhoff - 1;
+	if (ibuf_set_n8(buf, nhoff, len) == -1)
+		return -1;
+
 	if (ibuf_add_zero(buf, 1) == -1) /* Reserved must be 0 */
 		return -1;
 
 	if (up_dump_prefix(buf, &peer->updates[aid], peer, 0) == -1)
 		/* no prefixes written, fail update  */
-		return (-1);
+		return -1;
 
 	/* update MP_REACH attribute length field */
 	len = ibuf_size(buf) - off - sizeof(len);
@@ -983,61 +1023,147 @@ up_generate_mp_reach(struct ibuf *buf, struct rde_peer *peer,
  * how may routes can be added. Return 0 on success -1 on error which
  * includes generating an empty withdraw message.
  */
-int
-up_dump_withdraws(struct ibuf *buf, struct rde_peer *peer, uint8_t aid)
+struct ibuf *
+up_dump_withdraws(struct rde_peer *peer, uint8_t aid)
 {
-	size_t off;
+	struct ibuf *buf;
+	size_t off, pkgsize = MAX_PKTSIZE;
 	uint16_t afi, len;
 	uint8_t safi;
+
+	if (peer_has_ext_msg(peer))
+		pkgsize = MAX_EXT_PKTSIZE;
+
+	if ((buf = ibuf_dynamic(4, pkgsize - MSGSIZE_HEADER)) == NULL)
+		goto fail;
 
 	/* reserve space for the withdrawn routes length field */
 	off = ibuf_size(buf);
 	if (ibuf_add_zero(buf, sizeof(len)) == -1)
-		return -1;
+		goto fail;
 
 	if (aid != AID_INET) {
 		/* reserve space for 2-byte path attribute length */
 		off = ibuf_size(buf);
 		if (ibuf_add_zero(buf, sizeof(len)) == -1)
-			return -1;
+			goto fail;
 
 		/* attribute header, defaulting to extended length one */
 		if (ibuf_add_n8(buf, ATTR_OPTIONAL | ATTR_EXTLEN) == -1)
-			return -1;
+			goto fail;
 		if (ibuf_add_n8(buf, ATTR_MP_UNREACH_NLRI) == -1)
-			return -1;
+			goto fail;
 		if (ibuf_add_zero(buf, sizeof(len)) == -1)
-			return -1;
+			goto fail;
 
 		/* afi & safi */
 		if (aid2afi(aid, &afi, &safi))
-			fatalx("up_dump_mp_unreach: bad AID");
+			fatalx("%s: bad AID", __func__);
 		if (ibuf_add_n16(buf, afi) == -1)
-			return -1;
+			goto fail;
 		if (ibuf_add_n8(buf, safi) == -1)
-			return -1;
+			goto fail;
 	}
 
 	if (up_dump_prefix(buf, &peer->withdraws[aid], peer, 1) == -1)
-		return -1;
+		goto fail;
 
 	/* update length field (either withdrawn routes or attribute length) */
 	len = ibuf_size(buf) - off - sizeof(len);
 	if (ibuf_set_n16(buf, off, len) == -1)
-		return -1;
+		goto fail;
 
 	if (aid != AID_INET) {
 		/* write MP_UNREACH_NLRI attribute length (always extended) */
 		len -= 4; /* skip attribute header */
 		if (ibuf_set_n16(buf, off + sizeof(len) + 2, len) == -1)
-			return -1;
+			goto fail;
 	} else {
 		/* no extra attributes so set attribute len to 0 */
-		if (ibuf_add_zero(buf, sizeof(len)) == -1)
-			return -1;
+		if (ibuf_add_zero(buf, sizeof(len)) == -1) {
+			goto fail;
+		}
 	}
 
-	return 0;
+	return buf;
+
+ fail:
+	/* something went horribly wrong */
+	log_peer_warn(&peer->conf, "generating withdraw failed, peer desynced");
+	ibuf_free(buf);
+	return NULL;
+}
+
+/*
+ * Withdraw a single prefix after an error.
+ */
+static struct ibuf *
+up_dump_withdraw_one(struct rde_peer *peer, struct prefix *p, struct ibuf *buf)
+{
+	size_t off;
+	int has_ap;
+	uint16_t afi, len;
+	uint8_t safi;
+
+	/* reset the buffer and start fresh */
+	ibuf_truncate(buf, 0);
+
+	/* reserve space for the withdrawn routes length field */
+	off = ibuf_size(buf);
+	if (ibuf_add_zero(buf, sizeof(len)) == -1)
+		goto fail;
+
+	if (p->pt->aid != AID_INET) {
+		/* reserve space for 2-byte path attribute length */
+		off = ibuf_size(buf);
+		if (ibuf_add_zero(buf, sizeof(len)) == -1)
+			goto fail;
+
+		/* attribute header, defaulting to extended length one */
+		if (ibuf_add_n8(buf, ATTR_OPTIONAL | ATTR_EXTLEN) == -1)
+			goto fail;
+		if (ibuf_add_n8(buf, ATTR_MP_UNREACH_NLRI) == -1)
+			goto fail;
+		if (ibuf_add_zero(buf, sizeof(len)) == -1)
+			goto fail;
+
+		/* afi & safi */
+		if (aid2afi(p->pt->aid, &afi, &safi))
+			fatalx("%s: bad AID", __func__);
+		if (ibuf_add_n16(buf, afi) == -1)
+			goto fail;
+		if (ibuf_add_n8(buf, safi) == -1)
+			goto fail;
+	}
+
+	has_ap = peer_has_add_path(peer, p->pt->aid, CAPA_AP_SEND);
+	if (pt_writebuf(buf, p->pt, 1, has_ap, p->path_id_tx) == -1)
+		goto fail;
+
+	/* update length field (either withdrawn routes or attribute length) */
+	len = ibuf_size(buf) - off - sizeof(len);
+	if (ibuf_set_n16(buf, off, len) == -1)
+		goto fail;
+
+	if (p->pt->aid != AID_INET) {
+		/* write MP_UNREACH_NLRI attribute length (always extended) */
+		len -= 4; /* skip attribute header */
+		if (ibuf_set_n16(buf, off + sizeof(len) + 2, len) == -1)
+			goto fail;
+	} else {
+		/* no extra attributes so set attribute len to 0 */
+		if (ibuf_add_zero(buf, sizeof(len)) == -1) {
+			goto fail;
+		}
+	}
+
+	return buf;
+
+ fail:
+	/* something went horribly wrong */
+	log_peer_warn(&peer->conf, "generating withdraw failed, peer desynced");
+	ibuf_free(buf);
+	return NULL;
 }
 
 /*
@@ -1046,32 +1172,46 @@ up_dump_withdraws(struct ibuf *buf, struct rde_peer *peer, uint8_t aid)
  * and then tries to add as many prefixes using these attributes.
  * Return 0 on success -1 on error which includes producing an empty message.
  */
-int
-up_dump_update(struct ibuf *buf, struct rde_peer *peer, uint8_t aid)
+struct ibuf *
+up_dump_update(struct rde_peer *peer, uint8_t aid)
 {
+	struct ibuf *buf;
 	struct bgpd_addr addr;
 	struct prefix *p;
-	size_t off;
+	size_t off, pkgsize = MAX_PKTSIZE;
 	uint16_t len;
+	int force_ip4mp = 0;
 
 	p = RB_MIN(prefix_tree, &peer->updates[aid]);
 	if (p == NULL)
-		return -1;
+		return NULL;
+
+	if (peer_has_ext_msg(peer))
+		pkgsize = MAX_EXT_PKTSIZE;
+
+	if (aid == AID_INET && peer_has_ext_nexthop(peer, AID_INET)) {
+		struct nexthop *nh = prefix_nexthop(p);
+		if (nh != NULL && nh->exit_nexthop.aid == AID_INET6)
+			force_ip4mp = 1;
+	}
+
+	if ((buf = ibuf_dynamic(4, pkgsize - MSGSIZE_HEADER)) == NULL)
+		goto fail;
 
 	/* withdrawn routes length field is 0 */
 	if (ibuf_add_zero(buf, sizeof(len)) == -1)
-		return -1;
+		goto fail;
 
 	/* reserve space for 2-byte path attribute length */
 	off = ibuf_size(buf);
 	if (ibuf_add_zero(buf, sizeof(len)) == -1)
-		return -1;
+		goto fail;
 
 	if (up_generate_attr(buf, peer, prefix_aspath(p),
 	    prefix_communities(p), prefix_nexthop(p), aid) == -1)
-		goto fail;
+		goto drop;
 
-	if (aid != AID_INET) {
+	if (aid != AID_INET || force_ip4mp) {
 		/* write mp attribute including nlri */
 
 		/*
@@ -1082,29 +1222,35 @@ up_dump_update(struct ibuf *buf, struct rde_peer *peer, uint8_t aid)
 		 */
 		if (up_generate_mp_reach(buf, peer, prefix_nexthop(p), aid) ==
 		    -1)
-			goto fail;
+			goto drop;
 	}
 
 	/* update attribute length field */
 	len = ibuf_size(buf) - off - sizeof(len);
 	if (ibuf_set_n16(buf, off, len) == -1)
-		return -1;
+		goto fail;
 
-	if (aid == AID_INET) {
+	if (aid == AID_INET && !force_ip4mp) {
 		/* last but not least dump the IPv4 nlri */
 		if (up_dump_prefix(buf, &peer->updates[aid], peer, 0) == -1)
-			goto fail;
+			goto drop;
 	}
 
-	return 0;
+	return buf;
 
-fail:
-	/* Not enough space. Drop prefix, it will never fit. */
+ drop:
+	/* Not enough space. Drop current prefix, it will never fit. */
+	p = RB_MIN(prefix_tree, &peer->updates[aid]);
 	pt_getaddr(p->pt, &addr);
-	log_peer_warnx(&peer->conf, "dump of path attributes failed, "
+	log_peer_warnx(&peer->conf, "generating update failed, "
 	    "prefix %s/%d dropped", log_addr(&addr), p->pt->prefixlen);
 
 	up_prefix_free(&peer->updates[aid], p, peer, 0);
-	/* XXX should probably send a withdraw for this prefix */
-	return -1;
+	return up_dump_withdraw_one(peer, p, buf);
+
+ fail:
+	/* something went horribly wrong */
+	log_peer_warn(&peer->conf, "generating update failed, peer desynced");
+	ibuf_free(buf);
+	return NULL;
 }

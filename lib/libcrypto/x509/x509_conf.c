@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_conf.c,v 1.18 2024/06/24 06:32:04 tb Exp $ */
+/* $OpenBSD: x509_conf.c,v 1.27 2024/08/31 10:04:50 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -66,6 +66,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include "conf_local.h"
 #include "x509_local.h"
 
 static int v3_check_critical(const char **value);
@@ -74,18 +75,11 @@ static X509_EXTENSION *do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid,
     int crit, const char *value);
 static X509_EXTENSION *v3_generic_extension(const char *ext, const char *value,
     int crit, int type, X509V3_CTX *ctx);
-static char *conf_lhash_get_string(void *db, const char *section,
-    const char *value);
-static STACK_OF(CONF_VALUE) *conf_lhash_get_section(void *db,
-    const char *section);
 static X509_EXTENSION *do_ext_i2d(const X509V3_EXT_METHOD *method, int nid,
     int crit, void *ext_struct);
 static unsigned char *generic_asn1(const char *value, X509V3_CTX *ctx,
     long *ext_len);
 
-/* CONF *conf:  Config file    */
-/* char *name:  Name    */
-/* char *value:  Value    */
 X509_EXTENSION *
 X509V3_EXT_nconf(CONF *conf, X509V3_CTX *ctx, const char *name,
     const char *value)
@@ -106,11 +100,8 @@ X509V3_EXT_nconf(CONF *conf, X509V3_CTX *ctx, const char *name,
 }
 LCRYPTO_ALIAS(X509V3_EXT_nconf);
 
-/* CONF *conf:  Config file    */
-/* char *value:  Value    */
 X509_EXTENSION *
-X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int nid,
-    const char *value)
+X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int nid, const char *value)
 {
 	int crit;
 	int ext_type;
@@ -123,11 +114,8 @@ X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int nid,
 }
 LCRYPTO_ALIAS(X509V3_EXT_nconf_nid);
 
-/* CONF *conf:  Config file    */
-/* char *value:  Value    */
 static X509_EXTENSION *
-do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid, int crit,
-    const char *value)
+do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid, int crit, const char *value)
 {
 	const X509V3_EXT_METHOD *method;
 	X509_EXTENSION *ext;
@@ -163,7 +151,7 @@ do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid, int crit,
 	} else if (method->s2i) {
 		ext_struct = method->s2i(method, ctx, value);
 	} else if (method->r2i) {
-		if (!ctx->db || !ctx->db_meth) {
+		if (ctx->db == NULL) {
 			X509V3error(X509V3_R_NO_CONFIG_DATABASE);
 			return NULL;
 		}
@@ -232,7 +220,6 @@ do_ext_i2d(const X509V3_EXT_METHOD *method, int nid, int crit,
 }
 
 /* Given an internal structure, nid and critical flag create an extension */
-
 X509_EXTENSION *
 X509V3_EXT_i2d(int nid, int crit, void *ext_struct)
 {
@@ -347,7 +334,8 @@ generic_asn1(const char *value, X509V3_CTX *ctx, long *ext_len)
 	return ext_der;
 }
 
-/* This is the main function: add a bunch of extensions based on a config file
+/*
+ * This is the main function: add a bunch of extensions based on a config file
  * section to an extension STACK.
  */
 
@@ -374,8 +362,6 @@ X509V3_EXT_add_nconf_sk(CONF *conf, X509V3_CTX *ctx, const char *section,
 }
 LCRYPTO_ALIAS(X509V3_EXT_add_nconf_sk);
 
-/* Convenience functions to add extensions to a certificate, CRL and request */
-
 int
 X509V3_EXT_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
     X509 *cert)
@@ -388,8 +374,6 @@ X509V3_EXT_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
 }
 LCRYPTO_ALIAS(X509V3_EXT_add_nconf);
 
-/* Same as above but for a CRL */
-
 int
 X509V3_EXT_CRL_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
     X509_CRL *crl)
@@ -401,8 +385,6 @@ X509V3_EXT_CRL_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
 	return X509V3_EXT_add_nconf_sk(conf, ctx, section, sk);
 }
 LCRYPTO_ALIAS(X509V3_EXT_CRL_add_nconf);
-
-/* Add extensions to certificate request */
 
 int
 X509V3_EXT_REQ_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
@@ -422,73 +404,25 @@ X509V3_EXT_REQ_add_nconf(CONF *conf, X509V3_CTX *ctx, const char *section,
 }
 LCRYPTO_ALIAS(X509V3_EXT_REQ_add_nconf);
 
-/* Config database functions */
-
-char *
-X509V3_get_string(X509V3_CTX *ctx, const char *name, const char *section)
-{
-	if (!ctx->db || !ctx->db_meth || !ctx->db_meth->get_string) {
-		X509V3error(X509V3_R_OPERATION_NOT_DEFINED);
-		return NULL;
-	}
-	return ctx->db_meth->get_string(ctx->db, name, section);
-}
-LCRYPTO_ALIAS(X509V3_get_string);
-
 STACK_OF(CONF_VALUE) *
 X509V3_get_section(X509V3_CTX *ctx, const char *section)
 {
-	if (!ctx->db || !ctx->db_meth || !ctx->db_meth->get_section) {
+	if (ctx->db == NULL) {
 		X509V3error(X509V3_R_OPERATION_NOT_DEFINED);
 		return NULL;
 	}
-	return ctx->db_meth->get_section(ctx->db, section);
+	return NCONF_get_section(ctx->db, section);
 }
-LCRYPTO_ALIAS(X509V3_get_section);
-
-void
-X509V3_string_free(X509V3_CTX *ctx, char *str)
-{
-	if (!str)
-		return;
-	if (ctx->db_meth->free_string)
-		ctx->db_meth->free_string(ctx->db, str);
-}
-LCRYPTO_ALIAS(X509V3_string_free);
 
 void
 X509V3_section_free(X509V3_CTX *ctx, STACK_OF(CONF_VALUE) *section)
 {
-	if (!section)
-		return;
-	if (ctx->db_meth->free_section)
-		ctx->db_meth->free_section(ctx->db, section);
+	return;
 }
-LCRYPTO_ALIAS(X509V3_section_free);
-
-static char *
-nconf_get_string(void *db, const char *section, const char *value)
-{
-	return NCONF_get_string(db, section, value);
-}
-
-static STACK_OF(CONF_VALUE) *
-nconf_get_section(void *db, const char *section)
-{
-	return NCONF_get_section(db, section);
-}
-
-static X509V3_CONF_METHOD nconf_method = {
-	nconf_get_string,
-	nconf_get_section,
-	NULL,
-	NULL
-};
 
 void
 X509V3_set_nconf(X509V3_CTX *ctx, CONF *conf)
 {
-	ctx->db_meth = &nconf_method;
 	ctx->db = conf;
 }
 LCRYPTO_ALIAS(X509V3_set_nconf);
@@ -505,8 +439,6 @@ X509V3_set_ctx(X509V3_CTX *ctx, X509 *issuer, X509 *subj, X509_REQ *req,
 }
 LCRYPTO_ALIAS(X509V3_set_ctx);
 
-/* Old conf compatibility functions */
-
 X509_EXTENSION *
 X509V3_EXT_conf(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, const char *name,
     const char *value)
@@ -518,8 +450,6 @@ X509V3_EXT_conf(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, const char *name,
 }
 LCRYPTO_ALIAS(X509V3_EXT_conf);
 
-/* LHASH *conf:  Config file    */
-/* char *value:  Value    */
 X509_EXTENSION *
 X509V3_EXT_conf_nid(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, int nid,
     const char *value)
@@ -530,67 +460,3 @@ X509V3_EXT_conf_nid(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, int nid,
 	return X509V3_EXT_nconf_nid(&ctmp, ctx, nid, value);
 }
 LCRYPTO_ALIAS(X509V3_EXT_conf_nid);
-
-static char *
-conf_lhash_get_string(void *db, const char *section, const char *value)
-{
-	return CONF_get_string(db, section, value);
-}
-
-static STACK_OF(CONF_VALUE) *
-conf_lhash_get_section(void *db, const char *section)
-{
-	return CONF_get_section(db, section);
-}
-
-static X509V3_CONF_METHOD conf_lhash_method = {
-	conf_lhash_get_string,
-	conf_lhash_get_section,
-	NULL,
-	NULL
-};
-
-void
-X509V3_set_conf_lhash(X509V3_CTX *ctx, LHASH_OF(CONF_VALUE) *lhash)
-{
-	ctx->db_meth = &conf_lhash_method;
-	ctx->db = lhash;
-}
-LCRYPTO_ALIAS(X509V3_set_conf_lhash);
-
-int
-X509V3_EXT_add_conf(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx,
-    const char *section, X509 *cert)
-{
-	CONF ctmp;
-
-	CONF_set_nconf(&ctmp, conf);
-	return X509V3_EXT_add_nconf(&ctmp, ctx, section, cert);
-}
-LCRYPTO_ALIAS(X509V3_EXT_add_conf);
-
-/* Same as above but for a CRL */
-
-int
-X509V3_EXT_CRL_add_conf(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx,
-    const char *section, X509_CRL *crl)
-{
-	CONF ctmp;
-
-	CONF_set_nconf(&ctmp, conf);
-	return X509V3_EXT_CRL_add_nconf(&ctmp, ctx, section, crl);
-}
-LCRYPTO_ALIAS(X509V3_EXT_CRL_add_conf);
-
-/* Add extensions to certificate request */
-
-int
-X509V3_EXT_REQ_add_conf(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx,
-    const char *section, X509_REQ *req)
-{
-	CONF ctmp;
-
-	CONF_set_nconf(&ctmp, conf);
-	return X509V3_EXT_REQ_add_nconf(&ctmp, ctx, section, req);
-}
-LCRYPTO_ALIAS(X509V3_EXT_REQ_add_conf);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_vnops.c,v 1.201 2024/07/06 09:53:25 jsg Exp $	*/
+/*	$OpenBSD: nfs_vnops.c,v 1.206 2024/11/05 06:03:19 jsg Exp $	*/
 /*	$NetBSD: nfs_vnops.c,v 1.62.4.1 1996/07/08 20:26:52 jtc Exp $	*/
 
 /*
@@ -540,6 +540,7 @@ nfsm_loadattr(struct nfsm_info *infop, struct vnode **vpp, struct vattr *vap)
 	error = nfs_loadattrcache(&ttvp, &infop->nmi_md, &infop->nmi_dpos, vap);
 	if (error != 0) {
 		m_freem(infop->nmi_mrep);
+		infop->nmi_mrep = NULL;
 		*infop->nmi_errorp = error;
 		return error;
 	}
@@ -652,7 +653,7 @@ nfs_setattr(void *v)
 			tsize = np->n_size;
 			np->n_size = np->n_vattr.va_size = vap->va_size;
 			uvm_vnp_setsize(vp, np->n_size);
-		};
+		}
 	} else if ((vap->va_mtime.tv_nsec != VNOVAL ||
 		vap->va_atime.tv_nsec != VNOVAL) &&
 		vp->v_type == VREG &&
@@ -781,6 +782,7 @@ nfsm_getfh(struct nfsm_info *infop, int *sizep, int v3)
 		size = fxdr_unsigned(int, *tl);
 		if (size <= 0 || size > NFSX_V3FHMAX) {
 			m_freem(infop->nmi_mrep);
+			infop->nmi_mrep = NULL;
 			*infop->nmi_errorp = EBADRPC;
 			return NULL;
 		}
@@ -1400,6 +1402,7 @@ nfsm_mtofh(struct nfsm_info *infop, struct vnode *dvp, struct vnode **vpp,
 		error = nfs_nget(dvp->v_mount, ttfhp, ttfhsize, &ttnp);
 		if (error != 0) {
 			m_freem(infop->nmi_mrep);
+			infop->nmi_mrep = NULL;
 			*infop->nmi_errorp = error;
 			return error;
 		}
@@ -2259,6 +2262,11 @@ nfs_readdir(void *v)
 
 			dp->d_reclen -= NFS_DIRENT_OVERHEAD;
 			dp->d_off = fxdr_hyper(&ndp->cookie[0]);
+
+			if (memchr(dp->d_name, '/', dp->d_namlen) != NULL) {
+				error = EBADRPC;
+				break;
+			}
 
 			if (uio->uio_resid < dp->d_reclen) {
 				eof = 0;
@@ -3279,6 +3287,7 @@ nfs_advlock(void *v)
 int
 nfs_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
@@ -3290,6 +3299,7 @@ nfs_print(void *v)
 		fifo_printinfo(vp);
 #endif
 	printf("\n");
+#endif
 	return (0);
 }
 
@@ -3506,7 +3516,7 @@ nfsspec_close(void *v)
 		np->n_flag |= NCHG;
 		if (vp->v_usecount == 1 &&
 		    (vp->v_mount->mnt_flag & MNT_RDONLY) == 0) {
-			VATTR_NULL(&vattr);
+			vattr_null(&vattr);
 			if (np->n_flag & NACC)
 				vattr.va_atime = np->n_atim;
 			if (np->n_flag & NUPD)
@@ -3575,7 +3585,7 @@ nfsfifo_close(void *v)
 		np->n_flag |= NCHG;
 		if (vp->v_usecount == 1 &&
 		    (vp->v_mount->mnt_flag & MNT_RDONLY) == 0) {
-			VATTR_NULL(&vattr);
+			vattr_null(&vattr);
 			if (np->n_flag & NACC)
 				vattr.va_atime = np->n_atim;
 			if (np->n_flag & NUPD)

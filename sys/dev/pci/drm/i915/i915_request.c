@@ -52,7 +52,6 @@
 struct execute_cb {
 	struct irq_work work;
 	struct i915_sw_fence *fence;
-	struct i915_request *signal;
 };
 
 static struct pool slab_requests;
@@ -326,7 +325,7 @@ __rq_watchdog_expired(void *arg)
 
 	if (!i915_request_completed(rq)) {
 		if (llist_add(&rq->watchdog.link, &gt->watchdog.list))
-			schedule_work(&gt->watchdog.work);
+			queue_work(gt->i915->unordered_wq, &gt->watchdog.work);
 	} else {
 		i915_request_put(rq);
 	}

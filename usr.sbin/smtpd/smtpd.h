@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.686 2024/06/02 23:26:39 jsg Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.688 2024/09/03 12:07:40 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -55,7 +55,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "7.5.0"
+#define	SMTPD_VERSION		 "7.6.0"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -1125,6 +1125,7 @@ struct filter_config {
 
 enum filter_status {
 	FILTER_PROCEED,
+	FILTER_REPORT,
 	FILTER_REWRITE,
 	FILTER_REJECT,
 	FILTER_DISCONNECT,

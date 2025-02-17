@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_tun.c,v 1.240 2023/12/23 10:52:54 bluhm Exp $	*/
+/*	$OpenBSD: if_tun.c,v 1.250 2024/12/30 02:46:00 guenther Exp $	*/
 /*	$NetBSD: if_tun.c,v 1.24 1996/05/07 02:40:48 thorpej Exp $	*/
 
 /*
@@ -88,6 +88,7 @@ struct tun_softc {
 	struct sigio_ref	sc_sigio;	/* async I/O registration */
 	unsigned int		sc_flags;	/* misc flags */
 #define TUN_DEAD			(1 << 16)
+#define TUN_HDR				(1 << 17)
 
 	dev_t			sc_dev;
 	struct refcnt		sc_refs;
@@ -101,8 +102,15 @@ int	tundebug = TUN_DEBUG;
 #define TUNDEBUG(a)	/* (tundebug? printf a : 0) */
 #endif
 
-/* Only these IFF flags are changeable by TUNSIFINFO */
-#define TUN_IFF_FLAGS (IFF_UP|IFF_POINTOPOINT|IFF_MULTICAST|IFF_BROADCAST)
+/* Pretend that these IFF flags are changeable by TUNSIFINFO */
+#define TUN_IFF_FLAGS (IFF_POINTOPOINT|IFF_MULTICAST|IFF_BROADCAST)
+
+#define TUN_IF_CAPS ( \
+	IFCAP_CSUM_IPv4 | \
+	IFCAP_CSUM_TCPv4|IFCAP_CSUM_UDPv4|IFCAP_CSUM_TCPv6|IFCAP_CSUM_UDPv6 | \
+	IFCAP_VLAN_MTU|IFCAP_VLAN_HWTAGGING|IFCAP_VLAN_HWOFFLOAD | \
+	IFCAP_TSOv4|IFCAP_TSOv6|IFCAP_LRO \
+)
 
 void	tunattach(int);
 
@@ -123,7 +131,6 @@ int	tap_clone_create(struct if_clone *, int);
 int	tun_create(struct if_clone *, int, int);
 int	tun_clone_destroy(struct ifnet *);
 void	tun_wakeup(struct tun_softc *);
-int	tun_init(struct tun_softc *);
 void	tun_start(struct ifnet *);
 int	filt_tunread(struct knote *, long);
 int	filt_tunwrite(struct knote *, long);
@@ -497,10 +504,11 @@ tun_dev_close(dev_t dev, struct proc *p)
 	 */
 	NET_LOCK();
 	CLR(ifp->if_flags, IFF_UP | IFF_RUNNING);
+	CLR(ifp->if_capabilities, TUN_IF_CAPS);
 	NET_UNLOCK();
 	ifq_purge(&ifp->if_snd);
 
-	CLR(sc->sc_flags, TUN_ASYNC);
+	CLR(sc->sc_flags, TUN_ASYNC|TUN_HDR);
 	sigio_free(&sc->sc_sigio);
 
 	if (!ISSET(sc->sc_flags, TUN_DEAD)) {
@@ -523,61 +531,6 @@ tun_dev_close(dev_t dev, struct proc *p)
 	return (error);
 }
 
-int
-tun_init(struct tun_softc *sc)
-{
-	struct ifnet	*ifp = &sc->sc_if;
-	struct ifaddr	*ifa;
-
-	TUNDEBUG(("%s: tun_init\n", ifp->if_xname));
-
-	ifp->if_flags |= IFF_UP | IFF_RUNNING;
-
-	sc->sc_flags &= ~(TUN_IASET|TUN_DSTADDR|TUN_BRDADDR);
-	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-		if (ifa->ifa_addr->sa_family == AF_INET) {
-			struct sockaddr_in *sin;
-
-			sin = satosin(ifa->ifa_addr);
-			if (sin && sin->sin_addr.s_addr)
-				sc->sc_flags |= TUN_IASET;
-
-			if (ifp->if_flags & IFF_POINTOPOINT) {
-				sin = satosin(ifa->ifa_dstaddr);
-				if (sin && sin->sin_addr.s_addr)
-					sc->sc_flags |= TUN_DSTADDR;
-			} else
-				sc->sc_flags &= ~TUN_DSTADDR;
-
-			if (ifp->if_flags & IFF_BROADCAST) {
-				sin = satosin(ifa->ifa_broadaddr);
-				if (sin && sin->sin_addr.s_addr)
-					sc->sc_flags |= TUN_BRDADDR;
-			} else
-				sc->sc_flags &= ~TUN_BRDADDR;
-		}
-#ifdef INET6
-		if (ifa->ifa_addr->sa_family == AF_INET6) {
-			struct sockaddr_in6 *sin6;
-
-			sin6 = satosin6(ifa->ifa_addr);
-			if (!IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr))
-				sc->sc_flags |= TUN_IASET;
-
-			if (ifp->if_flags & IFF_POINTOPOINT) {
-				sin6 = satosin6(ifa->ifa_dstaddr);
-				if (sin6 &&
-				    !IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr))
-					sc->sc_flags |= TUN_DSTADDR;
-			} else
-				sc->sc_flags &= ~TUN_DSTADDR;
-		}
-#endif /* INET6 */
-	}
-
-	return (0);
-}
-
 /*
  * Process an ioctl request.
  */
@@ -590,8 +543,8 @@ tun_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 	switch (cmd) {
 	case SIOCSIFADDR:
-		tun_init(sc);
-		break;
+		SET(ifp->if_flags, IFF_UP);
+		/* FALLTHROUGH */
 	case SIOCSIFFLAGS:
 		if (ISSET(ifp->if_flags, IFF_UP))
 			SET(ifp->if_flags, IFF_RUNNING);
@@ -599,10 +552,6 @@ tun_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			CLR(ifp->if_flags, IFF_RUNNING);
 		break;
 
-	case SIOCSIFDSTADDR:
-		tun_init(sc);
-		TUNDEBUG(("%s: destination address set\n", ifp->if_xname));
-		break;
 	case SIOCSIFMTU:
 		if (ifr->ifr_mtu < ETHERMIN || ifr->ifr_mtu > TUNMRU)
 			error = EINVAL;
@@ -687,6 +636,64 @@ tapioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	return (tun_dev_ioctl(dev, cmd, data));
 }
 
+static int
+tun_set_capabilities(struct tun_softc *sc, const struct tun_capabilities *cap)
+{
+	if (ISSET(cap->tun_if_capabilities, ~TUN_IF_CAPS))
+		return (EINVAL);
+
+	KERNEL_ASSERT_LOCKED();
+	SET(sc->sc_flags, TUN_HDR);
+
+	NET_LOCK();
+	CLR(sc->sc_if.if_capabilities, TUN_IF_CAPS);
+	SET(sc->sc_if.if_capabilities, cap->tun_if_capabilities);
+	NET_UNLOCK();
+	return (0);
+}
+
+static int
+tun_get_capabilities(struct tun_softc *sc, struct tun_capabilities *cap)
+{
+	int error = 0;
+
+	NET_LOCK_SHARED();
+	if (ISSET(sc->sc_flags, TUN_HDR)) {
+		cap->tun_if_capabilities =
+		    (sc->sc_if.if_capabilities & TUN_IF_CAPS);
+	} else
+		error = ENODEV;
+	NET_UNLOCK_SHARED();
+
+	return (error);
+}
+
+static int
+tun_del_capabilities(struct tun_softc *sc)
+{
+	NET_LOCK();
+	CLR(sc->sc_if.if_capabilities, TUN_IF_CAPS);
+	NET_UNLOCK();
+
+	KERNEL_ASSERT_LOCKED();
+	CLR(sc->sc_flags, TUN_HDR);
+
+	return (0);
+}
+
+static int
+tun_hdatalen(struct tun_softc *sc)
+{
+	struct ifnet		*ifp = &sc->sc_if;
+	int			 len;
+
+	len = ifq_hdatalen(&ifp->if_snd);
+	if (len > 0 && ISSET(sc->sc_flags, TUN_HDR))
+		len += sizeof(struct tun_hdr);
+
+	return (len);
+}
+
 int
 tun_dev_ioctl(dev_t dev, u_long cmd, void *data)
 {
@@ -709,17 +716,18 @@ tun_dev_ioctl(dev_t dev, u_long cmd, void *data)
 			error = EINVAL;
 			break;
 		}
+		if (tunp->flags != (sc->sc_if.if_flags & TUN_IFF_FLAGS)) {
+			error = EINVAL;
+			break;
+		}
 		sc->sc_if.if_mtu = tunp->mtu;
-		sc->sc_if.if_flags =
-		    (tunp->flags & TUN_IFF_FLAGS) |
-		    (sc->sc_if.if_flags & ~TUN_IFF_FLAGS);
 		sc->sc_if.if_baudrate = tunp->baudrate;
 		break;
 	case TUNGIFINFO:
 		tunp = (struct tuninfo *)data;
 		tunp->mtu = sc->sc_if.if_mtu;
 		tunp->type = sc->sc_if.if_type;
-		tunp->flags = sc->sc_if.if_flags;
+		tunp->flags = sc->sc_if.if_flags & TUN_IFF_FLAGS;
 		tunp->baudrate = sc->sc_if.if_baudrate;
 		break;
 #ifdef TUN_DEBUG
@@ -731,20 +739,24 @@ tun_dev_ioctl(dev_t dev, u_long cmd, void *data)
 		break;
 #endif
 	case TUNSIFMODE:
-		switch (*(int *)data & (IFF_POINTOPOINT|IFF_BROADCAST)) {
-		case IFF_POINTOPOINT:
-		case IFF_BROADCAST:
-			sc->sc_if.if_flags &= ~TUN_IFF_FLAGS;
-			sc->sc_if.if_flags |= *(int *)data & TUN_IFF_FLAGS;
-			break;
-		default:
+		if (*(int *)data != (sc->sc_if.if_flags & TUN_IFF_FLAGS)) {
 			error = EINVAL;
 			break;
 		}
 		break;
 
-	case FIONBIO:
+	case TUNSCAP:
+		error = tun_set_capabilities(sc,
+		    (const struct tun_capabilities *)data);
 		break;
+	case TUNGCAP:
+		error = tun_get_capabilities(sc,
+		    (struct tun_capabilities *)data);
+		break;
+	case TUNDCAP:
+		error = tun_del_capabilities(sc);
+		break;
+
 	case FIOASYNC:
 		if (*(int *)data)
 			sc->sc_flags |= TUN_ASYNC;
@@ -752,7 +764,7 @@ tun_dev_ioctl(dev_t dev, u_long cmd, void *data)
 			sc->sc_flags &= ~TUN_ASYNC;
 		break;
 	case FIONREAD:
-		*(int *)data = ifq_hdatalen(&sc->sc_if.if_snd);
+		*(int *)data = tun_hdatalen(sc);
 		break;
 	case FIOSETOWN:
 	case TIOCSPGRP:
@@ -810,6 +822,7 @@ tun_dev_read(dev_t dev, struct uio *uio, int ioflag)
 	struct tun_softc	*sc;
 	struct ifnet		*ifp;
 	struct mbuf		*m, *m0;
+	size_t			 len;
 	int			 error = 0;
 
 	sc = tun_get(dev);
@@ -828,9 +841,46 @@ tun_dev_read(dev_t dev, struct uio *uio, int ioflag)
 		bpf_mtap(ifp->if_bpf, m0, BPF_DIRECTION_OUT);
 #endif
 
+	if (ISSET(sc->sc_flags, TUN_HDR)) {
+		struct tun_hdr th;
+
+		KASSERT(ISSET(m0->m_flags, M_PKTHDR));
+
+		th.th_flags = 0;
+		if (ISSET(m0->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT))
+			SET(th.th_flags, TUN_H_IPV4_CSUM);
+		if (ISSET(m0->m_pkthdr.csum_flags, M_TCP_CSUM_OUT))
+			SET(th.th_flags, TUN_H_TCP_CSUM);
+		if (ISSET(m0->m_pkthdr.csum_flags, M_UDP_CSUM_OUT))
+			SET(th.th_flags, TUN_H_UDP_CSUM);
+		if (ISSET(m0->m_pkthdr.csum_flags, M_ICMP_CSUM_OUT))
+			SET(th.th_flags, TUN_H_ICMP_CSUM);
+
+		th.th_pad = 0;
+
+		th.th_vtag = 0;
+		if (ISSET(m0->m_flags, M_VLANTAG)) {
+			SET(th.th_flags, TUN_H_VTAG);
+			th.th_vtag = m0->m_pkthdr.ether_vtag;
+		}
+
+		th.th_mss = 0;
+		if (ISSET(m0->m_pkthdr.csum_flags, M_TCP_TSO)) {
+			SET(th.th_flags, TUN_H_TCP_MSS);
+			th.th_mss = m0->m_pkthdr.ph_mss;
+		}
+
+		len = ulmin(uio->uio_resid, sizeof(th));
+		if (len > 0) {
+			error = uiomove(&th, len, uio);
+			if (error != 0)
+				goto free;
+		}
+	}
+
 	m = m0;
 	while (uio->uio_resid > 0) {
-		size_t len = ulmin(uio->uio_resid, m->m_len);
+		len = ulmin(uio->uio_resid, m->m_len);
 		if (len > 0) {
 			error = uiomove(mtod(m, void *), len, uio);
 			if (error != 0)
@@ -842,6 +892,7 @@ tun_dev_read(dev_t dev, struct uio *uio, int ioflag)
 			break;
 	}
 
+free:
 	m_freem(m0);
 
 put:
@@ -869,9 +920,11 @@ tun_dev_write(dev_t dev, struct uio *uio, int ioflag, int align)
 {
 	struct tun_softc	*sc;
 	struct ifnet		*ifp;
-	struct mbuf		*m0;
+	struct mbuf		*m0, *m, *n;
 	int			error = 0;
-	size_t			mlen;
+	size_t			len, alen, mlen;
+	size_t			hlen;
+	struct tun_hdr		th;
 
 	sc = tun_get(dev);
 	if (sc == NULL)
@@ -879,35 +932,113 @@ tun_dev_write(dev_t dev, struct uio *uio, int ioflag, int align)
 
 	ifp = &sc->sc_if;
 
-	if (uio->uio_resid < ifp->if_hdrlen ||
-	    uio->uio_resid > (ifp->if_hdrlen + ifp->if_hardmtu)) {
+	hlen = ifp->if_hdrlen;
+	if (ISSET(sc->sc_flags, TUN_HDR))
+		hlen += sizeof(th);
+	if (uio->uio_resid < hlen ||
+	    uio->uio_resid > (hlen + MAXMCLBYTES)) {
 		error = EMSGSIZE;
 		goto put;
 	}
-
-	align += max_linkhdr;
-	mlen = align + uio->uio_resid;
 
 	m0 = m_gethdr(M_DONTWAIT, MT_DATA);
 	if (m0 == NULL) {
 		error = ENOMEM;
 		goto put;
 	}
-	if (mlen > MHLEN) {
-		m_clget(m0, M_DONTWAIT, mlen);
-		if (!ISSET(m0->m_flags, M_EXT)) {
-			error = ENOMEM;
+
+	if (ISSET(sc->sc_flags, TUN_HDR)) {
+		error = uiomove(&th, sizeof(th), uio);
+		if (error != 0)
 			goto drop;
+
+		if (ISSET(th.th_flags, TUN_H_IPV4_CSUM)) {
+			SET(m0->m_pkthdr.csum_flags,
+			    M_IPV4_CSUM_OUT | M_IPV4_CSUM_IN_OK);
+		}
+
+		switch (th.th_flags &
+		    (TUN_H_TCP_CSUM|TUN_H_UDP_CSUM|TUN_H_ICMP_CSUM)) {
+		case 0:
+			break;
+		case TUN_H_TCP_CSUM:
+			SET(m0->m_pkthdr.csum_flags,
+			    M_TCP_CSUM_OUT | M_TCP_CSUM_IN_OK);
+			break;
+		case TUN_H_UDP_CSUM:
+			SET(m0->m_pkthdr.csum_flags,
+			    M_UDP_CSUM_OUT | M_UDP_CSUM_IN_OK);
+			break;
+		case TUN_H_ICMP_CSUM:
+			SET(m0->m_pkthdr.csum_flags,
+			    M_ICMP_CSUM_OUT | M_ICMP_CSUM_IN_OK);
+			break;
+		default:
+			error = EINVAL;
+			goto drop;
+		}
+
+		if (ISSET(th.th_flags, TUN_H_VTAG)) {
+			if (!ISSET(sc->sc_flags, TUN_LAYER2)) {
+				error = EINVAL;
+				goto drop;
+			}
+			SET(m0->m_flags, M_VLANTAG);
+			m0->m_pkthdr.ether_vtag = th.th_vtag;
+		}
+
+		if (ISSET(th.th_flags, TUN_H_TCP_MSS)) {
+			SET(m0->m_pkthdr.csum_flags, M_TCP_TSO);
+			m0->m_pkthdr.ph_mss = th.th_mss;
 		}
 	}
 
-	m_align(m0, mlen);
-	m0->m_pkthdr.len = m0->m_len = mlen;
-	m_adj(m0, align);
+	align += roundup(max_linkhdr, sizeof(long));
+	mlen = MHLEN; /* how much space in the mbuf */
 
-	error = uiomove(mtod(m0, void *), m0->m_len, uio);
-	if (error != 0)
-		goto drop;
+	len = uio->uio_resid;
+	m0->m_pkthdr.len = len;
+
+	m = m0;
+	for (;;) {
+		alen = align + len; /* what we want to put in this mbuf */
+		if (alen > mlen) {
+			if (alen > MAXMCLBYTES)
+				alen = MAXMCLBYTES;
+			m_clget(m, M_DONTWAIT, alen);
+			if (!ISSET(m->m_flags, M_EXT)) {
+				error = ENOMEM;
+				goto put;
+			}
+		}
+
+		m->m_len = alen;
+		if (align > 0) {
+			/* avoid m_adj to protect m0->m_pkthdr.len */
+			m->m_data += align;
+			m->m_len -= align;
+		}
+
+		error = uiomove(mtod(m, void *), m->m_len, uio);
+		if (error != 0)
+			goto drop;
+
+		len = uio->uio_resid;
+		if (len == 0)
+			break;
+
+		n = m_get(M_DONTWAIT, MT_DATA);
+		if (n == NULL) {
+			error = ENOMEM;
+			goto put;
+		}
+
+		align = 0;
+		mlen = MLEN;
+
+		m->m_next = n;
+		m = n;
+	}
 
 	NET_LOCK();
 	if_vinput(ifp, m0);
@@ -970,15 +1101,12 @@ int
 tun_dev_kqfilter(dev_t dev, struct knote *kn)
 {
 	struct tun_softc	*sc;
-	struct ifnet		*ifp;
 	struct klist		*klist;
 	int			 error = 0;
 
 	sc = tun_get(dev);
 	if (sc == NULL)
 		return (ENXIO);
-
-	ifp = &sc->sc_if;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
@@ -1015,11 +1143,10 @@ int
 filt_tunread(struct knote *kn, long hint)
 {
 	struct tun_softc	*sc = kn->kn_hook;
-	struct ifnet		*ifp = &sc->sc_if;
 
 	MUTEX_ASSERT_LOCKED(&sc->sc_mtx);
 
-	kn->kn_data = ifq_hdatalen(&ifp->if_snd);
+	kn->kn_data = tun_hdatalen(sc);
 
 	return (kn->kn_data > 0);
 }

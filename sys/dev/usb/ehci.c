@@ -1,4 +1,4 @@
-/*	$OpenBSD: ehci.c,v 1.220 2024/05/23 03:21:08 jsg Exp $ */
+/*	$OpenBSD: ehci.c,v 1.222 2024/10/11 09:55:24 kettenis Exp $ */
 /*	$NetBSD: ehci.c,v 1.66 2004/06/30 03:11:56 mycroft Exp $	*/
 
 /*

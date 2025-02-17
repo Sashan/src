@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.201 2024/08/02 10:48:54 jsing Exp $
+# $OpenBSD: Makefile,v 1.231 2024/12/19 23:56:32 tb Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -31,6 +31,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/bio
 CFLAGS+= -I${LCRYPTO_SRC}/bn
 CFLAGS+= -I${LCRYPTO_SRC}/bn/arch/${MACHINE_CPU}
 CFLAGS+= -I${LCRYPTO_SRC}/bytestring
+CFLAGS+= -I${LCRYPTO_SRC}/conf
 CFLAGS+= -I${LCRYPTO_SRC}/curve25519
 CFLAGS+= -I${LCRYPTO_SRC}/dh
 CFLAGS+= -I${LCRYPTO_SRC}/dsa
@@ -42,6 +43,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/hidden
 CFLAGS+= -I${LCRYPTO_SRC}/hmac
 CFLAGS+= -I${LCRYPTO_SRC}/kdf
 CFLAGS+= -I${LCRYPTO_SRC}/lhash
+CFLAGS+= -I${LCRYPTO_SRC}/mlkem
 CFLAGS+= -I${LCRYPTO_SRC}/modes
 CFLAGS+= -I${LCRYPTO_SRC}/ocsp
 CFLAGS+= -I${LCRYPTO_SRC}/pkcs12
@@ -54,21 +56,13 @@ CFLAGS+= -I${LCRYPTO_SRC}/x509
 VERSION_SCRIPT=	Symbols.map
 SYMBOL_LIST=	${.CURDIR}/Symbols.list
 
-.if (${MACHINE_CPU} == "amd64") || (${MACHINE_CPU} == "i386")
-SYMBOL_LIST+=	${.CURDIR}/arch/${MACHINE_CPU}/Symbols.list
-.endif
-
 # crypto/
-SRCS+= cpt_err.c
-SRCS+= cryptlib.c
+SRCS+= crypto_err.c
 SRCS+= crypto_ex_data.c
 SRCS+= crypto_init.c
+SRCS+= crypto_legacy.c
 SRCS+= crypto_lock.c
-SRCS+= cversion.c
-SRCS+= malloc-wrapper.c
-SRCS+= mem_clr.c
-SRCS+= mem_dbg.c
-SRCS+= o_fips.c
+SRCS+= crypto_memory.c
 
 # aes/
 SRCS+= aes.c
@@ -233,7 +227,6 @@ SRCS+= conf_api.c
 SRCS+= conf_def.c
 SRCS+= conf_err.c
 SRCS+= conf_lib.c
-SRCS+= conf_mall.c
 SRCS+= conf_mod.c
 SRCS+= conf_sap.c
 
@@ -254,26 +247,11 @@ SRCS+= curve25519-generic.c
 SRCS+= curve25519.c
 
 # des/
-SRCS+= cbc_cksm.c
-SRCS+= cbc_enc.c
-SRCS+= cfb64ede.c
-SRCS+= cfb64enc.c
-SRCS+= cfb_enc.c
+SRCS+= des.c
+SRCS+= des_cksum.c
 SRCS+= des_enc.c
-SRCS+= ecb3_enc.c
-SRCS+= ecb_enc.c
-SRCS+= ede_cbcm_enc.c
-SRCS+= enc_read.c
-SRCS+= fcrypt.c
-SRCS+= fcrypt_b.c
-SRCS+= ofb64ede.c
-SRCS+= ofb64enc.c
-SRCS+= ofb_enc.c
-SRCS+= pcbc_enc.c
-SRCS+= qud_cksm.c
-SRCS+= set_key.c
-SRCS+= str2key.c
-SRCS+= xcbc_enc.c
+SRCS+= des_fcrypt.c
+SRCS+= des_key.c
 
 # dh/
 SRCS+= dh_ameth.c
@@ -300,21 +278,15 @@ SRCS+= dsa_prn.c
 # ec/
 SRCS+= ec_ameth.c
 SRCS+= ec_asn1.c
-SRCS+= ec_check.c
+SRCS+= ec_convert.c
 SRCS+= ec_curve.c
-SRCS+= ec_cvt.c
 SRCS+= ec_err.c
 SRCS+= ec_key.c
-SRCS+= ec_kmeth.c
 SRCS+= ec_lib.c
 SRCS+= ec_mult.c
-SRCS+= ec_oct.c
 SRCS+= ec_pmeth.c
-SRCS+= ec_print.c
 SRCS+= eck_prn.c
-SRCS+= ecp_mont.c
-SRCS+= ecp_oct.c
-SRCS+= ecp_smpl.c
+SRCS+= ecp_methods.c
 SRCS+= ecx_methods.c
 
 # ecdh/
@@ -367,7 +339,6 @@ SRCS+= m_sha1.c
 SRCS+= m_sha3.c
 SRCS+= m_sigver.c
 SRCS+= m_sm3.c
-SRCS+= m_wp.c
 SRCS+= p_legacy.c
 SRCS+= p_lib.c
 SRCS+= p_sign.c
@@ -400,6 +371,10 @@ SRCS+= md4.c
 
 # md5/
 SRCS+= md5.c
+
+# mlkem/
+SRCS+= mlkem768.c
+SRCS+= mlkem1024.c
 
 # modes/
 SRCS+= cbc128.c
@@ -543,10 +518,6 @@ SRCS+= ui_err.c
 SRCS+= ui_lib.c
 SRCS+= ui_null.c
 SRCS+= ui_openssl.c
-SRCS+= ui_util.c
-
-# whrlpool/
-SRCS+= whirlpool.c
 
 # x509/
 SRCS+= by_dir.c
@@ -589,6 +560,7 @@ SRCS+= x509_purp.c
 SRCS+= x509_r2x.c
 SRCS+= x509_req.c
 SRCS+= x509_set.c
+SRCS+= x509_siginfo.c
 SRCS+= x509_skey.c
 SRCS+= x509_trs.c
 SRCS+= x509_txt.c
@@ -640,6 +612,7 @@ SRCS+= x_all.c
 	${LCRYPTO_SRC}/lhash \
 	${LCRYPTO_SRC}/md4 \
 	${LCRYPTO_SRC}/md5 \
+	${LCRYPTO_SRC}/mlkem \
 	${LCRYPTO_SRC}/modes \
 	${LCRYPTO_SRC}/objects \
 	${LCRYPTO_SRC}/ocsp \
@@ -661,7 +634,6 @@ SRCS+= x_all.c
 	${LCRYPTO_SRC}/ts \
 	${LCRYPTO_SRC}/txt_db \
 	${LCRYPTO_SRC}/ui \
-	${LCRYPTO_SRC}/whrlpool \
 	${LCRYPTO_SRC}/x509
 
 HDRS=\
@@ -680,7 +652,6 @@ HDRS=\
 	${LCRYPTO_SRC}/cms/cms.h \
 	${LCRYPTO_SRC}/comp/comp.h \
 	${LCRYPTO_SRC}/conf/conf.h \
-	${LCRYPTO_SRC}/conf/conf_api.h \
 	${LCRYPTO_SRC}/crypto.h \
 	${LCRYPTO_SRC}/ct/ct.h \
 	${LCRYPTO_SRC}/curve25519/curve25519.h \
@@ -723,8 +694,6 @@ HDRS=\
 	${LCRYPTO_SRC}/ts/ts.h \
 	${LCRYPTO_SRC}/txt_db/txt_db.h \
 	${LCRYPTO_SRC}/ui/ui.h \
-	${LCRYPTO_SRC}/ui/ui_compat.h \
-	${LCRYPTO_SRC}/whrlpool/whrlpool.h \
 	${LCRYPTO_SRC}/x509/x509.h \
 	${LCRYPTO_SRC}/x509/x509_vfy.h \
 	${LCRYPTO_SRC}/x509/x509v3.h

@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.s,v 1.223 2024/04/14 19:08:09 miod Exp $	*/
+/*	$OpenBSD: locore.s,v 1.230 2024/11/27 20:11:32 miod Exp $	*/
 /*	$NetBSD: locore.s,v 1.137 2001/08/13 06:10:10 jdolecek Exp $	*/
 
 /*
@@ -639,7 +639,7 @@ trapbase:
 	UTRAP 0x004		! 004 = SIR -- ROM should get this
 	UTRAP 0x005		! 005 = RED state exception
 	UTRAP 0x006; UTRAP 0x007
-	VTRAP T_INST_EXCEPT, textfault	! 008 = instr. access exept
+	VTRAP T_INST_EXCEPT, textfault	! 008 = instr. access except
 	VTRAP T_TEXTFAULT, textfault	! 009 = instr. access MMU miss
 	VTRAP T_INST_ERROR, textfault	! 00a = instr. access err
 	UTRAP 0x00b; UTRAP 0x00c; UTRAP 0x00d; UTRAP 0x00e; UTRAP 0x00f
@@ -799,7 +799,7 @@ trapbase_priv:
 	UTRAP 0x005		! 005 = RED state exception
 	UTRAP 0x006; UTRAP 0x007
 ktextfault:
-	VTRAP T_INST_EXCEPT, textfault	! 008 = instr. access exept
+	VTRAP T_INST_EXCEPT, textfault	! 008 = instr. access except
 	VTRAP T_TEXTFAULT, textfault	! 009 = instr. access MMU miss -- no MMU
 	VTRAP T_INST_ERROR, textfault	! 00a = instr. access err
 	UTRAP 0x00b; UTRAP 0x00c; UTRAP 0x00d; UTRAP 0x00e; UTRAP 0x00f
@@ -1563,7 +1563,7 @@ winfixfill:
 	stxa	%g0, [SFSR] %asi			! Clear out fault now
 	membar	#Sync					! No real reason for this XXXX
 
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 	saved						! Blow away that one register window we didn't ever use.
 	ba,a,pt	%icc, Ldatafault_internal		! Now we should return directly to user mode
 	 nop
@@ -1795,7 +1795,7 @@ datafault:
 	stxa	%g0, [SFSR] %asi			! Clear out fault now
 	membar	#Sync					! No real reason for this XXXX
 
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 Ldatafault_internal:
 	INCR uvmexp+V_FAULTS				! uvmexp.faults++ (clobbers %o0,%o1,%o2) should not fault
 	mov	%g1, %o0				! Move these to the out regs so we can save the globals
@@ -1964,7 +1964,7 @@ textfault:
 	stxa	%g0, [SFSR] %asi			! Clear out old info
 	membar	#Sync					! No real reason for this XXXX
 
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 	INCR uvmexp+V_FAULTS				! uvmexp.faults++ (clobbers %o0,%o1,%o2)
 
 	mov	%g3, %o3
@@ -2556,7 +2556,7 @@ sun4v_datatrap:
 	add	%g3, 0x50, %g2
 	ldxa	[%g2] ASI_PHYS_CACHED, %g2
 
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 	or	%g1, %g2, %o3
 	mov	%g1, %o4
 
@@ -2619,7 +2619,7 @@ sun4v_texttrap:
 	add	%g3, 0x10, %g2
 	ldxa	[%g2] ASI_PHYS_CACHED, %g2
 
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 
 	or	%g1, %g2, %o2
 	clr	%o3
@@ -2757,7 +2757,7 @@ checkalign:
  *
  */
 slowtrap:
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 
 	rdpr	%tt, %g4
 	rdpr	%tstate, %g1
@@ -2837,7 +2837,7 @@ softtrap:
 	bnz,pt	%xcc, Lslowtrap_reenter
 	 nop
 	GET_CPCB(%g7)
-	set	USPACE-CC64FSZ-TF_SIZE-BIAS, %g5
+	set	USPACE-CC64FSZ-TRAPFRAME_SIZEOF-BIAS, %g5
 	add	%g7, %g5, %g6
 	stx	%i0, [%g6 + CC64FSZ + BIAS + TF_O + (0*8)]	! Generate a new trapframe
 	stx	%i1, [%g6 + CC64FSZ + BIAS + TF_O + (1*8)]	!	but don't bother with
@@ -2856,7 +2856,7 @@ softtrap:
  *	ptrace...
  */
 syscall_setup:
-	TRAP_SETUP -CC64FSZ-TF_SIZE
+	TRAP_SETUP -CC64FSZ-TRAPFRAME_SIZEOF
 
 #ifdef DEBUG
 	rdpr	%tt, %o1	! debug
@@ -2895,8 +2895,6 @@ syscall_setup:
 	call	syscall				! syscall(&tf, code, pc)
 	 wrpr	%g0, PSTATE_INTR, %pstate	! turn on interrupts
 
-	/* see `proc_trampoline' for the reason for this label */
-return_from_syscall:
 	wrpr	%g0, PSTATE_KERN, %pstate	! Disable interrupts
 	wrpr	%g0, 0, %tl			! Return to tl==0
 	ba,a,pt	%icc, return_from_trap
@@ -2938,18 +2936,13 @@ return_from_syscall:
  * vector number to lookup the appropriate intrhand from the intrlev
  * array.  It then looks up the interrupt level from the intrhand
  * structure.  It uses the level to index the per-cpu intrpending array,
- * which is 8 slots for each possible interrupt level (so we can
- * shift instead of multiply for address calculation).  It hunts for
- * any available slot at that level.  Available slots are NULL.
- *
- * NOTE: If no slots are available, we issue an un-vectored interrupt,
- * but it will probably be lost anyway.
+ * and inserts the intrhand at the head of the proper intrpending entry.
  *
  * Then interrupt_vector uses the interrupt level in the intrhand
  * to issue a softint of the appropriate level.  The softint handler
- * figures out what level interrupt it's handling and pulls the first
- * intrhand pointer out of the intrpending array for that interrupt
- * level, puts a NULL in its place, clears the interrupt generator,
+ * figures out what level interrupt it's handling and pulls the
+ * intrhand pointer at thead of the intrpending list for that interrupt
+ * level, removes it from the list, clears the interrupt generator,
  * and invokes the interrupt handler.
  */
 
@@ -3001,7 +2994,7 @@ setup_sparcintr:
 	brnz,pn	%g6, ret_from_intr_vector ! Skip it if it's running
 	 ldub	[%g5+IH_PIL], %g6	! Read interrupt mask
 	GET_CPUINFO_VA(%g1)
-	sll	%g6, 3+3, %g3	! Find start of table for this IPL
+	sll	%g6, 3, %g3		! Find start of list for this IPL
 	add	%g1, CI_INTRPENDING, %g1
 	add	%g1, %g3, %g1
 1:
@@ -3257,23 +3250,11 @@ END(ipi_db)
  * are set, handle those interrupts, then clear them by setting the
  * appropriate bits in ASR_CLEAR_SOFTINT(0x15).
  *
- * We have an array of 8 interrupt vector slots for each of 15 interrupt
- * levels.  If a vectored interrupt can be dispatched, the dispatch
- * routine will place a pointer to an intrhand structure in one of
- * the slots.  The interrupt handler will go through the list to look
- * for an interrupt to dispatch.  If it finds one it will pull it off
- * the list, free the entry, and call the handler.  The code is like
- * this:
- *
- *	for (i=0; i<8; i++)
- *		if (ih = intrpending[intlev][i]) {
- *			intrpending[intlev][i] = NULL;
- *			if ((*ih->ih_fun)(ih->ih_arg ? ih->ih_arg : &frame))
- *				return;
- *			return;
- *		}
- *
- * Otherwise we go back to the old style of polled interrupts.
+ * We have a list of interrupt handlers for each of 15 interrupt levels.
+ * If a vectored interrupt can be dispatched, the dispatch routine will put
+ * the intrhand at the head of the appropriate list. The interrupt handler
+ * will go through the list to look for an interrupt to dispatch.  If it
+ * finds one it will pull it off the list, and call the handler.
  *
  * After preliminary setup work, the interrupt is passed to each
  * registered handler in turn.  These are expected to return nonzero if
@@ -3281,10 +3262,6 @@ END(ipi_db)
  * we exit (hardware interrupts are latched in the requestor so we'll
  * just take another interrupt in the unlikely event of simultaneous
  * interrupts from two different devices at the same level).
- *
- *	for (ih = intrhand[intlev]; ih; ih = ih->ih_next)
- *		if ((*ih->ih_fun)(ih->ih_arg ? ih->ih_arg : &frame))
- *			return;
  *
  * Inputs:
  *	%l0 = %tstate
@@ -3320,7 +3297,9 @@ sparc_interrupt:
 	ba,pt	%icc, setup_sparcintr
 	 add	%g7, CI_TICKINTR, %g5
 0:
-	INTR_SETUP -CC64FSZ-TF_SIZE-8
+	! We don't use TRAPFRAME_SIZEOF here because it might be a clock
+	! interrupt, which uses a larger frame.	
+	INTR_SETUP -CC64FSZ-CLOCKFRAME_SIZEOF
 
 	NORMAL_GLOBALS()
 
@@ -3357,7 +3336,6 @@ sparc_interrupt:
 	sth	%l5, [%sp + CC64FSZ + BIAS + TF_TT]! debug
 	stx	%l0, [%sp + CC64FSZ + BIAS + TF_TSTATE]	! set up intrframe/clockframe
 	stx	%l1, [%sp + CC64FSZ + BIAS + TF_PC]
-	btst	TSTATE_PRIV, %l0		! User mode?
 	stx	%l2, [%sp + CC64FSZ + BIAS + TF_NPC]
 	
 	sub	%l5, 0x40, %l6			! Convert to interrupt level
@@ -3374,21 +3352,20 @@ sparc_interrupt:
 	 * Set handled_intr_level and save the old one so we can restore it
 	 * later.
 	 */
-	ld	[%g7 + CI_HANDLED_INTR_LEVEL], %l7
+	ld	[%g7 + CI_HANDLED_INTR_LEVEL], %l0
 	st	%l6, [%g7 + CI_HANDLED_INTR_LEVEL]
-	st	%l7, [%sp + CC64FSZ + BIAS + TF_SIZE]
+	st	%l0, [%sp + CC64FSZ + BIAS + SAVED_INTR_LEVEL]
 
 sparc_intr_retry:
 	wr	%l3, 0, CLEAR_SOFTINT	! (don't clear possible %tick IRQ)
 	wrpr	%g0, PSTATE_INTR, %pstate	! Reenable interrupts
-	sll	%l6, 3+3, %l2
+	sll	%l6, 3, %l2
 	add	%g7, CI_INTRPENDING, %l4
-	mov	8, %l7
 	add	%l2, %l4, %l4
 
 1:
 	membar	#StoreLoad		! Make sure any failed casxa instructions complete
-	ldx	[%l4], %l2		! Check a slot
+	ldx	[%l4], %l2		! Check the head of the list
 	brz,pn	%l2, intrcmplt		! Empty list?
 
 	 clr	%l7
@@ -3410,7 +3387,7 @@ sparc_intr_retry:
 	ldx	[%l2 + IH_ACK], %l1	! ih->ih_ack
 
 	! At this point, the current ih could already be added
-	! back to the pending table.
+	! back to the pending list.
 
 	call	intr_handler
 	 mov	%l2, %o1
@@ -3433,15 +3410,14 @@ intrcmplt:
 	 * at this level.
 	 */
 	mov	1, %l3			! Ack softint
-	rd	SOFTINT, %l7		! %l5 contains #intr handled.
+	rd	SOFTINT, %l7
 	sll	%l3, %l6, %l3		! Generate IRQ mask
 	btst	%l3, %l7		! leave mask in %l3 for retry code
 	bnz,pn	%icc, sparc_intr_retry
 	 mov	1, %l5			! initialize intr count for next run
 
 	/* Restore old handled_intr_level */
-	ld	[%sp + CC64FSZ + BIAS + TF_SIZE], %l7
-	st	%l7, [%g7 + CI_HANDLED_INTR_LEVEL]
+	st	%l0, [%g7 + CI_HANDLED_INTR_LEVEL]
 
 	ldub	[%sp + CC64FSZ + BIAS + TF_OLDPIL], %l3	! restore old %pil
 	wrpr	%g0, PSTATE_KERN, %pstate	! Disable interrupts
@@ -3477,7 +3453,7 @@ intrcmplt:
  */
 return_from_trap:
 	ldx	[%sp + CC64FSZ + BIAS + TF_TSTATE], %g1
-	btst	TSTATE_PRIV, %g1			! returning to userland?
+	btst	TSTATE_PRIV, %g1
 	!!
 	!! Let all pending interrupts drain before returning to userland
 	!!
@@ -4312,11 +4288,12 @@ sigfillsiz:
  */
 
 /*
- * getfp() - get stack frame pointer
+ * getfp() - get unbiased stack frame pointer
  */
 ENTRY(getfp)
+	mov %fp, %o0
 	retl
-	 mov %fp, %o0
+	 add	%o0, BIAS, %o0
 
 /*
  * _copyinstr(fromaddr, toaddr, maxlength, &lencopied)
@@ -6185,7 +6162,7 @@ ENTRY(send_softint)
 
 	ldx	[%o1 + IH_PEND], %o5
 	brnz,pn	%o5, 1f
-	 sll	%o0, 3+3, %o5	! Find start of table for this IPL
+	 sll	%o0, 3, %o5		! Find start of list for this IPL
 	add	%o3, %o5, %o3
 
 	ldx	[%o3], %o5		! Load list head

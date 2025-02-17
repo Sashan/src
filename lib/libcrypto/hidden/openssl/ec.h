@@ -1,4 +1,4 @@
-/* $OpenBSD: ec.h,v 1.5 2024/04/10 15:01:31 beck Exp $ */
+/* $OpenBSD: ec.h,v 1.7 2024/10/22 15:54:33 tb Exp $ */
 /*
  * Copyright (c) 2023 Bob Beck <beck@openbsd.org>
  *

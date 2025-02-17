@@ -1,4 +1,4 @@
-/*	$OpenBSD: efi_installboot.c,v 1.10 2023/04/26 18:04:21 kn Exp $	*/
+/*	$OpenBSD: efi_installboot.c,v 1.12 2024/11/08 10:43:07 kettenis Exp $	*/
 /*	$NetBSD: installboot.c,v 1.5 1995/11/17 23:23:50 gwr Exp $ */
 
 /*
@@ -193,6 +193,7 @@ write_filesystem(struct disklabel *dl, char part)
 {
 	static const char *fsckfmt = "/sbin/fsck -t msdos %s >/dev/null";
 	struct msdosfs_args args;
+	struct statfs sf;
 	char cmd[60];
 	char dst[PATH_MAX];
 	char *src;
@@ -309,6 +310,47 @@ write_filesystem(struct disklabel *dl, char part)
 			goto umount;
 	}
 
+	/* Skip installing a 2nd copy if we have a small filesystem. */
+	if (statfs(dst, &sf) || sf.f_blocks < 2048) {
+		rslt = 0;
+		goto firmware;
+	}
+
+	/* Create "/efi/openbsd" directory in <duid>.<part>. */
+	dst[mntlen] = '\0';
+	if (strlcat(dst, "/efi/openbsd", sizeof(dst)) >= sizeof(dst)) {
+		rslt = -1;
+		warn("unable to build /efi/openbsd directory");
+		goto umount;
+	}
+	rslt = mkdir(dst, 0755);
+	if (rslt == -1 && errno != EEXIST) {
+		warn("mkdir('%s') failed", dst);
+		goto umount;
+	}
+
+	/* Copy EFI bootblocks to /efi/openbsd/. */
+	if (strlcat(dst, "/" BOOTEFI_DST, sizeof(dst)) >= sizeof(dst)) {
+		rslt = -1;
+		warn("unable to build /%s path", BOOTEFI_DST);
+		goto umount;
+	}
+	src = fileprefix(root, "/usr/mdec/" BOOTEFI_SRC);
+	if (src == NULL) {
+		rslt = -1;
+		goto umount;
+	}
+	srclen = strlen(src);
+	if (verbose)
+		fprintf(stderr, "%s %s to %s\n",
+		    (nowrite ? "would copy" : "copying"), src, dst);
+	if (!nowrite) {
+		rslt = filecopy(src, dst);
+		if (rslt == -1)
+			goto umount;
+	}
+
+firmware:
 	dst[mntlen] = '\0';
 	rslt = write_firmware(root, dst);
 	if (rslt == -1)

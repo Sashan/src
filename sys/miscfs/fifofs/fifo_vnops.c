@@ -1,4 +1,4 @@
-/*	$OpenBSD: fifo_vnops.c,v 1.107 2024/07/12 17:20:18 mvs Exp $	*/
+/*	$OpenBSD: fifo_vnops.c,v 1.110 2025/01/30 14:40:50 mvs Exp $	*/
 /*	$NetBSD: fifo_vnops.c,v 1.18 1996/03/16 23:52:42 christos Exp $	*/
 
 /*
@@ -303,8 +303,6 @@ fifo_ioctl(void *v)
 	struct file filetmp;
 	int error;
 
-	if (ap->a_command == FIONBIO)
-		return (0);
 	if (ap->a_fflag & FREAD) {
 		filetmp.f_data = ap->a_vp->v_fifoinfo->fi_readsock;
 		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_p);
@@ -397,14 +395,17 @@ fifo_reclaim(void *v)
 int
 fifo_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 
 	printf("tag VT_NON");
 	fifo_printinfo(ap->a_vp);
 	printf("\n");
+#endif
 	return 0;
 }
 
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 /*
  * Print out internal contents of a fifo vnode.
  */
@@ -416,6 +417,7 @@ fifo_printinfo(struct vnode *vp)
 	printf(", fifo with %ld readers and %ld writers",
 		fip->fi_readers, fip->fi_writers);
 }
+#endif
 
 /*
  * Return POSIX pathconf information applicable to fifo's.
@@ -564,7 +566,7 @@ filt_fifowrite(struct knote *kn, long hint)
 
 	MUTEX_ASSERT_LOCKED(&so->so_snd.sb_mtx);
 
-	kn->kn_data = sbspace_locked(so, &so->so_snd);
+	kn->kn_data = sbspace_locked(&so->so_snd);
 	if (so->so_snd.sb_state & SS_CANTSENDMORE) {
 		kn->kn_flags |= EV_EOF;
 		rv = 1;

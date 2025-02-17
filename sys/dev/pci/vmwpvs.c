@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmwpvs.c,v 1.28 2024/05/24 06:02:58 jsg Exp $ */
+/*	$OpenBSD: vmwpvs.c,v 1.30 2024/09/20 02:00:46 jsg Exp $ */
 
 /*
  * Copyright (c) 2013 David Gwynne <dlg@openbsd.org>
@@ -499,7 +499,7 @@ vmwpvs_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_ccbs = mallocarray(r, sizeof(struct vmwpvs_ccb),
 	    M_DEVBUF, M_WAITOK);
-	/* cant fail */
+	/* can't fail */
 
 	sgls = VMWPVS_DMA_KVA(sc->sc_sgls);
 	sense = VMWPVS_DMA_KVA(sc->sc_sense);
@@ -799,7 +799,7 @@ vmwpvs_msg_task(void *xsc)
 				printf("%s: error probing target %d lun %d\n",
 				    DEVNAME(sc), letoh32(dvmsg->target),
 				    dvmsg->lun[1]);
-			};
+			}
 			break;
 
 		case VMWPVS_MSG_T_REMOVED:
@@ -817,7 +817,7 @@ vmwpvs_msg_task(void *xsc)
 				printf("%s: error detaching target %d lun %d\n",
 				    DEVNAME(sc), letoh32(dvmsg->target),
 				    dvmsg->lun[1]);
-			};
+			}
 			break;
 
 		default:

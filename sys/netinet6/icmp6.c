@@ -1,4 +1,4 @@
-/*	$OpenBSD: icmp6.c,v 1.254 2024/07/14 18:53:39 bluhm Exp $	*/
+/*	$OpenBSD: icmp6.c,v 1.256 2025/01/03 21:27:40 bluhm Exp $	*/
 /*	$KAME: icmp6.c,v 1.217 2001/06/20 15:03:29 jinmei Exp $	*/
 
 /*
@@ -1016,16 +1016,20 @@ icmp6_mtudisc_update(struct ip6ctlparam *ip6cp, int validated)
 	rt = icmp6_mtudisc_clone(&sin6, m->m_pkthdr.ph_rtableid, 0);
 
 	if (rt != NULL && ISSET(rt->rt_flags, RTF_HOST) &&
-	    !(rt->rt_locks & RTV_MTU) &&
-	    (rt->rt_mtu > mtu || rt->rt_mtu == 0)) {
-		struct ifnet *ifp;
+	    !(rt->rt_locks & RTV_MTU)) {
+		u_int rtmtu;
 
-		ifp = if_get(rt->rt_ifidx);
-		if (ifp != NULL && mtu < ifp->if_mtu) {
-			icmp6stat_inc(icp6s_pmtuchg);
-			rt->rt_mtu = mtu;
+		rtmtu = atomic_load_int(&rt->rt_mtu);
+		if (rtmtu > mtu || rtmtu == 0) {
+			struct ifnet *ifp;
+
+			ifp = if_get(rt->rt_ifidx);
+			if (ifp != NULL && mtu < ifp->if_mtu) {
+				icmp6stat_inc(icp6s_pmtuchg);
+				atomic_cas_uint(&rt->rt_mtu, rtmtu, mtu);
+			}
+			if_put(ifp);
 		}
-		if_put(ifp);
 	}
 	rtfree(rt);
 
@@ -1198,7 +1202,6 @@ icmp6_reflect(struct mbuf **mp, size_t off, struct sockaddr *sa)
 void
 icmp6_fasttimo(void)
 {
-
 	mld6_fasttimeo();
 }
 
@@ -1849,7 +1852,7 @@ icmp6_mtudisc_timeout(struct rtentry *rt, u_int rtableid)
 		rtdeletemsg(rt, ifp, rtableid);
 	} else {
 		if (!(rt->rt_locks & RTV_MTU))
-			rt->rt_mtu = 0;
+			atomic_store_int(&rt->rt_mtu, 0);
 	}
 
 	if_put(ifp);

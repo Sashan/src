@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf.c,v 1.290 2024/03/05 18:52:41 bluhm Exp $	*/
+/*	$OpenBSD: uipc_mbuf.c,v 1.296 2025/01/01 13:44:22 bluhm Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.15.4.1 1996/06/13 17:11:44 cgd Exp $	*/
 
 /*
@@ -90,6 +90,7 @@
 
 #ifdef DDB
 #include <machine/db_machdep.h>
+#include <ddb/db_interface.h>
 #endif
 
 #if NPF > 0
@@ -128,8 +129,8 @@ struct	mutex m_extref_mtx = MUTEX_INITIALIZER(IPL_NET);
 void	m_extfree(struct mbuf *);
 void	m_zero(struct mbuf *);
 
-unsigned long mbuf_mem_limit;	/* how much memory can be allocated */
-unsigned long mbuf_mem_alloc;	/* how much memory has been allocated */
+unsigned long mbuf_mem_limit;	/* [a] how much memory can be allocated */
+unsigned long mbuf_mem_alloc;	/* [a] how much memory has been allocated */
 
 void	*m_pool_alloc(struct pool *, int, int *);
 void	m_pool_free(struct pool *, void *);
@@ -218,7 +219,7 @@ nmbclust_update(long newval)
 		return ERANGE;
 	/* update the global mbuf memory limit */
 	nmbclust = newval;
-	mbuf_mem_limit = nmbclust * MCLBYTES;
+	atomic_store_long(&mbuf_mem_limit, nmbclust * MCLBYTES);
 
 	pool_wakeup(&mbpool);
 	for (i = 0; i < nitems(mclsizes); i++)
@@ -234,8 +235,6 @@ struct mbuf *
 m_get(int nowait, int type)
 {
 	struct mbuf *m;
-	struct counters_ref cr;
-	uint64_t *counters;
 	int s;
 
 	KASSERT(type >= 0 && type < MT_NTYPES);
@@ -245,9 +244,7 @@ m_get(int nowait, int type)
 		return (NULL);
 
 	s = splnet();
-	counters = counters_enter(&cr, mbstat);
-	counters[type]++;
-	counters_leave(&cr, mbstat);
+	counters_inc(mbstat, type);
 	splx(s);
 
 	m->m_type = type;
@@ -267,8 +264,6 @@ struct mbuf *
 m_gethdr(int nowait, int type)
 {
 	struct mbuf *m;
-	struct counters_ref cr;
-	uint64_t *counters;
 	int s;
 
 	KASSERT(type >= 0 && type < MT_NTYPES);
@@ -278,9 +273,7 @@ m_gethdr(int nowait, int type)
 		return (NULL);
 
 	s = splnet();
-	counters = counters_enter(&cr, mbstat);
-	counters[type]++;
-	counters_leave(&cr, mbstat);
+	counters_inc(mbstat, type);
 	splx(s);
 
 	m->m_type = type;
@@ -417,17 +410,13 @@ struct mbuf *
 m_free(struct mbuf *m)
 {
 	struct mbuf *n;
-	struct counters_ref cr;
-	uint64_t *counters;
 	int s;
 
 	if (m == NULL)
 		return (NULL);
 
 	s = splnet();
-	counters = counters_enter(&cr, mbstat);
-	counters[m->m_type]--;
-	counters_leave(&cr, mbstat);
+	counters_dec(mbstat, m->m_type);
 	splx(s);
 
 	n = m->m_next;
@@ -557,6 +546,7 @@ m_defrag(struct mbuf *m, int how)
 
 	KASSERT(m->m_flags & M_PKTHDR);
 
+	counters_inc(mbstat, MBSTAT_DEFRAG_ALLOC);
 	if ((m0 = m_gethdr(how, m->m_type)) == NULL)
 		return (ENOBUFS);
 	if (m->m_pkthdr.len > MHLEN) {
@@ -616,6 +606,7 @@ m_prepend(struct mbuf *m, int len, int how)
 		m->m_data -= len;
 		m->m_len += len;
 	} else {
+		counters_inc(mbstat, MBSTAT_PREPEND_ALLOC);
 		MGET(mn, how, m->m_type);
 		if (mn == NULL) {
 			m_freem(m);
@@ -956,8 +947,8 @@ m_pullup(struct mbuf *m0, int len)
 			memmove(head, mtod(m0, caddr_t), m0->m_len);
 			m0->m_data = head;
 		}
-
 		len -= m0->m_len;
+		counters_inc(mbstat, MBSTAT_PULLUP_COPY);
 	} else {
 		/* the first mbuf is too small or read-only, make a new one */
 		space = adj + len;
@@ -968,6 +959,7 @@ m_pullup(struct mbuf *m0, int len)
 		m0->m_next = m;
 		m = m0;
 
+		counters_inc(mbstat, MBSTAT_PULLUP_ALLOC);
 		MGET(m0, M_DONTWAIT, m->m_type);
 		if (m0 == NULL)
 			goto bad;
@@ -1466,7 +1458,8 @@ m_pool_alloc(struct pool *pp, int flags, int *slowdown)
 {
 	void *v;
 
-	if (atomic_add_long_nv(&mbuf_mem_alloc, pp->pr_pgsize) > mbuf_mem_limit)
+	if (atomic_add_long_nv(&mbuf_mem_alloc, pp->pr_pgsize) >
+	    atomic_load_long(&mbuf_mem_limit))
 		goto fail;
 
 	v = (*pool_allocator_multi.pa_alloc)(pp, flags, slowdown);
@@ -1496,7 +1489,8 @@ m_pool_init(struct pool *pp, u_int size, u_int align, const char *wmesg)
 u_int
 m_pool_used(void)
 {
-	return ((mbuf_mem_alloc * 100) / mbuf_mem_limit);
+	return ((atomic_load_long(&mbuf_mem_alloc) * 100) /
+	    atomic_load_long(&mbuf_mem_limit));
 }
 
 #ifdef DDB
@@ -1541,6 +1535,83 @@ m_print(void *v,
 		    m->m_ext.ext_nextref, m->m_ext.ext_prevref);
 
 	}
+}
+
+const char *m_types[MT_NTYPES] = {
+	"fre",
+	"dat",
+	"hdr",
+	"nam",
+	"opt",
+	"ftb",
+	"ctl",
+	"oob",
+};
+
+void
+m_print_chain(void *v, int deep,
+    int (*pr)(const char *, ...) __attribute__((__format__(__kprintf__,1,2))))
+{
+	struct mbuf *m;
+	const char *indent = deep ? "++-" : "-+-";
+	size_t chain = 0, len = 0, size = 0;
+
+	for (m = v; m != NULL; m = m->m_next) {
+		const char *type;
+
+		chain++;
+		len += m->m_len;
+		size += M_SIZE(m);
+		type = (m->m_type >= 0 && m->m_type < MT_NTYPES) ?
+		    m_types[m->m_type] : "???";
+		(*pr)("%s mbuf %p, %s, off %zd, len %u", indent, m, type,
+		    m->m_data - M_DATABUF(m), m->m_len);
+		if (m->m_flags & M_PKTHDR)
+			(*pr)(", pktlen %d", m->m_pkthdr.len);
+		if (m->m_flags & M_EXT)
+			(*pr)(", clsize %u", m->m_ext.ext_size);
+		else
+			(*pr)(", size %zu",
+			    m->m_flags & M_PKTHDR ? MHLEN : MLEN);
+		(*pr)("\n");
+		indent = deep ? "|+-" : " +-";
+	}
+	indent = deep ? "|\\-" : " \\-";
+	if (v != NULL) {
+		(*pr)("%s total chain %zu, len %zu, size %zu\n",
+		    indent, chain, len, size);
+	}
+}
+
+void
+m_print_packet(void *v, int deep,
+    int (*pr)(const char *, ...) __attribute__((__format__(__kprintf__,1,2))))
+{
+	struct mbuf *m, *n;
+	const char *indent = "+--";
+	size_t pkts = 0;
+
+	for (m = v; m != NULL; m = m->m_nextpkt) {
+		size_t chain = 0, len = 0, size = 0;
+
+		pkts++;
+		if (deep) {
+			m_print_chain(m, deep, pr);
+			continue;
+		}
+		for (n = m; n != NULL; n = n->m_next) {
+			chain++;
+			len += n->m_len;
+			size += M_SIZE(n);
+		}
+		(*pr)("%s mbuf %p, chain %zu", indent, m, chain);
+		if (m->m_flags & M_PKTHDR)
+			(*pr)(", pktlen %d", m->m_pkthdr.len);
+		(*pr)(", len %zu, size %zu\n", len, size);
+	}
+	indent = "\\--";
+	if (v != NULL)
+		(*pr)("%s total packets %zu\n", indent, pkts);
 }
 #endif
 

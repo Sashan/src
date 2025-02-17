@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.81 2024/06/12 12:54:54 bluhm Exp $	*/
+/*	$OpenBSD: conf.c,v 1.83 2024/11/27 10:33:31 jsg Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Charles M. Hannum.  All rights reserved.
@@ -120,10 +120,6 @@ cdev_decl(fd);
 cdev_decl(lpt);
 #include "ch.h"
 #include "bpfilter.h"
-#if 0
-#include "pcmcia.h"
-cdev_decl(pcmcia);
-#endif
 #include "spkr.h"
 cdev_decl(spkr);
 #include "cy.h"
@@ -152,8 +148,6 @@ cdev_decl(nvram);
 #include "drm.h"
 #include "viocon.h"
 cdev_decl(viocon);
-#include "ccp.h"
-cdev_decl(psp);
 
 #include "wsdisplay.h"
 #include "wskbd.h"
@@ -205,11 +199,7 @@ struct cdevsw	cdevsw[] =
 	cdev_fd_init(1,filedesc),	/* 22: file descriptor pseudo-device */
 	cdev_bpf_init(NBPFILTER,bpf),	/* 23: Berkeley packet filter */
 	cdev_notdef(),			/* 24 */
-#if 0
-	cdev_ocis_init(NPCMCIA,pcmcia), /* 25: PCMCIA Bus */
-#else
 	cdev_notdef(),			/* 25 */
-#endif
 	cdev_notdef(),			/* 26 */
 	cdev_spkr_init(NSPKR,spkr),	/* 27: PC speaker */
 	cdev_notdef(),			/* 28 was LKM */
@@ -292,7 +282,7 @@ struct cdevsw	cdevsw[] =
 	cdev_fido_init(NFIDO,fido),	/* 98: FIDO/U2F security keys */
 	cdev_pppx_init(NPPPX,pppac),	/* 99: PPP Access Concentrator */
 	cdev_ujoy_init(NUJOY,ujoy),	/* 100: USB joystick/gamecontroller */
-	cdev_psp_init(NCCP,psp),		/* 101: PSP */
+	cdev_psp_init(NPSP,psp),	/* 101: PSP */
 };
 int	nchrdev = nitems(cdevsw);
 

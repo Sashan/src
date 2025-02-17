@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.387 2024/07/13 12:22:46 yasuoka Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.390 2024/11/21 13:26:49 claudio Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -70,7 +70,6 @@ struct iked_sa *
 	 ikev2_getimsgdata(struct iked *, struct imsg *, struct iked_sahdr *,
 	    uint8_t *, uint8_t **, size_t *);
 
-void	 ikev2_recv(struct iked *, struct iked_message *);
 int	 ikev2_ike_auth_compatible(struct iked_sa *, uint8_t, uint8_t);
 int	 ikev2_ike_auth_recv(struct iked *, struct iked_sa *,
 	    struct iked_message *);
@@ -1628,7 +1627,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 	if ((pld = ikev2_add_payload(e)) == NULL)
 		goto done;
 	firstpayload = IKEV2_PAYLOAD_IDi;
-	if (ibuf_add_buf(e, id->id_buf) != 0)
+	if (ibuf_add_ibuf(e, id->id_buf) != 0)
 		goto done;
 	len = ibuf_size(id->id_buf);
 
@@ -1642,7 +1641,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 			goto done;
 		if ((pld = ikev2_add_payload(e)) == NULL)
 			goto done;
-		if (ibuf_add_buf(e, peerid.id_buf) != 0)
+		if (ibuf_add_ibuf(e, peerid.id_buf) != 0)
 			goto done;
 		len = ibuf_size(peerid.id_buf);
 	}
@@ -1658,7 +1657,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 		if ((cert = ibuf_reserve(e, sizeof(*cert))) == NULL)
 			goto done;
 		cert->cert_type = certid->id_type;
-		if (ibuf_add_buf(e, certid->id_buf) != 0)
+		if (ibuf_add_ibuf(e, certid->id_buf) != 0)
 			goto done;
 		len = ibuf_size(certid->id_buf) + sizeof(*cert);
 
@@ -1673,7 +1672,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 			if ((cert = ibuf_reserve(e, sizeof(*cert))) == NULL)
 				goto done;
 			cert->cert_type = sa->sa_scert[i].id_type;
-			if (ibuf_add_buf(e, sa->sa_scert[i].id_buf) != 0)
+			if (ibuf_add_ibuf(e, sa->sa_scert[i].id_buf) != 0)
 				goto done;
 			len = ibuf_size(sa->sa_scert[i].id_buf) + sizeof(*cert);
 		}
@@ -1698,7 +1697,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 	if ((auth = ibuf_reserve(e, sizeof(*auth))) == NULL)
 		goto done;
 	auth->auth_method = sa->sa_localauth.id_type;
-	if (ibuf_add_buf(e, sa->sa_localauth.id_buf) != 0)
+	if (ibuf_add_ibuf(e, sa->sa_localauth.id_buf) != 0)
 		goto done;
 	len = ibuf_size(sa->sa_localauth.id_buf) + sizeof(*auth);
 
@@ -2232,7 +2231,7 @@ ikev2_add_vendor_id(struct ibuf *e, struct ikev2_payload **pld,
 			return (-1);
 	if ((*pld = ikev2_add_payload(e)) == NULL)
 		return (-1);
-	if (ibuf_add_buf(e, id) == -1)
+	if (ibuf_add_ibuf(e, id) == -1)
 		return (-1);
 
 	return (ibuf_size(id));
@@ -2334,6 +2333,7 @@ ikev2_nat_detection(struct iked *env, struct iked_message *msg,
 	uint64_t		 rspi, ispi;
 	struct ibuf		*buf;
 	uint32_t		 rnd;
+	int			 natt_force = 0;
 
 	if (ptr == NULL)
 		return (mdlen);
@@ -2401,7 +2401,14 @@ ikev2_nat_detection(struct iked *env, struct iked_message *msg,
 		goto done;
 	}
 
-	if (env->sc_nattmode == NATT_FORCE) {
+	if (env->sc_nattmode == NATT_FORCE)
+		natt_force = 1;
+	else if (msg->msg_policy != NULL) {
+		if (msg->msg_policy->pol_flags & IKED_POLICY_NATT_FORCE)
+			natt_force = 1;
+	}
+
+	if (natt_force) {
 		/* Enforce NAT-T/UDP-encapsulation by distorting the digest */
 		rnd = arc4random();
 		EVP_DigestUpdate(ctx, &rnd, sizeof(rnd));
@@ -3395,6 +3402,7 @@ ikev2_resp_ike_sa_init(struct iked *env, struct iked_message *msg)
 	resp.msg_fd = msg->msg_fd;
 	resp.msg_natt = msg->msg_natt;
 	resp.msg_msgid = 0;
+	resp.msg_policy = sa->sa_policy;
 
 	/* IKE header */
 	if ((hdr = ikev2_add_header(buf, sa, resp.msg_msgid,
@@ -3702,6 +3710,7 @@ ikev2_send_init_error(struct iked *env, struct iked_message *msg)
 	resp.msg_fd = msg->msg_fd;
 	resp.msg_natt = msg->msg_natt;
 	resp.msg_msgid = 0;
+	resp.msg_policy = sa->sa_policy;
 
 	/* IKE header */
 	if ((hdr = ikev2_add_header(buf, sa, resp.msg_msgid,
@@ -3937,7 +3946,7 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 		if ((pld = ikev2_add_payload(e)) == NULL)
 			goto done;
 		firstpayload = IKEV2_PAYLOAD_IDr;
-		if (ibuf_add_buf(e, id->id_buf) != 0)
+		if (ibuf_add_ibuf(e, id->id_buf) != 0)
 			goto done;
 		len = ibuf_size(id->id_buf);
 
@@ -3953,7 +3962,7 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 			if ((cert = ibuf_reserve(e, sizeof(*cert))) == NULL)
 				goto done;
 			cert->cert_type = certid->id_type;
-			if (ibuf_add_buf(e, certid->id_buf) != 0)
+			if (ibuf_add_ibuf(e, certid->id_buf) != 0)
 				goto done;
 			len = ibuf_size(certid->id_buf) + sizeof(*cert);
 
@@ -3969,7 +3978,7 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 				    sizeof(*cert))) == NULL)
 					goto done;
 				cert->cert_type = sa->sa_scert[i].id_type;
-				if (ibuf_add_buf(e, sa->sa_scert[i].id_buf) !=
+				if (ibuf_add_ibuf(e, sa->sa_scert[i].id_buf) !=
 				    0)
 					goto done;
 				len = ibuf_size(sa->sa_scert[i].id_buf)
@@ -3988,7 +3997,7 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 	if ((auth = ibuf_reserve(e, sizeof(*auth))) == NULL)
 		goto done;
 	auth->auth_method = sa->sa_localauth.id_type;
-	if (ibuf_add_buf(e, sa->sa_localauth.id_buf) != 0)
+	if (ibuf_add_ibuf(e, sa->sa_localauth.id_buf) != 0)
 		goto done;
 	len = ibuf_size(sa->sa_localauth.id_buf) + sizeof(*auth);
 
@@ -4067,7 +4076,7 @@ ikev2_send_ike_e(struct iked *env, struct iked_sa *sa, struct ibuf *buf,
 		if ((pld = ikev2_add_payload(e)) == NULL)
 			goto done;
 
-		if (ibuf_add_buf(e, buf) != 0)
+		if (ibuf_add_ibuf(e, buf) != 0)
 			goto done;
 
 		if (ikev2_next_payload(pld, ibuf_size(buf),
@@ -4774,6 +4783,8 @@ ikev2_ikesa_enable(struct iked *env, struct iked_sa *sa, struct iked_sa *nsa)
 	/* sa_eapid needs to be set on both for radius accounting */
 	if (sa->sa_eapid)
 		nsa->sa_eapid = strdup(sa->sa_eapid);
+	if (sa->sa_eapclass)
+		nsa->sa_eapclass = ibuf_dup(sa->sa_eapclass);
 
 	log_info("%srekeyed as new IKESA %s (enc %s%s%s group %s prf %s)",
 	    SPI_SA(sa, NULL), print_spi(nsa->sa_hdr.sh_ispi, 8),
@@ -5353,7 +5364,7 @@ ikev2_send_informational(struct iked *env, struct iked_message *msg)
 			log_debug("%s: encryption failed", __func__);
 			goto done;
 		}
-		if (ibuf_add_buf(buf, e) != 0)
+		if (ibuf_add_ibuf(buf, e) != 0)
 			goto done;
 		if (ikev2_next_payload(pld, ibuf_size(e),
 		    IKEV2_PAYLOAD_NOTIFY) == -1)
@@ -5384,7 +5395,7 @@ ikev2_send_informational(struct iked *env, struct iked_message *msg)
 		    IKEV2_PAYLOAD_NOTIFY, IKEV2_EXCHANGE_INFORMATIONAL,
 		    0)) == NULL)
 			goto done;
-		if (ibuf_add_buf(buf, e) != 0)
+		if (ibuf_add_ibuf(buf, e) != 0)
 			goto done;
 		if (ikev2_set_header(hdr, ibuf_size(buf) - sizeof(*hdr)) == -1)
 			goto done;
@@ -5965,7 +5976,7 @@ ikev2_prfplus(struct iked_hash *prf, struct ibuf *key, struct ibuf *seed,
 			t2 = ibuf_new(NULL, 0);
 		t1 = ibuf_new(NULL, hash_keylength(prf));
 
-		ibuf_add_buf(t2, seed);
+		ibuf_add_ibuf(t2, seed);
 		pad = i + 1;
 		ibuf_add(t2, &pad, 1);
 
@@ -5977,7 +5988,7 @@ ikev2_prfplus(struct iked_hash *prf, struct ibuf *key, struct ibuf *seed,
 			fatalx("ikev2_prfplus: hash length mismatch");
 
 		ibuf_free(t2);
-		ibuf_add_buf(t, t1);
+		ibuf_add_ibuf(t, t1);
 
 		log_debug("%s: T%d with %zu bytes", __func__,
 		    pad, ibuf_size(t1));
@@ -6222,13 +6233,13 @@ ikev2_childsa_negotiate(struct iked *env, struct iked_sa *sa,
 			    ibuf_length(kex->kex_dhpeer));
 			goto done;
 		}
-		if (ibuf_add_buf(seed, dhsecret) != 0) {
+		if (ibuf_add_ibuf(seed, dhsecret) != 0) {
 			log_debug("%s: failed to set dh secret", __func__);
 			goto done;
 		}
 	}
-	if (ibuf_add_buf(seed, kex->kex_inonce) != 0 ||
-	    ibuf_add_buf(seed, kex->kex_rnonce) != 0 ||
+	if (ibuf_add_ibuf(seed, kex->kex_inonce) != 0 ||
+	    ibuf_add_ibuf(seed, kex->kex_rnonce) != 0 ||
 	    (keymat = ikev2_prfplus(sa->sa_prf,
 	    sa->sa_key_d, seed, ilen)) == NULL) {
 		log_debug("%s: failed to get IKE SA key material", __func__);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_prov_profile.c,v 1.8 2024/04/06 11:18:02 mpi Exp $ */
+/*	$OpenBSD: dt_prov_profile.c,v 1.10 2025/01/23 11:17:32 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
@@ -67,16 +67,17 @@ int
 dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
     struct dt_pcb_list *plist, struct dtioc_req *dtrq)
 {
+	uint64_t nsecs;
 	struct dt_pcb *dp;
 	struct cpu_info *ci;
 	CPU_INFO_ITERATOR cii;
-	extern int hz;
 
 	KASSERT(TAILQ_EMPTY(plist));
 	KASSERT(dtp == dtpp_profile || dtp == dtpp_interval);
 
-	if (dtrq->dtrq_rate <= 0 || dtrq->dtrq_rate > hz)
-		return EOPNOTSUPP;
+	nsecs = dtrq->dtrq_nsecs;
+	if (nsecs < USEC_TO_NSEC(200) || nsecs > SEC_TO_NSEC(UINT32_MAX))
+		return EINVAL;
 
 	CPU_INFO_FOREACH(cii, ci) {
 		if (!CPU_IS_PRIMARY(ci) && (dtp == dtpp_interval))
@@ -88,7 +89,7 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 			return ENOMEM;
 		}
 
-		dp->dp_nsecs = SEC_TO_NSEC(1) / dtrq->dtrq_rate;
+		dp->dp_nsecs = nsecs;
 		dp->dp_cpu = ci;
 
 		dp->dp_evtflags = dtrq->dtrq_evtflags & DTEVT_PROV_PROFILE;
@@ -101,15 +102,18 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 void
 dt_clock(struct clockrequest *cr, void *cf, void *arg)
 {
-	uint64_t count, i;
+	uint64_t count;
 	struct dt_evt *dtev;
 	struct dt_pcb *dp = arg;
 
 	count = clockrequest_advance(cr, dp->dp_nsecs);
-	for (i = 0; i < count; i++) {
-		dtev = dt_pcb_ring_get(dp, 1);
-		if (dtev == NULL)
-			return;
-		dt_pcb_ring_consume(dp, dtev);
-	}
+	if (count == 0)
+		return;
+	else if (count > 1)
+		dt_pcb_ring_skiptick(dp, count - 1);
+
+	dtev = dt_pcb_ring_get(dp, 1);
+	if (dtev == NULL)
+		return;
+	dt_pcb_ring_consume(dp, dtev);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.31 2021/10/23 11:22:48 mestre Exp $	*/
+/*	$OpenBSD: main.c,v 1.33 2024/08/23 14:50:16 deraadt Exp $	*/
 /*	$NetBSD: main.c,v 1.4 1995/04/27 21:22:25 mycroft Exp $	*/
 
 /*-
@@ -218,7 +218,7 @@ default_game(void)
 {
 	FILE		*fp;
 	static char	file[256];
-	char		line[256], games[256];
+	char		line[256], games[256], *p;
 
 	strlcpy(games, _PATH_GAMES, sizeof games);
 	strlcat(games, GAMES, sizeof games);
@@ -227,14 +227,19 @@ default_game(void)
 		warn("fopen %s", games);
 		return (NULL);
 	}
-	if (fgets(line, sizeof(line), fp) == NULL) {
-		warnx("%s: no default game available", games);
-		fclose(fp);
-		return (NULL);
-	}
+	do {
+		if (fgets(line, sizeof(line), fp) == NULL) {
+			warnx("%s: no default game available", games);
+			fclose(fp);
+			return (NULL);
+		}
+		line[strcspn(line, "\n")] = '\0';
+		p = strrchr(line, '#');
+		if (p)
+			*p = '\0';
+	} while (line[0] == '\0');
 	fclose(fp);
 
-	line[strcspn(line, "\n")] = '\0';
 	if (strlen(line) + strlen(_PATH_GAMES) >= sizeof(file)) {
 		warnx("default game name too long");
 		return (NULL);
@@ -250,7 +255,7 @@ okay_game(const char *s)
 	FILE		*fp;
 	static char	file[256];
 	const char	*ret = NULL;
-	char		line[256], games[256];
+	char		line[256], games[256], *p;
 
 	strlcpy(games, _PATH_GAMES, sizeof games);
 	strlcat(games, GAMES, sizeof games);
@@ -261,6 +266,9 @@ okay_game(const char *s)
 	}
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		line[strcspn(line, "\n")] = '\0';
+		p = strrchr(line, '#');
+		if (p)
+			*p = '\0';
 		if (strcmp(s, line) == 0) {
 			if (strlen(line) + strlen(_PATH_GAMES) >= sizeof(file)) {
 				warnx("game name too long");
@@ -287,7 +295,7 @@ int
 list_games(void)
 {
 	FILE		*fp;
-	char		line[256], games[256];
+	char		line[256], games[256], *p;
 	int		num_games = 0;
 
 	strlcpy(games, _PATH_GAMES, sizeof games);
@@ -300,6 +308,11 @@ list_games(void)
 	puts("available games:");
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		line[strcspn(line, "\n")] = '\0';
+		p = strrchr(line, '#');
+		if (p)
+			*p = '\0';
+		if (line[0] == '\0')
+			continue;
 		printf("	%s\n", line);
 		num_games++;
 	}

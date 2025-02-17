@@ -1,4 +1,4 @@
-/* $OpenBSD: machdep.c,v 1.92 2024/07/24 21:24:18 kettenis Exp $ */
+/* $OpenBSD: machdep.c,v 1.96 2025/02/11 22:27:09 kettenis Exp $ */
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
  * Copyright (c) 2021 Mark Kettenis <kettenis@openbsd.org>
@@ -35,7 +35,7 @@
 #include <sys/malloc.h>
 
 #include <net/if.h>
-#include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 #include <dev/cons.h>
 #include <dev/ofw/fdt.h>
 #include <dev/ofw/openfirm.h>
@@ -44,7 +44,6 @@
 #include <machine/bootconfig.h>
 #include <machine/bus.h>
 #include <machine/fpu.h>
-#include <arm64/arm64/arm64var.h>
 
 #include <machine/db_machdep.h>
 #include <ddb/db_extern.h>
@@ -366,8 +365,9 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case CPU_ID_AA64MMFR2:
 		return sysctl_rdquad(oldp, oldlenp, newp, cpu_id_aa64mmfr2);
 	case CPU_ID_AA64SMFR0:
-	case CPU_ID_AA64ZFR0:
 		return sysctl_rdquad(oldp, oldlenp, newp, 0);
+	case CPU_ID_AA64ZFR0:
+		return sysctl_rdquad(oldp, oldlenp, newp, cpu_id_aa64zfr0);
 	default:
 		return (sysctl_bounded_arr(cpuctl_vars, nitems(cpuctl_vars),
 		    name, namelen, oldp, oldlenp, newp, newlen));
@@ -461,7 +461,7 @@ setregs(struct proc *p, struct exec_package *pack, u_long stack,
 
 	/* If we were using the FPU, forget about it. */
 	memset(&pcb->pcb_fpstate, 0, sizeof(pcb->pcb_fpstate));
-	pcb->pcb_flags &= ~PCB_FPU;
+	pcb->pcb_flags &= ~(PCB_FPU | PCB_SVE);
 	fpu_drop();
 
 	memset(tf, 0, sizeof *tf);
@@ -628,10 +628,6 @@ dumpsys(void)
 	}
 	printf("\ndumping to dev %u,%u offset %ld\n", major(dumpdev),
 	    minor(dumpdev), dumplo);
-
-#ifdef UVM_SWAP_ENCRYPT
-	uvm_swap_finicrypt_all();
-#endif
 
 	error = (*bdevsw[major(dumpdev)].d_psize)(dumpdev);
 	printf("dump ");

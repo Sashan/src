@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.288 2024/07/31 10:07:33 mglocker Exp $
+# $OpenBSD: GENERIC,v 1.292 2025/02/14 04:56:26 hastings Exp $
 #
 # GENERIC machine description file
 #
@@ -272,6 +272,10 @@ hidwusb*	at fdt?
 hireset*	at fdt? early 1
 hitemp*		at fdt?
 
+# MediaTek SoCs
+mtintc*		at fdt?
+mtrng*		at fdt?
+
 # Marvell SoCs
 mvclock*	at fdt? early 1
 mvgicp*		at fdt? early 1
@@ -332,6 +336,7 @@ sdmmc*		at dwmshc?
 # Qualcomm SoCs
 qcaoss*		at fdt?
 qccpu*		at fdt?
+qccpucp*	at fdt?
 qcdwusb*	at fdt?
 qcgpio*		at acpi?
 qcgpio*		at fdt? early 1
@@ -404,6 +409,7 @@ iwn*		at pci?			# Intel WiFi Link 4965/5000/1000/6000
 iwm*		at pci?			# Intel WiFi Link 7xxx
 iwx*		at pci?			# Intel WiFi Link 22xxx
 qwx*		at pci?			# Qualcomm 802.11ax
+#qwz*		at pci?			# Qualcomm 802.11be
 
 # PCI SCSI
 ahci*		at pci? flags 0x0000	# AHCI SATA controllers

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh.c,v 1.600 2024/01/11 01:45:36 djm Exp $ */
+/* $OpenBSD: ssh.c,v 1.604 2025/02/15 01:48:30 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -48,6 +48,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/utsname.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -542,15 +543,18 @@ check_load(int r, struct sshkey **k, const char *path, const char *message)
  * file if the user specifies a config file on the command line.
  */
 static void
-process_config_files(const char *host_name, struct passwd *pw, int final_pass,
-    int *want_final_pass)
+process_config_files(const char *host_name, struct passwd *pw,
+    int final_pass, int *want_final_pass)
 {
-	char buf[PATH_MAX];
+	char *cmd, buf[PATH_MAX];
 	int r;
 
+	if ((cmd = sshbuf_dup_string(command)) == NULL)
+		fatal_f("sshbuf_dup_string failed");
 	if (config != NULL) {
 		if (strcasecmp(config, "none") != 0 &&
-		    !read_config_file(config, pw, host, host_name, &options,
+		    !read_config_file(config, pw, host, host_name, cmd,
+		    &options,
 		    SSHCONF_USERCONF | (final_pass ? SSHCONF_FINAL : 0),
 		    want_final_pass))
 			fatal("Can't open user config file %.100s: "
@@ -559,15 +563,16 @@ process_config_files(const char *host_name, struct passwd *pw, int final_pass,
 		r = snprintf(buf, sizeof buf, "%s/%s", pw->pw_dir,
 		    _PATH_SSH_USER_CONFFILE);
 		if (r > 0 && (size_t)r < sizeof(buf))
-			(void)read_config_file(buf, pw, host, host_name,
+			(void)read_config_file(buf, pw, host, host_name, cmd,
 			    &options, SSHCONF_CHECKPERM | SSHCONF_USERCONF |
 			    (final_pass ? SSHCONF_FINAL : 0), want_final_pass);
 
 		/* Read systemwide configuration file after user config. */
 		(void)read_config_file(_PATH_HOST_CONFIG_FILE, pw,
-		    host, host_name, &options,
+		    host, host_name, cmd, &options,
 		    final_pass ? SSHCONF_FINAL : 0, want_final_pass);
 	}
+	free(cmd);
 }
 
 /* Rewrite the port number in an addrinfo list of addresses */
@@ -654,7 +659,7 @@ main(int ac, char **av)
 	struct ssh *ssh = NULL;
 	int i, r, opt, exit_status, use_syslog, direct, timeout_ms;
 	int was_addr, config_test = 0, opt_terminated = 0, want_final_pass = 0;
-	char *p, *cp, *line, *argv0, *logfile;
+	char *p, *cp, *line, *argv0, *logfile, *args;
 	char cname[NI_MAXHOST], thishost[NI_MAXHOST];
 	struct stat st;
 	struct passwd *pw;
@@ -664,6 +669,7 @@ main(int ac, char **av)
 	struct addrinfo *addrs = NULL;
 	size_t n, len;
 	u_int j;
+	struct utsname utsname;
 	struct ssh_conn_info *cinfo = NULL;
 
 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
@@ -712,7 +718,9 @@ main(int ac, char **av)
 		fatal("Couldn't allocate session state");
 	channel_init_channels(ssh);
 
+
 	/* Parse command-line arguments. */
+	args = argv_assemble(ac, av); /* logged later */
 	host = NULL;
 	use_syslog = 0;
 	logfile = NULL;
@@ -939,7 +947,7 @@ main(int ac, char **av)
 			options.log_level = SYSLOG_LEVEL_QUIET;
 			break;
 		case 'e':
-			if (optarg[0] == '^' && optarg[2] == 0 &&
+			if (strlen(optarg) == 2 && optarg[0] == '^' &&
 			    (u_char) optarg[1] >= 64 &&
 			    (u_char) optarg[1] < 128)
 				options.escape_char = (u_char) optarg[1] & 31;
@@ -1048,7 +1056,7 @@ main(int ac, char **av)
 		case 'o':
 			line = xstrdup(optarg);
 			if (process_config_line(&options, pw,
-			    host ? host : "", host ? host : "", line,
+			    host ? host : "", host ? host : "", "", line,
 			    "command-line", 0, NULL, SSHCONF_USERCONF) != 0)
 				exit(255);
 			free(line);
@@ -1180,8 +1188,15 @@ main(int ac, char **av)
 	    SYSLOG_FACILITY_USER : options.log_facility,
 	    !use_syslog);
 
-	if (debug_flag)
-		logit("%s, %s", SSH_VERSION, SSH_OPENSSL_VERSION);
+	debug("%s, %s", SSH_VERSION, SSH_OPENSSL_VERSION);
+	if (uname(&utsname) != 0) {
+		memset(&utsname, 0, sizeof(utsname));
+		strlcpy(utsname.sysname, "UNKNOWN", sizeof(utsname.sysname));
+	}
+	debug3("Running on %s %s %s %s", utsname.sysname, utsname.release,
+	    utsname.version, utsname.machine);
+	debug3("Started with: %s", args);
+	free(args);
 
 	/* Parse the configuration files */
 	process_config_files(options.host_arg, pw, 0, &want_final_pass);
@@ -1471,6 +1486,13 @@ main(int ac, char **av)
 			if (options.exit_on_forward_failure)
 				cleanup_exit(255);
 		}
+	}
+
+	if (options.version_addendum != NULL) {
+		cp = default_client_percent_dollar_expand(
+		    options.version_addendum, cinfo);
+		free(options.version_addendum);
+		options.version_addendum = cp;
 	}
 
 	if (options.num_system_hostfiles > 0 &&

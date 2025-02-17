@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.131 2024/07/30 08:59:33 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.139 2025/02/11 22:27:09 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -29,7 +29,7 @@
 #include <sys/user.h>
 #include <sys/kstat.h>
 
-#include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 
 #include <machine/fdt.h>
 #include <machine/elf.h>
@@ -46,6 +46,15 @@
 #if NPSCI > 0
 #include <dev/fdt/pscivar.h>
 #endif
+
+/*
+ * Fool the compiler into accessing these registers without enabling
+ * SVE code generation.  The ID_AA64ZFR0_EL1 can always be accessed
+ * and the code that writes to ZCR_EL1 is only executed if the CPU has
+ * SVE support.
+ */
+#define id_aa64zfr0_el1		s3_0_c0_c4_4
+#define zcr_el1			s3_0_c1_c2_0
 
 /* CPU Identification */
 #define CPU_IMPL_ARM		0x41
@@ -87,6 +96,7 @@
 #define CPU_PART_CORTEX_A520	0xd80
 #define CPU_PART_CORTEX_A720	0xd81
 #define CPU_PART_CORTEX_X4	0xd82
+#define CPU_PART_NEOVERSE_V3AE	0xd83
 #define CPU_PART_NEOVERSE_V3	0xd84
 #define CPU_PART_CORTEX_X925	0xd85
 #define CPU_PART_CORTEX_A725	0xd87
@@ -177,6 +187,7 @@ struct cpu_cores cpu_cores_arm[] = {
 	{ CPU_PART_NEOVERSE_V1, "Neoverse V1" },
 	{ CPU_PART_NEOVERSE_V2, "Neoverse V2" },
 	{ CPU_PART_NEOVERSE_V3, "Neoverse V3" },
+	{ CPU_PART_NEOVERSE_V3AE, "Neoverse V3AE" },
 	{ 0, NULL },
 };
 
@@ -247,6 +258,7 @@ uint64_t cpu_id_aa64mmfr1;
 uint64_t cpu_id_aa64mmfr2;
 uint64_t cpu_id_aa64pfr0;
 uint64_t cpu_id_aa64pfr1;
+uint64_t cpu_id_aa64zfr0;
 
 int arm64_has_lse;
 int arm64_has_rng;
@@ -493,6 +505,7 @@ cpu_identify(struct cpu_info *ci)
 	static uint64_t prev_id_aa64mmfr2;
 	static uint64_t prev_id_aa64pfr0;
 	static uint64_t prev_id_aa64pfr1;
+	static uint64_t prev_id_aa64zfr0;
 	uint64_t midr, impl, part;
 	uint64_t clidr, ccsidr, id;
 	uint32_t ctr, sets, ways, line;
@@ -648,7 +661,8 @@ cpu_identify(struct cpu_info *ci)
 	    READ_SPECIALREG(id_aa64mmfr1_el1) == prev_id_aa64mmfr1 &&
 	    READ_SPECIALREG(id_aa64mmfr2_el1) == prev_id_aa64mmfr2 &&
 	    READ_SPECIALREG(id_aa64pfr0_el1) == prev_id_aa64pfr0 &&
-	    READ_SPECIALREG(id_aa64pfr1_el1) == prev_id_aa64pfr1)
+	    READ_SPECIALREG(id_aa64pfr1_el1) == prev_id_aa64pfr1 &&
+	    READ_SPECIALREG(id_aa64zfr0_el1) == prev_id_aa64zfr0)
 		return;
 
 	/*
@@ -671,7 +685,10 @@ cpu_identify(struct cpu_info *ci)
 		printf("\n%s: mismatched ID_AA64MMFR0_EL1",
 		    ci->ci_dev->dv_xname);
 	}
-	if (READ_SPECIALREG(id_aa64mmfr1_el1) != cpu_id_aa64mmfr1) {
+	id = READ_SPECIALREG(id_aa64mmfr1_el1);
+	/* Allow SpecSEI to be different. */
+	id &= ~ID_AA64MMFR1_SPECSEI_MASK;
+	if (id != cpu_id_aa64mmfr1) {
 		printf("\n%s: mismatched ID_AA64MMFR1_EL1",
 		    ci->ci_dev->dv_xname);
 	}
@@ -866,19 +883,31 @@ cpu_identify(struct cpu_info *ci)
 		sep = ",";
 	}
 
-	if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_BASE) {
+	if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_PAC) {
 		printf("%sAPI", sep);
 		sep = ",";
 	}
-	if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_PAC)
-		printf("+PAC");
+	if (ID_AA64ISAR1_API(id) == ID_AA64ISAR1_API_EPAC)
+		printf("+EPAC");
+	else if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_EPAC2)
+		printf("+EPAC2");
+	if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_FPAC)
+		printf("+FPAC");
+	if (ID_AA64ISAR1_API(id) >= ID_AA64ISAR1_API_FPAC_COMBINED)
+		printf("+COMBINED");
 
-	if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_BASE) {
+	if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_PAC) {
 		printf("%sAPA", sep);
 		sep = ",";
 	}
-	if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_PAC)
-		printf("+PAC");
+	if (ID_AA64ISAR1_APA(id) == ID_AA64ISAR1_APA_EPAC)
+		printf("+EPAC");
+	else if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_EPAC2)
+		printf("+EPAC2");
+	if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_FPAC)
+		printf("+FPAC");
+	if (ID_AA64ISAR1_APA(id) >= ID_AA64ISAR1_APA_FPAC_COMBINED)
+		printf("+COMBINED");
 
 	if (ID_AA64ISAR1_DPB(id) >= ID_AA64ISAR1_DPB_IMPL) {
 		printf("%sDPB", sep);
@@ -916,6 +945,24 @@ cpu_identify(struct cpu_info *ci)
 		printf("%sMOPS", sep);
 		sep = ",";
 	}
+
+	if (ID_AA64ISAR2_GPA3(id) >= ID_AA64ISAR2_GPA3_IMPL) {
+		printf("%sGPA3", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_APA3(id) >= ID_AA64ISAR2_APA3_PAC) {
+		printf("%sAPA3", sep);
+		sep = ",";
+	}
+	if (ID_AA64ISAR2_APA3(id) == ID_AA64ISAR2_APA3_EPAC)
+		printf("+EPAC");
+	else if (ID_AA64ISAR2_APA3(id) >= ID_AA64ISAR2_APA3_EPAC2)
+		printf("+EPAC2");
+	if (ID_AA64ISAR2_APA3(id) >= ID_AA64ISAR2_APA3_FPAC)
+		printf("+FPAC");
+	if (ID_AA64ISAR2_APA3(id) >= ID_AA64ISAR2_APA3_FPAC_COMBINED)
+		printf("+COMBINED");
 
 	if (ID_AA64ISAR2_RPRES(id) >= ID_AA64ISAR2_RPRES_IMPL) {
 		printf("%sRPRES", sep);
@@ -1038,6 +1085,18 @@ cpu_identify(struct cpu_info *ci)
 		sep = ",";
 	}
 
+	if (ID_AA64PFR0_RAS(id) >= ID_AA64PFR0_RAS_IMPL) {
+		printf("%sRAS", sep);
+		if (ID_AA64PFR0_RAS(id) >= ID_AA64PFR0_RAS_IMPL_V1P1)
+			printf("v1p1");
+		sep = ",";
+	}
+
+	if (ID_AA64PFR0_SVE(id) >= ID_AA64PFR0_SVE_IMPL) {
+		printf("%sSVE", sep);
+		sep = ",";
+	}
+
 	if (ID_AA64PFR0_ADV_SIMD(id) != ID_AA64PFR0_ADV_SIMD_NONE &&
 	    ID_AA64PFR0_ADV_SIMD(id) >= ID_AA64PFR0_ADV_SIMD_HP) {
 		printf("%sAdvSIMD+HP", sep);
@@ -1072,6 +1131,46 @@ cpu_identify(struct cpu_info *ci)
 		sep = ",";
 	}
 
+	/*
+	 * ID_AA64ZFR0
+	 */
+	id = READ_SPECIALREG(id_aa64zfr0_el1);
+	if (id & ID_AA64ZFR0_MASK) {
+		printf("\n%s: SVE", ci->ci_dev->dv_xname);
+		if (ID_AA64ZFR0_SVEVER(id) >= ID_AA64ZFR0_SVEVER_SVE2)
+			printf("2");
+		if (ID_AA64ZFR0_SVEVER(id) >= ID_AA64ZFR0_SVEVER_SVE2P1)
+			printf("p1");
+
+		if (ID_AA64ZFR0_F64MM(id) >= ID_AA64ZFR0_F64MM_IMPL)
+			printf(",F64MM");
+
+		if (ID_AA64ZFR0_F32MM(id) >= ID_AA64ZFR0_F32MM_IMPL)
+			printf(",F32MM");
+
+		if (ID_AA64ZFR0_I8MM(id) >= ID_AA64ZFR0_I8MM_IMPL)
+			printf(",I8MM");
+
+		if (ID_AA64ZFR0_SM4(id) >= ID_AA64ZFR0_SM4_IMPL)
+			printf(",SM4");
+
+		if (ID_AA64ZFR0_SHA3(id) >= ID_AA64ZFR0_SHA3_IMPL)
+			printf(",SHA3");
+
+		if (ID_AA64ZFR0_BF16(id) >= ID_AA64ZFR0_BF16_BASE)
+			printf(",BF16");
+		if (ID_AA64ZFR0_BF16(id) >= ID_AA64ZFR0_BF16_EBF)
+			printf("+EBF");
+
+		if (ID_AA64ZFR0_BITPERM(id) >= ID_AA64ZFR0_BITPERM_IMPL)
+			printf(",BitPerm");
+		
+		if (ID_AA64ZFR0_AES(id) >= ID_AA64ZFR0_AES_BASE)
+			printf(",AES");
+		if (ID_AA64ZFR0_AES(id) >= ID_AA64ZFR0_AES_PMULL)
+			printf("+PMULL");
+	}
+
 	prev_id_aa64isar0 = READ_SPECIALREG(id_aa64isar0_el1);
 	prev_id_aa64isar1 = READ_SPECIALREG(id_aa64isar1_el1);
 	prev_id_aa64isar2 = READ_SPECIALREG(id_aa64isar2_el1);
@@ -1080,6 +1179,7 @@ cpu_identify(struct cpu_info *ci)
 	prev_id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
 	prev_id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
 	prev_id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
+	prev_id_aa64zfr0 = READ_SPECIALREG(id_aa64zfr0_el1);
 
 #ifdef CPU_DEBUG
 	id = READ_SPECIALREG(id_aa64afr0_el1);
@@ -1106,6 +1206,8 @@ cpu_identify(struct cpu_info *ci)
 	printf("\nID_AA64PFR0_EL1: 0x%016llx", id);
 	id = READ_SPECIALREG(id_aa64pfr1_el1);
 	printf("\nID_AA64PFR1_EL1: 0x%016llx", id);
+	id = READ_SPECIALREG(id_aa64zfr0_el1);
+	printf("\nID_AA64ZFR0_EL1: 0x%016llx", id);
 #endif
 }
 
@@ -1149,6 +1251,7 @@ cpu_identify_cleanup(void)
 	value = 0;
 	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_FP_MASK;
 	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_ADV_SIMD_MASK;
+	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_SVE_MASK;
 	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_DIT_MASK;
 	cpu_id_aa64pfr0 = value;
 
@@ -1157,6 +1260,10 @@ cpu_identify_cleanup(void)
 	value |= cpu_id_aa64pfr1 & ID_AA64PFR1_BT_MASK;
 	value |= cpu_id_aa64pfr1 & ID_AA64PFR1_SSBS_MASK;
 	cpu_id_aa64pfr1 = value;
+
+	/* ID_AA64ZFR0_EL1 */
+	value = cpu_id_aa64zfr0 & ID_AA64ZFR0_MASK;
+	cpu_id_aa64zfr0 = value;
 
 	/* HWCAP */
 	hwcap |= HWCAP_FP;	/* OpenBSD assumes Floating-point support */
@@ -1177,8 +1284,8 @@ cpu_identify_cleanup(void)
 	if (ID_AA64PFR0_FP(cpu_id_aa64pfr0) != ID_AA64PFR0_FP_NONE &&
 	    ID_AA64PFR0_FP(cpu_id_aa64pfr0) >= ID_AA64PFR0_FP_HP)
 		hwcap |= HWCAP_FPHP;
-	if (ID_AA64PFR0_FP(cpu_id_aa64pfr0) != ID_AA64PFR0_ADV_SIMD_NONE &&
-	    ID_AA64PFR0_FP(cpu_id_aa64pfr0) >= ID_AA64PFR0_ADV_SIMD_HP)
+	if (ID_AA64PFR0_ADV_SIMD(cpu_id_aa64pfr0) != ID_AA64PFR0_ADV_SIMD_NONE &&
+	    ID_AA64PFR0_ADV_SIMD(cpu_id_aa64pfr0) >= ID_AA64PFR0_ADV_SIMD_HP)
 		hwcap |= HWCAP_ASIMDHP;
 	id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
 	if (ID_AA64MMFR2_IDS(id_aa64mmfr2) >= ID_AA64MMFR2_IDS_IMPL)
@@ -1203,7 +1310,8 @@ cpu_identify_cleanup(void)
 		hwcap |= HWCAP_ASIMDDP;
 	if (ID_AA64ISAR0_SHA2(cpu_id_aa64isar0) >= ID_AA64ISAR0_SHA2_512)
 		hwcap |= HWCAP_SHA512;
-	/* HWCAP_SVE: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64PFR0_SVE(cpu_id_aa64pfr0) >= ID_AA64PFR0_SVE_IMPL)
+		hwcap |= HWCAP_SVE;
 	if (ID_AA64ISAR0_FHM(cpu_id_aa64isar0) >= ID_AA64ISAR0_FHM_IMPL)
 		hwcap |= HWCAP_ASIMDFHM;
 	if (ID_AA64PFR0_DIT(cpu_id_aa64pfr0) >= ID_AA64PFR0_DIT_IMPL)
@@ -1218,30 +1326,42 @@ cpu_identify_cleanup(void)
 		hwcap |= HWCAP_SSBS;
 	if (ID_AA64ISAR1_SB(cpu_id_aa64isar1) >= ID_AA64ISAR1_SB_IMPL)
 		hwcap |= HWCAP_SB;
-	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_BASE ||
-	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_BASE)
+	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_PAC ||
+	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_PAC ||
+	    ID_AA64ISAR2_APA3(cpu_id_aa64isar2) >= ID_AA64ISAR2_APA3_PAC)
 		hwcap |= HWCAP_PACA;
 	if (ID_AA64ISAR1_GPA(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPA_IMPL ||
-	    ID_AA64ISAR1_GPI(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPI_IMPL)
+	    ID_AA64ISAR1_GPI(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPI_IMPL ||
+	    ID_AA64ISAR2_GPA3(cpu_id_aa64isar2) >= ID_AA64ISAR2_GPA3_IMPL)
 		hwcap |= HWCAP_PACG;
 
 	/* HWCAP2 */
 	if (ID_AA64ISAR1_DPB(cpu_id_aa64isar1) >= ID_AA64ISAR1_DPB_DCCVADP)
 		hwcap2 |= HWCAP2_DCPODP;
-	/* HWCAP2_SVE2: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEAES: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEPMULL: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEBITPERM: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVESHA3: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVESM4: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ZFR0_SVEVER(cpu_id_aa64zfr0) >= ID_AA64ZFR0_SVEVER_SVE2)
+		hwcap2 |= HWCAP2_SVE2;
+	if (ID_AA64ZFR0_AES(cpu_id_aa64zfr0) >= ID_AA64ZFR0_AES_BASE)
+		hwcap2 |= HWCAP2_SVEAES;
+	if (ID_AA64ZFR0_AES(cpu_id_aa64zfr0) >= ID_AA64ZFR0_AES_PMULL)
+		hwcap2 |= HWCAP2_SVEPMULL;
+	if (ID_AA64ZFR0_BITPERM(cpu_id_aa64zfr0) >= ID_AA64ZFR0_BITPERM_IMPL)
+		hwcap2 |= HWCAP2_SVEBITPERM;
+	if (ID_AA64ZFR0_SHA3(cpu_id_aa64zfr0) >= ID_AA64ZFR0_SHA3_IMPL)
+		hwcap2 |= HWCAP2_SVESHA3;
+	if (ID_AA64ZFR0_SM4(cpu_id_aa64zfr0) >= ID_AA64ZFR0_SM4_IMPL)
+		hwcap2 |= HWCAP2_SVESM4;
 	if (ID_AA64ISAR0_TS(cpu_id_aa64isar0) >= ID_AA64ISAR0_TS_AXFLAG)
 		hwcap2 |= HWCAP2_FLAGM2;
 	if (ID_AA64ISAR1_FRINTTS(cpu_id_aa64isar1) >= ID_AA64ISAR1_FRINTTS_IMPL)
 		hwcap2 |= HWCAP2_FRINT;
-	/* HWCAP2_SVEI8MM: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEF32MM: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEF64MM: OpenBSD kernel doesn't provide SVE support */
-	/* HWCAP2_SVEBF16: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ZFR0_I8MM(cpu_id_aa64zfr0) >= ID_AA64ZFR0_I8MM_IMPL)
+		hwcap2 |= HWCAP2_SVEI8MM;
+	if (ID_AA64ZFR0_F32MM(cpu_id_aa64zfr0) >= ID_AA64ZFR0_F32MM_IMPL)
+		hwcap2 |= HWCAP2_SVEF32MM;
+	if (ID_AA64ZFR0_F64MM(cpu_id_aa64zfr0) >= ID_AA64ZFR0_F64MM_IMPL)
+		hwcap2 |= HWCAP2_SVEF64MM;
+	if (ID_AA64ZFR0_BF16(cpu_id_aa64zfr0) >= ID_AA64ZFR0_BF16_BASE)
+		hwcap2 |= HWCAP2_SVEBF16;
 	if (ID_AA64ISAR1_I8MM(cpu_id_aa64isar1) >= ID_AA64ISAR1_I8MM_IMPL)
 		hwcap2 |= HWCAP2_I8MM;
 	if (ID_AA64ISAR1_BF16(cpu_id_aa64isar1) >= ID_AA64ISAR1_BF16_BASE)
@@ -1272,12 +1392,14 @@ cpu_identify_cleanup(void)
 		hwcap2 |= HWCAP2_WFXT;
 	if (ID_AA64ISAR1_BF16(cpu_id_aa64isar1) >= ID_AA64ISAR1_BF16_EBF)
 		hwcap2 |= HWCAP2_EBF16;
-	/* HWCAP2_SVE_EBF16: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ZFR0_BF16(cpu_id_aa64zfr0) >= ID_AA64ZFR0_BF16_EBF)
+		hwcap2 |= HWCAP2_SVE_EBF16;
 	if (ID_AA64ISAR2_CSSC(cpu_id_aa64isar2) >= ID_AA64ISAR2_CSSC_IMPL)
 		hwcap2 |= HWCAP2_CSSC;
 	if (ID_AA64ISAR2_RPRFM(cpu_id_aa64isar2) >= ID_AA64ISAR2_RPRFM_IMPL)
 		hwcap2 |= HWCAP2_RPRFM;
-	/* HWCAP2_SVE2P1: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ZFR0_SVEVER(cpu_id_aa64zfr0) >= ID_AA64ZFR0_SVEVER_SVE2P1)
+		hwcap2 |= HWCAP2_SVE2P1;
 	/* HWCAP2_SME2: OpenBSD kernel doesn't provide SME support */
 	/* HWCAP2_SME2P1: OpenBSD kernel doesn't provide SME support */
 	/* HWCAP2_SME_I16I32: OpenBSD kernel doesn't provide SME support */
@@ -1397,6 +1519,15 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		cpu_id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
 		cpu_id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
 		cpu_id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
+		cpu_id_aa64zfr0 = READ_SPECIALREG(id_aa64zfr0_el1);
+
+		/*
+		 * The SpecSEI "feature" isn't relevant for userland.
+		 * So it is fine if this field differs between CPU
+		 * cores.  Mask off this field to prevent exporting it
+		 * to userland.
+		 */
+		cpu_id_aa64mmfr1 &= ~ID_AA64MMFR1_SPECSEI_MASK;
 
 		/*
 		 * The CSV2/CSV3 "features" are handled on a
@@ -1464,6 +1595,7 @@ cpu_init(void)
 {
 	uint64_t id_aa64mmfr1, sctlr;
 	uint64_t id_aa64pfr0;
+	uint64_t cpacr;
 	uint64_t tcr;
 
 	WRITE_SPECIALREG(ttbr0_el1, pmap_kernel()->pm_pt0pa);
@@ -1491,8 +1623,9 @@ cpu_init(void)
 		__asm volatile (".arch armv8.4-a; msr dit, #1");
 
 	/* Enable PAuth. */
-	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_BASE ||
-	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_BASE) {
+	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_PAC ||
+	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_PAC ||
+	    ID_AA64ISAR2_APA3(cpu_id_aa64isar2) >= ID_AA64ISAR2_APA3_PAC) {
 		sctlr = READ_SPECIALREG(sctlr_el1);
 		sctlr |= SCTLR_EnIA | SCTLR_EnDA;
 		sctlr |= SCTLR_EnIB | SCTLR_EnDB;
@@ -1504,6 +1637,20 @@ cpu_init(void)
 		sctlr = READ_SPECIALREG(sctlr_el1);
 		sctlr |= SCTLR_BT0 | SCTLR_BT1;
 		WRITE_SPECIALREG(sctlr_el1, sctlr);
+	}
+
+	/* Setup SVE with the default 128-bit vector length. */
+	if (ID_AA64PFR0_SVE(cpu_id_aa64pfr0) >= ID_AA64PFR0_SVE_IMPL) {
+		cpacr = READ_SPECIALREG(cpacr_el1);
+		cpacr &= ~CPACR_ZEN_MASK;
+		cpacr |= CPACR_ZEN_TRAP_EL0;
+		WRITE_SPECIALREG(cpacr_el1, cpacr);
+		__asm volatile ("isb");
+		WRITE_SPECIALREG(zcr_el1, 0);
+		cpacr &= ~CPACR_ZEN_MASK;
+		cpacr |= CPACR_ZEN_TRAP_ALL1;
+		WRITE_SPECIALREG(cpacr_el1, cpacr);
+		__asm volatile ("isb");
 	}
 
 	/* Initialize debug registers. */

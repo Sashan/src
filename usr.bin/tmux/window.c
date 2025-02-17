@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.291 2024/06/24 08:30:50 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.299 2024/12/06 09:06:57 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -482,7 +482,8 @@ window_pane_update_focus(struct window_pane *wp)
 				if (c->session != NULL &&
 				    c->session->attached != 0 &&
 				    (c->flags & CLIENT_FOCUSED) &&
-				    c->session->curw->window == wp->window) {
+				    c->session->curw->window == wp->window &&
+				    c->overlay_draw == NULL) {
 					focused = 1;
 					break;
 				}
@@ -583,11 +584,32 @@ struct window_pane *
 window_get_active_at(struct window *w, u_int x, u_int y)
 {
 	struct window_pane	*wp;
+	int			 pane_scrollbars;
+	u_int			 sb_pos, sb_w, xoff, sx;
+
+	pane_scrollbars = options_get_number(w->options, "pane-scrollbars");
+	sb_pos = options_get_number(w->options, "pane-scrollbars-position");
 
 	TAILQ_FOREACH(wp, &w->panes, entry) {
 		if (!window_pane_visible(wp))
 			continue;
-		if (x < wp->xoff || x > wp->xoff + wp->sx)
+
+		if (pane_scrollbars == PANE_SCROLLBARS_ALWAYS ||
+		    (pane_scrollbars == PANE_SCROLLBARS_MODAL &&
+		     window_pane_mode(wp) != WINDOW_PANE_NO_MODE)) {
+			sb_w = wp->scrollbar_style.width +
+			    wp->scrollbar_style.pad;
+		} else
+			sb_w = 0;
+
+		if (sb_pos == PANE_SCROLLBARS_LEFT) {
+			xoff = wp->xoff - sb_w;
+			sx = wp->sx + sb_w;
+		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT */
+			xoff = wp->xoff;
+			sx = wp->sx + sb_w;
+		}
+		if (x < xoff || x > xoff + sx)
 			continue;
 		if (y < wp->yoff || y > wp->yoff + wp->sy)
 			continue;
@@ -940,6 +962,9 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 	wp->control_bg = -1;
 	wp->control_fg = -1;
 
+	style_set_scrollbar_style_from_option(&wp->scrollbar_style,
+	    wp->options);
+
 	colour_palette_init(&wp->palette);
 	colour_palette_from_option(&wp->palette, wp->options);
 
@@ -1085,6 +1110,7 @@ window_pane_set_mode(struct window_pane *wp, struct window_pane *swp,
     struct args *args)
 {
 	struct window_mode_entry	*wme;
+	struct window			*w = wp->window;
 
 	if (!TAILQ_EMPTY(&wp->modes) && TAILQ_FIRST(&wp->modes)->mode == mode)
 		return (1);
@@ -1105,9 +1131,10 @@ window_pane_set_mode(struct window_pane *wp, struct window_pane *swp,
 		TAILQ_INSERT_HEAD(&wp->modes, wme, entry);
 		wme->screen = wme->mode->init(wme, fs, args);
 	}
-
 	wp->screen = wme->screen;
-	wp->flags |= (PANE_REDRAW|PANE_CHANGED);
+
+	wp->flags |= (PANE_REDRAW|PANE_REDRAWSCROLLBAR|PANE_CHANGED);
+	layout_fix_panes(w, NULL);
 
 	server_redraw_window_borders(wp->window);
 	server_status_window(wp->window);
@@ -1120,6 +1147,7 @@ void
 window_pane_reset_mode(struct window_pane *wp)
 {
 	struct window_mode_entry	*wme, *next;
+	struct window			*w = wp->window;
 
 	if (TAILQ_EMPTY(&wp->modes))
 		return;
@@ -1140,7 +1168,9 @@ window_pane_reset_mode(struct window_pane *wp)
 		if (next->mode->resize != NULL)
 			next->mode->resize(next, wp->sx, wp->sy);
 	}
-	wp->flags |= (PANE_REDRAW|PANE_CHANGED);
+
+	wp->flags |= (PANE_REDRAW|PANE_REDRAWSCROLLBAR|PANE_CHANGED);
+	layout_fix_panes(w, NULL);
 
 	server_redraw_window_borders(wp->window);
 	server_status_window(wp->window);
@@ -1152,6 +1182,24 @@ window_pane_reset_mode_all(struct window_pane *wp)
 {
 	while (!TAILQ_EMPTY(&wp->modes))
 		window_pane_reset_mode(wp);
+}
+
+static void
+window_pane_copy_paste(struct window_pane *wp, char *buf, size_t len)
+{
+ 	struct window_pane	*loop;
+
+	TAILQ_FOREACH(loop, &wp->window->panes, entry) {
+		if (loop != wp &&
+		    TAILQ_EMPTY(&loop->modes) &&
+		    loop->fd != -1 &&
+		    (~loop->flags & PANE_INPUTOFF) &&
+		    window_pane_visible(loop) &&
+		    options_get_number(loop->options, "synchronize-panes")) {
+			log_debug("%s: %.*s", __func__, (int)len, buf);
+			bufferevent_write(loop->event, buf, len);
+		}
+	}
 }
 
 static void
@@ -1168,6 +1216,25 @@ window_pane_copy_key(struct window_pane *wp, key_code key)
 		    options_get_number(loop->options, "synchronize-panes"))
 			input_key_pane(loop, key, NULL);
 	}
+}
+
+void
+window_pane_paste(struct window_pane *wp, key_code key, char *buf, size_t len)
+{
+	if (!TAILQ_EMPTY(&wp->modes))
+		return;
+
+	if (wp->fd == -1 || wp->flags & PANE_INPUTOFF)
+		return;
+
+	if (KEYC_IS_PASTE(key) && (~wp->screen->mode & MODE_BRACKETPASTE))
+		return;
+
+	log_debug("%s: %.*s", __func__, (int)len, buf);
+	bufferevent_write(wp->event, buf, len);
+
+	if (options_get_number(wp->options, "synchronize-panes"))
+		window_pane_copy_paste(wp, buf, len);
 }
 
 int
@@ -1652,13 +1719,30 @@ window_set_fill_character(struct window *w)
 void
 window_pane_default_cursor(struct window_pane *wp)
 {
-	struct screen	*s = wp->screen;
-	int		 c;
+	screen_set_default_cursor(wp->screen, wp->options);
+}
 
-	c = options_get_number(wp->options, "cursor-colour");
-	s->default_ccolour = c;
+int
+window_pane_mode(struct window_pane *wp)
+{
+	if (TAILQ_FIRST(&wp->modes) != NULL) {
+		if (TAILQ_FIRST(&wp->modes)->mode == &window_copy_mode)
+			return (WINDOW_PANE_COPY_MODE);
+		if (TAILQ_FIRST(&wp->modes)->mode == &window_view_mode)
+			return (WINDOW_PANE_VIEW_MODE);
+	}
+	return (WINDOW_PANE_NO_MODE);
+}
 
-	c = options_get_number(wp->options, "cursor-style");
-	s->default_mode = 0;
-	screen_set_cursor_style(c, &s->default_cstyle, &s->default_mode);
+/* Return 1 if scrollbar is or should be displayed. */
+int
+window_pane_show_scrollbar(struct window_pane *wp, int sb_option)
+{
+	if (SCREEN_IS_ALTERNATE(wp->screen))
+		return (0);
+	if (sb_option == PANE_SCROLLBARS_ALWAYS ||
+	    (sb_option == PANE_SCROLLBARS_MODAL &&
+	    window_pane_mode(wp) != WINDOW_PANE_NO_MODE))
+		return (1);
+	return (0);
 }

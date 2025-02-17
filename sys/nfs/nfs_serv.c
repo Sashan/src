@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_serv.c,v 1.126 2024/05/01 13:15:59 jsg Exp $	*/
+/*	$OpenBSD: nfs_serv.c,v 1.131 2024/11/05 06:03:19 jsg Exp $	*/
 /*     $NetBSD: nfs_serv.c,v 1.34 1997/05/12 23:37:12 fvdl Exp $       */
 
 /*
@@ -94,10 +94,8 @@ nfsm_reply(struct nfsm_info *infop, struct nfsrv_descript *nfsd,
 		statuslen = 0;
 	(void)nfs_rephead(statuslen, nfsd, slp, error,
 		&infop->nmi_mreq, &infop->nmi_mb);
-	if (infop->nmi_mrep != NULL) {
-		m_freem(infop->nmi_mrep);
-		infop->nmi_mrep = NULL;
-	}
+	m_freem(infop->nmi_mrep);
+	infop->nmi_mrep = NULL;
 	*mrq = infop->nmi_mreq;
 	if (error && (!infop->nmi_v3 || error == EBADRPC))
 		return error;
@@ -298,7 +296,7 @@ nfsrv_setattr(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	fhp = &nfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, fhp) != 0)
 		goto nfsmout;
-	VATTR_NULL(&va);
+	vattr_null(&va);
 	if (info.nmi_v3) {
 		va.va_vaflags |= VA_UTIMES_NULL;
 		error = nfsm_srvsattr(&info.nmi_md, &va, info.nmi_mrep, &info.nmi_dpos);
@@ -424,11 +422,13 @@ nfsm_srvnamesiz(struct nfsm_info *infop, int *lenp)
 	if (tl == NULL)
 		return 1;
 	len = fxdr_unsigned(int32_t, *tl);
-	if (len > NFS_MAXNAMLEN)
+	if (len > NFS_MAXNAMLEN) {
 		*infop->nmi_errorp = NFSERR_NAMETOL;
-	else if (len <= 0)
+		*lenp = 0;
+	} else if (len <= 0) {
 		*infop->nmi_errorp = EBADRPC;
-	else {
+		*lenp = 0;
+	} else {
 		*infop->nmi_errorp = 0;
 		*lenp = len;
 	}
@@ -471,8 +471,13 @@ nfsrv_lookup(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvnamesiz(&info, &len) != 0)
 		goto nfsmout;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, LOOKUP, LOCKLEAF | SAVESTART, UIO_SYSSPACE, NULL, procp);
@@ -1038,15 +1043,20 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvmtofh1(&info, nfsd, slp, mrq) != 0)
 		return 0;
 	else if (error != 0)
-		goto nfsmout;
+		return error;
 	fhp = &nfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, fhp) != 0)
-		goto nfsmout;
+		return error;
 	if (nfsm_srvnamesiz(&info, &len) != 0)
-		goto nfsmout;
+		return error;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, CREATE, LOCKPARENT | LOCKLEAF | SAVESTART, UIO_SYSSPACE,
@@ -1073,7 +1083,7 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 		return (0);
 	}
 
-	VATTR_NULL(&va);
+	vattr_null(&va);
 	if (info.nmi_v3) {
 		tl = (uint32_t *)nfsm_dissect(&info, NFSX_UNSIGNED);
 		if (tl == NULL)
@@ -1100,7 +1110,7 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 			if (nd.ni_vp == NULL)
 				va.va_mode = 0;
 			break;
-		};
+		}
 		va.va_type = VREG;
 	} else {
 		sp = (struct nfsv2_sattr *)nfsm_dissect(&info, NFSX_V2SATTR);
@@ -1123,7 +1133,7 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 			break;
 		default:
 			break;
-		};
+		}
 	}
 
 	/*
@@ -1141,7 +1151,7 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 				pool_put(&namei_pool, nd.ni_cnd.cn_pnbuf);
 				if (exclusive_flag) {
 					exclusive_flag = 0;
-					VATTR_NULL(&va);
+					vattr_null(&va);
 					bcopy(cverf, (caddr_t)&va.va_atime,
 						NFSX_V3CREATEVERF);
 					error = VOP_SETATTR(nd.ni_vp, &va, cred,
@@ -1235,7 +1245,7 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 			    (nd.ni_cnd.cn_flags & RDONLY), procp, 0);
 			if (!error) {
 				tempsize = va.va_size;
-				VATTR_NULL(&va);
+				vattr_null(&va);
 				va.va_size = tempsize;
 				error = VOP_SETATTR(vp, &va, cred,
 					 procp);
@@ -1325,15 +1335,20 @@ nfsrv_mknod(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvmtofh1(&info, nfsd, slp, mrq) != 0)
 		return 0;
 	else if (error != 0)
-		goto nfsmout;
+		return error;
 	fhp = &nfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, fhp) != 0)
-		goto nfsmout;
+		return error;
 	if (nfsm_srvnamesiz(&info, &len) != 0)
-		goto nfsmout;
+		return error;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, CREATE, LOCKPARENT | LOCKLEAF | SAVESTART, UIO_SYSSPACE,
@@ -1370,7 +1385,7 @@ nfsrv_mknod(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 			vput(nd.ni_vp);
 		goto out;
 	}
-	VATTR_NULL(&va);
+	vattr_null(&va);
 	error = nfsm_srvsattr(&info.nmi_md, &va, info.nmi_mrep, &info.nmi_dpos);
 	if (error)
 		goto nfsmout;
@@ -1509,8 +1524,13 @@ nfsrv_remove(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvnamesiz(&info, &len) != 0)
 		goto nfsmout;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
  	NDINIT(&nd, DELETE, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, NULL, procp);
@@ -1598,15 +1618,20 @@ nfsrv_rename(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvmtofh1(&info, nfsd, slp, mrq) != 0)
 		return 0;
 	else if (error != 0)
-		goto nfsmout;
+		return error;
 	ffhp = &fnfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, ffhp) != 0)
-		goto nfsmout;
+		return error;
 	if (nfsm_srvnamesiz(&info, &len) != 0)
-		goto nfsmout;
+		return error;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	/*
@@ -1757,12 +1782,6 @@ out1:
 nfsmout:
 	if (fdirp)
 		vrele(fdirp);
-	if (tdirp)
-		vrele(tdirp);
-	if (tond.ni_cnd.cn_nameiop) {
-		vrele(tond.ni_startdir);
-		pool_put(&namei_pool, tond.ni_cnd.cn_pnbuf);
-	}
 	if (fromnd.ni_cnd.cn_nameiop) {
 		if (fromnd.ni_startdir)
 			vrele(fromnd.ni_startdir);
@@ -1822,8 +1841,13 @@ nfsrv_link(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvnamesiz(&info, &len) != 0)
 		goto nfsmout;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	error = nfsrv_fhtovp(fhp, 0, &vp, cred, slp, nam, &rdonly);
@@ -1928,15 +1952,20 @@ nfsrv_symlink(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvmtofh1(&info, nfsd, slp, mrq) != 0)
 		return 0;
 	else if (error != 0)
-		goto nfsmout;
+		return error;
 	fhp = &nfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, fhp) != 0)
-		goto nfsmout;
+		return error;
 	if (nfsm_srvnamesiz(&info, &len) != 0)
-		goto nfsmout;
+		return error;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, CREATE, LOCKPARENT | SAVESTART, UIO_SYSSPACE, NULL, procp);
@@ -1954,7 +1983,7 @@ nfsrv_symlink(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	}
 	if (error)
 		goto out;
-	VATTR_NULL(&va);
+	vattr_null(&va);
 	if (info.nmi_v3) {
 		error = nfsm_srvsattr(&info.nmi_md, &va, info.nmi_mrep,
 		    &info.nmi_dpos);
@@ -2088,15 +2117,20 @@ nfsrv_mkdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvmtofh1(&info, nfsd, slp, mrq) != 0)
 		return 0;
 	else if (error != 0)
-		goto nfsmout;
+		return error;
 	fhp = &nfh.fh_generic;
 	if (nfsm_srvmtofh2(&info, fhp) != 0)
-		goto nfsmout;
+		return error;
 	if (nfsm_srvnamesiz(&info, &len) != 0)
-		goto nfsmout;
+		return error;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_SYSSPACE, NULL, procp);
@@ -2122,7 +2156,7 @@ nfsrv_mkdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 		return (0);
 	}
 
-	VATTR_NULL(&va);
+	vattr_null(&va);
 	if (info.nmi_v3) {
 		error = nfsm_srvsattr(&info.nmi_md, &va, info.nmi_mrep,
 		    &info.nmi_dpos);
@@ -2224,8 +2258,13 @@ nfsrv_rmdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 	if (nfsm_srvnamesiz(&info, &len) != 0)
 		goto nfsmout;
 	if (error) {
-		if (nfsm_reply(&info, nfsd, slp, mrq, error, 0) != 0)
-			return 0;
+		/*
+		 * nfsm_reply would return zero if v3 and an error different
+		 * from EBADRPC. But it does not make sense to continue
+		 * anyway if the error set in nfsm_srvnamesiz is NFSERR_NAMETOL.
+		 */
+		(void)nfsm_reply(&info, nfsd, slp, mrq, error, 0);
+		return 0;
 	}
 
 	NDINIT(&nd, DELETE, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, NULL, procp);

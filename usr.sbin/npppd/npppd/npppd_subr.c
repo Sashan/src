@@ -1,4 +1,4 @@
-/*	$OpenBSD: npppd_subr.c,v 1.21 2021/03/29 03:54:39 yasuoka Exp $ */
+/*	$OpenBSD: npppd_subr.c,v 1.23 2024/09/20 02:00:46 jsg Exp $ */
 
 /*-
  * Copyright (c) 2009 Internet Initiative Japan Inc.
@@ -69,7 +69,7 @@ skip_space(const char *s)
 {
 	const char *r;
 	for (r = s; *r != '\0' && isspace((unsigned char)*r); r++)
-		;; /* skip */
+		; /* skip */
 
 	return r;
 }
@@ -108,7 +108,7 @@ load_resolv_conf(struct in_addr *pri, struct in_addr *sec)
 				addr = pri;
 			else
 				addr = sec;
-			if (inet_aton(ap, addr) != 1) {
+			if (inet_pton(AF_INET, ap, addr) != 1) {
 				/*
 				 * FIXME: If configured IPv6, it may have IPv6
 				 * FIXME: address.  For the present, continue.

@@ -1,4 +1,4 @@
-/*	$OpenBSD: mainbus.c,v 1.10 2024/05/13 01:15:50 jsg Exp $ */
+/*	$OpenBSD: mainbus.c,v 1.13 2024/11/18 05:32:39 jsg Exp $ */
 
 /*
  * Copyright (c) 2016 Patrick Wildt <patrick@blueri.se>
@@ -26,9 +26,6 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/fdt.h>
 
-#include <machine/riscv64var.h>
-#include <riscv64/dev/mainbus.h>
-
 int mainbus_match(struct device *, void *, void *);
 void mainbus_attach(struct device *, struct device *, void *);
 
@@ -53,8 +50,7 @@ struct mainbus_softc {
 };
 
 const struct cfattach mainbus_ca = {
-	sizeof(struct mainbus_softc), mainbus_match, mainbus_attach, NULL,
-	config_activate_children
+	sizeof(struct mainbus_softc), mainbus_match, mainbus_attach
 };
 
 struct cfdriver mainbus_cd = {

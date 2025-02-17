@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.191 2024/07/21 19:41:31 bluhm Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.195 2024/11/07 17:24:42 bluhm Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -889,8 +889,10 @@ cpu_init(struct cpu_info *ci)
 void
 cpu_init_vmm(struct cpu_info *ci)
 {
+	uint64_t msr;
+
 	/*
-	 * Allocate a per-cpu VMXON region for VMX CPUs
+	 * Detect VMX specific features and initialize VMX-related state.
 	 */
 	if (ci->ci_vmm_flags & CI_VMM_VMX) {
 		ci->ci_vmxon_region = (struct vmxon_region *)malloc(PAGE_SIZE,
@@ -898,8 +900,17 @@ cpu_init_vmm(struct cpu_info *ci)
 		if (!pmap_extract(pmap_kernel(), (vaddr_t)ci->ci_vmxon_region,
 		    &ci->ci_vmxon_region_pa))
 			panic("Can't locate VMXON region in phys mem");
+
 		ci->ci_vmcs_pa = VMX_VMCS_PA_CLEAR;
 		rw_init(&ci->ci_vmcs_lock, "vmcslock");
+
+		if (rdmsr_safe(IA32_VMX_EPT_VPID_CAP, &msr) == 0 &&
+		    msr & IA32_EPT_VPID_CAP_INVEPT_CONTEXT)
+			ci->ci_vmm_cap.vcc_vmx.vmx_invept_mode =
+			    IA32_VMX_INVEPT_SINGLE_CTX;
+		else
+			ci->ci_vmm_cap.vcc_vmx.vmx_invept_mode =
+			    IA32_VMX_INVEPT_GLOBAL_CTX;
 	}
 }
 #endif /* NVMM > 0 */
@@ -1461,9 +1472,51 @@ wbinvd_on_all_cpus(void)
 	wbinvd();
 	return 0;
 }
-#endif
+
+volatile long wbinvd_wait __attribute__((section(".kudata")));
+
+void
+wbinvd_on_all_cpus_acked(void)
+{
+	struct cpu_info *ci, *self = curcpu();;
+	CPU_INFO_ITERATOR cii;
+	long wait = 0;
+	u_int64_t mask = 0;
+	int s;
+
+	CPU_INFO_FOREACH(cii, ci) {
+		if (ci == self)
+			continue;
+		mask |= (1ULL << ci->ci_cpuid);
+		wait++;
+	}
+
+	KASSERT(wait > 0);
+
+	s = splvm();
+	while (atomic_cas_ulong(&wbinvd_wait, 0 , wait) != 0) {
+		while (wbinvd_wait != 0) {
+			CPU_BUSY_CYCLE();
+		}
+	}
+
+	CPU_INFO_FOREACH(cii, ci) {
+		if ((mask & (1ULL << ci->ci_cpuid)) == 0)
+			continue;
+		if (x86_fast_ipi(ci, LAPIC_IPI_WBINVD) != 0)
+			panic("%s: ipi failed", __func__);
+	}
+	splx(s);
+
+	wbinvd();
+
+	while (wbinvd_wait != 0)
+		CPU_BUSY_CYCLE();
+}
+#endif /* MULTIPROCESSOR */
 
 int cpu_suspended;
+int cpu_wakeups;
 
 #ifdef SUSPEND
 
@@ -1480,9 +1533,6 @@ int
 cpu_suspend_primary(void)
 {
 	struct cpu_info *ci = curcpu();
-	int count = 0;
-
-	printf("suspend\n");
 
 	/* Mask clock interrupts. */
 	local_pic.pic_hwmask(&local_pic, 0);
@@ -1500,7 +1550,7 @@ cpu_suspend_primary(void)
 
 	while (cpu_suspended) {
 		cpu_suspend_cycle();
-		count++;
+		cpu_wakeups++;
 	}
 
 	intr_disable();
@@ -1509,7 +1559,6 @@ cpu_suspend_primary(void)
 	/* Unmask clock interrupts. */
 	local_pic.pic_hwunmask(&local_pic, 0);
 
-	printf("resume %d\n", count);
 	return 0;
 }
 

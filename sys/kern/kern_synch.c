@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.206 2024/07/23 08:38:02 claudio Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.219 2025/02/05 12:21:27 claudio Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -62,9 +62,9 @@
 #include <sys/ktrace.h>
 #endif
 
-int	sleep_signal_check(struct proc *);
-int	thrsleep(struct proc *, struct sys___thrsleep_args *);
-int	thrsleep_unlock(void *);
+int	sleep_signal_check(struct proc *, int);
+
+extern void proc_stop(struct proc *p, int);
 
 /*
  * We're only looking at 7 bits of the address; everything is
@@ -337,9 +337,9 @@ sleep_setup(const volatile void *ident, int prio, const char *wmesg)
 	if (p->p_flag & P_CANTSLEEP)
 		panic("sleep: %s failed insomnia", p->p_p->ps_comm);
 	if (ident == NULL)
-		panic("tsleep: no ident");
+		panic("sleep: no ident");
 	if (p->p_stat != SONPROC)
-		panic("tsleep: not SONPROC");
+		panic("sleep: not SONPROC but %d", p->p_stat);
 #endif
 	/* exiting processes are not allowed to catch signals */
 	if (p->p_flag & P_WEXIT)
@@ -376,16 +376,7 @@ sleep_finish(int timo, int do_sleep)
 	}
 
 	if (catch != 0) {
-		/*
-		 * We put ourselves on the sleep queue and start our
-		 * timeout before calling sleep_signal_check(), as we could
-		 * stop there, and a wakeup or a SIGCONT (or both) could
-		 * occur while we were stopped.  A SIGCONT would cause
-		 * us to be marked as SSLEEP without resuming us, thus
-		 * we must be ready for sleep when sleep_signal_check() is
-		 * called.
-		 */
-		if ((error = sleep_signal_check(p)) != 0) {
+		if ((error = sleep_signal_check(p, 0)) != 0) {
 			catch = 0;
 			do_sleep = 0;
 		}
@@ -393,12 +384,21 @@ sleep_finish(int timo, int do_sleep)
 
 	SCHED_LOCK();
 	/*
-	 * If the wakeup happens while going to sleep, p->p_wchan
+	 * A few checks need to happen before going to sleep:
+	 * - If the wakeup happens while going to sleep, p->p_wchan
 	 * will be NULL. In that case unwind immediately but still
 	 * check for possible signals and timeouts.
+	 * - If the sleep is aborted call unsleep and take us of the
+	 * sleep queue.
+	 * - If requested to stop force a switch even if the sleep
+	 * condition got cleared.
 	 */
 	if (p->p_wchan == NULL)
 		do_sleep = 0;
+	if (do_sleep == 0)
+		unsleep(p);
+	if (p->p_stat == SSTOP)
+		do_sleep = 1;
 	atomic_clearbits_int(&p->p_flag, P_WSLEEP);
 
 	if (do_sleep) {
@@ -406,9 +406,7 @@ sleep_finish(int timo, int do_sleep)
 		p->p_ru.ru_nvcsw++;
 		mi_switch();
 	} else {
-		KASSERT(p->p_stat == SONPROC || p->p_stat == SSLEEP ||
-		    p->p_stat == SSTOP);
-		unsleep(p);
+		KASSERT(p->p_stat == SONPROC || p->p_stat == SSLEEP);
 		p->p_stat = SONPROC;
 	}
 
@@ -436,9 +434,12 @@ sleep_finish(int timo, int do_sleep)
 		atomic_clearbits_int(&p->p_flag, P_TIMEOUT);
 	}
 
-	/* Check if thread was woken up because of a unwind or signal */
+	/*
+	 * Check if thread was woken up because of a unwind or signal
+	 * but ignore any pending stop condition.
+	 */
 	if (catch != 0)
-		error = sleep_signal_check(p);
+		error = sleep_signal_check(p, 1);
 
 	/* Signal errors are higher priority than timeouts. */
 	if (error == 0 && error1 != 0)
@@ -449,21 +450,48 @@ sleep_finish(int timo, int do_sleep)
 
 /*
  * Check and handle signals and suspensions around a sleep cycle.
+ * The 2nd call in sleep_finish() sets after_sleep = 1. In this case
+ * any pending suspend event came in after the wakeup / unsleep and
+ * can therefor be ignored. Once the process hits userret the event
+ * will be picked up again.
  */
 int
-sleep_signal_check(struct proc *p)
+sleep_signal_check(struct proc *p, int after_sleep)
 {
 	struct sigctx ctx;
 	int err, sig;
 
-	if ((err = single_thread_check(p, 1)) != 0)
-		return err;
-	if ((sig = cursig(p, &ctx)) != 0) {
-		if (ctx.sig_intr)
+	if ((err = proc_suspend_check(p, 1)) != 0) {
+		if (err != EWOULDBLOCK)
+			return err;
+
+		/* requested to stop */
+		if (!after_sleep) {
+			mtx_enter(&p->p_p->ps_mtx);
+			if (--p->p_p->ps_singlecnt == 0)
+				wakeup(&p->p_p->ps_singlecnt);
+			mtx_leave(&p->p_p->ps_mtx);
+
+			SCHED_LOCK();
+			p->p_stat = SSTOP;
+			SCHED_UNLOCK();
+		}
+	}
+
+	if ((sig = cursig(p, &ctx, 1)) != 0) {
+		if (ctx.sig_stop) {
+			if (!after_sleep) {
+				p->p_p->ps_xsig = sig;
+				SCHED_LOCK();
+				proc_stop(p, 0);
+				SCHED_UNLOCK();
+			}
+		} else if (ctx.sig_intr && !ctx.sig_ignore)
 			return EINTR;
 		else
 			return ERESTART;
 	}
+
 	return 0;
 }
 
@@ -598,28 +626,66 @@ sys_sched_yield(struct proc *p, void *v, register_t *retval)
 	return (0);
 }
 
-int
-thrsleep_unlock(void *lock)
+static inline int
+thrsleep_unlock(_atomic_lock_t *atomiclock)
 {
 	static _atomic_lock_t unlocked = _ATOMIC_LOCK_UNLOCKED;
-	_atomic_lock_t *atomiclock = lock;
 
-	if (!lock)
+	if (atomiclock == NULL)
 		return 0;
 
 	return copyout(&unlocked, atomiclock, sizeof(unlocked));
 }
 
 struct tslpentry {
-	TAILQ_ENTRY(tslpentry)	tslp_link;
-	long			tslp_ident;
+	TAILQ_ENTRY(tslpentry)	 tslp_link;
+	struct process		*tslp_ps;
+	long			 tslp_ident;
+	struct proc *volatile	 tslp_p;
 };
 
-/* thrsleep queue shared between processes */
-static struct tslpqueue thrsleep_queue = TAILQ_HEAD_INITIALIZER(thrsleep_queue);
-static struct rwlock thrsleep_lock = RWLOCK_INITIALIZER("thrsleeplk");
+struct tslp_bucket {
+	struct tslpqueue	 tsb_list;
+	struct mutex		 tsb_lock;
+} __aligned(64);
 
-int
+/* thrsleep queue shared between processes */
+static struct tslp_bucket tsb_shared;
+
+#define TSLP_BUCKET_BITS	6
+#define TSLP_BUCKET_SIZE	(1UL << TSLP_BUCKET_BITS)
+#define TSLP_BUCKET_MASK	(TSLP_BUCKET_SIZE - 1)
+
+static struct tslp_bucket tsb_buckets[TSLP_BUCKET_SIZE];
+
+void
+tslp_init(void)
+{
+	struct tslp_bucket *tsb;
+	size_t i;
+
+	TAILQ_INIT(&tsb_shared.tsb_list);
+	mtx_init(&tsb_shared.tsb_lock, IPL_MPFLOOR);
+
+	for (i = 0; i < nitems(tsb_buckets); i++) {
+		tsb = &tsb_buckets[i];
+
+		TAILQ_INIT(&tsb->tsb_list);
+		mtx_init(&tsb->tsb_lock, IPL_MPFLOOR);
+	}
+}
+
+static struct tslp_bucket *
+thrsleep_bucket(long ident)
+{
+	ident >>= 3;
+	ident ^= ident >> TSLP_BUCKET_BITS;
+	ident &= TSLP_BUCKET_MASK;
+
+	return &tsb_buckets[ident];
+} 
+
+static int
 thrsleep(struct proc *p, struct sys___thrsleep_args *v)
 {
 	struct sys___thrsleep_args /* {
@@ -631,18 +697,19 @@ thrsleep(struct proc *p, struct sys___thrsleep_args *v)
 	} */ *uap = v;
 	long ident = (long)SCARG(uap, ident);
 	struct tslpentry entry;
-	struct tslpqueue *queue;
-	struct rwlock *qlock;
+	struct tslp_bucket *tsb;
 	struct timespec *tsp = (struct timespec *)SCARG(uap, tp);
 	void *lock = SCARG(uap, lock);
-	uint64_t nsecs = INFSLP;
-	int abort = 0, error;
+	const uint32_t *abortp = SCARG(uap, abort);
 	clockid_t clock_id = SCARG(uap, clock_id);
+	uint64_t to_ticks = 0;
+	int error = 0;
 
 	if (ident == 0)
 		return (EINVAL);
 	if (tsp != NULL) {
 		struct timespec now;
+		uint64_t nsecs;
 
 		if ((error = clock_gettime(p, clock_id, &now)))
 			return (error);
@@ -660,49 +727,62 @@ thrsleep(struct proc *p, struct sys___thrsleep_args *v)
 
 		timespecsub(tsp, &now, tsp);
 		nsecs = MIN(TIMESPEC_TO_NSEC(tsp), MAXTSLP);
+		to_ticks = (nsecs + tick_nsec - 1) / (tick_nsec + 1) + 1;
+		if (to_ticks > INT_MAX)
+			to_ticks = INT_MAX;
 	}
 
-	if (ident == -1) {
-		queue = &thrsleep_queue;
-		qlock = &thrsleep_lock;
-	} else {
-		queue = &p->p_p->ps_tslpqueue;
-		qlock = &p->p_p->ps_lock;
-	}
+	tsb = (ident == -1) ? &tsb_shared : thrsleep_bucket(ident);
 
 	/* Interlock with wakeup. */
+	entry.tslp_ps = p->p_p;
 	entry.tslp_ident = ident;
-	rw_enter_write(qlock);
-	TAILQ_INSERT_TAIL(queue, &entry, tslp_link);
-	rw_exit_write(qlock);
+	entry.tslp_p = p;
+
+	mtx_enter(&tsb->tsb_lock);
+	TAILQ_INSERT_TAIL(&tsb->tsb_list, &entry, tslp_link);
+	mtx_leave(&tsb->tsb_lock);
 
 	error = thrsleep_unlock(lock);
-
-	if (error == 0 && SCARG(uap, abort) != NULL)
-		error = copyin(SCARG(uap, abort), &abort, sizeof(abort));
-
-	rw_enter_write(qlock);
 	if (error != 0)
-		goto out;
-	if (abort != 0) {
-		error = EINTR;
-		goto out;
-	}
-	if (entry.tslp_ident != 0) {
-		error = rwsleep_nsec(&entry, qlock, PWAIT|PCATCH, "thrsleep",
-		    nsecs);
+		goto leave;
+
+	if (abortp != NULL) {
+		uint32_t abort;
+		error = copyin32(abortp, &abort);
+		if (error != 0)
+			goto leave;
+		if (abort) {
+			error = EINTR;
+			goto leave;
+		}
 	}
 
-out:
-	if (entry.tslp_ident != 0)
-		TAILQ_REMOVE(queue, &entry, tslp_link);
-	rw_exit_write(qlock);
+	sleep_setup(&entry, PWAIT|PCATCH, "thrsleep");
+	error = sleep_finish(to_ticks, entry.tslp_p != NULL);
+	if (error != 0 || entry.tslp_p != NULL) {
+		mtx_enter(&tsb->tsb_lock);
+		if (entry.tslp_p != NULL)
+			TAILQ_REMOVE(&tsb->tsb_list, &entry, tslp_link);
+		else
+			error = 0;
+		mtx_leave(&tsb->tsb_lock);
 
-	if (error == ERESTART)
-		error = ECANCELED;
+		if (error == ERESTART)
+			error = ECANCELED;
+	}
 
 	return (error);
 
+leave:
+	if (entry.tslp_p != NULL) {
+		mtx_enter(&tsb->tsb_lock);
+		if (entry.tslp_p != NULL)
+			TAILQ_REMOVE(&tsb->tsb_list, &entry, tslp_link);
+		mtx_leave(&tsb->tsb_lock);
+	}
+
+	return (error);
 }
 
 int
@@ -734,6 +814,21 @@ sys___thrsleep(struct proc *p, void *v, register_t *retval)
 	return 0;
 }
 
+static void
+tslp_wakeups(struct tslpqueue *tslpq)
+{
+	struct tslpentry *entry, *nentry;
+	struct proc *p;
+
+	SCHED_LOCK();
+	TAILQ_FOREACH_SAFE(entry, tslpq, tslp_link, nentry) {
+		p = entry->tslp_p;
+		entry->tslp_p = NULL;
+		wakeup_proc(p, 0);
+	}
+	SCHED_UNLOCK();
+}
+
 int
 sys___thrwakeup(struct proc *p, void *v, register_t *retval)
 {
@@ -741,50 +836,53 @@ sys___thrwakeup(struct proc *p, void *v, register_t *retval)
 		syscallarg(const volatile void *) ident;
 		syscallarg(int) n;
 	} */ *uap = v;
-	struct tslpentry *entry, *tmp;
-	struct tslpqueue *queue;
-	struct rwlock *qlock;
+	struct tslpentry *entry, *nentry;
+	struct tslp_bucket *tsb;
 	long ident = (long)SCARG(uap, ident);
 	int n = SCARG(uap, n);
 	int found = 0;
+	struct tslpqueue wq = TAILQ_HEAD_INITIALIZER(wq);
 
-	if (ident == 0)
+	if (ident == 0) {
 		*retval = EINVAL;
-	else {
-		if (ident == -1) {
-			queue = &thrsleep_queue;
-			qlock = &thrsleep_lock;
-			/*
-			 * Wake up all waiters with ident -1. This is needed
-			 * because ident -1 can be shared by multiple userspace
-			 * lock state machines concurrently. The implementation
-			 * has no way to direct the wakeup to a particular
-			 * state machine.
-			 */
-			n = 0;
-		} else {
-			queue = &p->p_p->ps_tslpqueue;
-			qlock = &p->p_p->ps_lock;
-		}
-
-		rw_enter_write(qlock);
-		TAILQ_FOREACH_SAFE(entry, queue, tslp_link, tmp) {
-			if (entry->tslp_ident == ident) {
-				TAILQ_REMOVE(queue, entry, tslp_link);
-				entry->tslp_ident = 0;
-				wakeup_one(entry);
-				if (++found == n)
-					break;
-			}
-		}
-		rw_exit_write(qlock);
-
-		if (ident == -1)
-			*retval = 0;
-		else
-			*retval = found ? 0 : ESRCH;
+		return (0);
 	}
 
+	if (ident == -1) {
+		/*
+		 * Wake up all waiters with ident -1. This is needed
+		 * because ident -1 can be shared by multiple userspace
+		 * lock state machines concurrently. The implementation
+		 * has no way to direct the wakeup to a particular
+		 * state machine.
+		 */
+		mtx_enter(&tsb_shared.tsb_lock);
+		tslp_wakeups(&tsb_shared.tsb_list);
+		TAILQ_INIT(&tsb_shared.tsb_list);
+		mtx_leave(&tsb_shared.tsb_lock);
+
+		*retval = 0;
+		return (0);
+	}
+
+	tsb = thrsleep_bucket(ident);
+
+	mtx_enter(&tsb->tsb_lock);
+	TAILQ_FOREACH_SAFE(entry, &tsb->tsb_list, tslp_link, nentry) {
+		if (entry->tslp_ident == ident && entry->tslp_ps == p->p_p) {
+			TAILQ_REMOVE(&tsb->tsb_list, entry, tslp_link);
+			TAILQ_INSERT_TAIL(&wq, entry, tslp_link);
+
+			if (++found == n)
+				break;
+		}
+	}
+
+	if (found)
+		tslp_wakeups(&wq);
+	mtx_leave(&tsb->tsb_lock);
+
+	*retval = found ? 0 : ESRCH;
 	return (0);
 }
 

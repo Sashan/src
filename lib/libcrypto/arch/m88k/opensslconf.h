@@ -1,7 +1,7 @@
 #include <openssl/opensslfeatures.h>
 /* crypto/opensslconf.h.in */
 
-#if defined(HEADER_CRYPTLIB_H) && !defined(OPENSSLDIR)
+#if defined(HEADER_CRYPTO_LOCAL_H) && !defined(OPENSSLDIR)
 #define OPENSSLDIR "/etc/ssl"
 #endif
 
@@ -63,13 +63,6 @@
 #define THIRTY_TWO_BIT
 #undef SIXTEEN_BIT
 #undef EIGHT_BIT
-#endif
-
-#if defined(HEADER_RC4_LOCL_H) && !defined(CONFIG_HEADER_RC4_LOCL_H)
-#define CONFIG_HEADER_RC4_LOCL_H
-/* if this is defined data[i] is used instead of *data, this is a %20
- * speedup on x86 */
-#define RC4_INDEX
 #endif
 
 #if defined(HEADER_BF_LOCL_H) && !defined(CONFIG_HEADER_BF_LOCL_H)

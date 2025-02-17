@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_vnode.c,v 1.133 2024/07/24 12:16:21 mpi Exp $	*/
+/*	$OpenBSD: uvm_vnode.c,v 1.138 2024/12/27 12:04:40 mpi Exp $	*/
 /*	$NetBSD: uvm_vnode.c,v 1.36 2000/11/24 20:34:01 chs Exp $	*/
 
 /*
@@ -306,15 +306,14 @@ uvn_detach(struct uvm_object *uobj)
 	struct vnode *vp;
 	int oldflags;
 
-	KERNEL_LOCK();
 	rw_enter(uobj->vmobjlock, RW_WRITE);
 	uobj->uo_refs--;			/* drop ref! */
 	if (uobj->uo_refs) {			/* still more refs */
 		rw_exit(uobj->vmobjlock);
-		KERNEL_UNLOCK();
 		return;
 	}
 
+	KERNEL_LOCK();
 	/* get other pointers ... */
 	uvn = (struct uvm_vnode *) uobj;
 	vp = uvn->u_vnode;
@@ -684,7 +683,6 @@ uvn_flush(struct uvm_object *uobj, voff_t start, voff_t stop, int flags)
 		if (!needs_clean) {
 			if (flags & PGO_DEACTIVATE) {
 				if (pp->wire_count == 0) {
-					pmap_page_protect(pp, PROT_NONE);
 					uvm_pagedeactivate(pp);
 				}
 			} else if (flags & PGO_FREE) {
@@ -810,7 +808,6 @@ ReTry:
 			/* dispose of page */
 			if (flags & PGO_DEACTIVATE) {
 				if (ptmp->wire_count == 0) {
-					pmap_page_protect(ptmp, PROT_NONE);
 					uvm_pagedeactivate(ptmp);
 				}
 			} else if (flags & PGO_FREE &&
@@ -951,8 +948,9 @@ uvn_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 	int lcv, result, gotpages;
 	boolean_t done;
 
-	KASSERT(((flags & PGO_LOCKED) != 0 && rw_lock_held(uobj->vmobjlock)) ||
-	    (flags & PGO_LOCKED) == 0);
+	KASSERT(rw_lock_held(uobj->vmobjlock));
+	KASSERT(rw_write_held(uobj->vmobjlock) ||
+	    ((flags & PGO_LOCKED) != 0 && (access_type & PROT_WRITE) == 0));
 
 	/* step 1: handled the case where fault data structures are locked. */
 	if (flags & PGO_LOCKED) {
@@ -971,7 +969,6 @@ uvn_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 
 		for (lcv = 0, current_offset = offset ; lcv < *npagesp ;
 		    lcv++, current_offset += PAGE_SIZE) {
-
 			/* do we care about this page?  if not, skip it */
 			if (pps[lcv] == PGO_DONTCARE)
 				continue;
@@ -979,12 +976,14 @@ uvn_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 			/* lookup page */
 			ptmp = uvm_pagelookup(uobj, current_offset);
 
-			/* to be useful must get a non-busy, non-released pg */
-			if (ptmp == NULL ||
-			    (ptmp->pg_flags & PG_BUSY) != 0) {
-				if (lcv == centeridx || (flags & PGO_ALLPAGES)
-				    != 0)
-					done = FALSE;	/* need to do a wait or I/O! */
+			/*
+			 * to be useful must get a non-busy page
+			 */
+			if (ptmp == NULL || (ptmp->pg_flags & PG_BUSY) != 0) {
+				if (lcv == centeridx ||
+				    (flags & PGO_ALLPAGES) != 0)
+					/* need to do a wait or I/O! */
+					done = FALSE;
 				continue;
 			}
 
@@ -992,8 +991,6 @@ uvn_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 			 * useful page: busy it and plug it in our
 			 * result array
 			 */
-			atomic_setbits_int(&ptmp->pg_flags, PG_BUSY);
-			UVM_PAGE_OWN(ptmp, "uvn_get1");
 			pps[lcv] = ptmp;
 			gotpages++;
 
@@ -1015,12 +1012,8 @@ uvn_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 		 * step 1c: now we've either done everything needed or we to
 		 * unlock and do some waiting or I/O.
 		 */
-
 		*npagesp = gotpages;		/* let caller know */
-		if (done)
-			return VM_PAGER_OK;		/* bingo! */
-		else
-			return VM_PAGER_UNLOCK;
+		return done ? VM_PAGER_OK : VM_PAGER_UNLOCK;
 	}
 
 	/*

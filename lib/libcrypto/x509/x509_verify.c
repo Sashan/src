@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_verify.c,v 1.70 2024/06/07 06:21:40 tb Exp $ */
+/* $OpenBSD: x509_verify.c,v 1.73 2025/02/08 10:12:00 tb Exp $ */
 /*
  * Copyright (c) 2020-2021 Bob Beck <beck@openbsd.org>
  *
@@ -531,6 +531,7 @@ x509_verify_potential_parent(struct x509_verify_ctx *ctx, X509 *parent,
 	return X509_check_issued(parent, child) == X509_V_OK;
 }
 
+/* Matches x509_crl_verify_parent_signature() */
 static int
 x509_verify_parent_signature(X509 *parent, X509 *child, int *error)
 {
@@ -539,11 +540,14 @@ x509_verify_parent_signature(X509 *parent, X509 *child, int *error)
 	int ret = 0;
 
 	/* Use cached value if we have it */
-	if ((cached = x509_issuer_cache_find(parent->hash, child->hash)) >= 0)
+	if ((cached = x509_issuer_cache_find(parent->hash, child->hash)) >= 0) {
+		if (cached == 0)
+			*error = X509_V_ERR_CERT_SIGNATURE_FAILURE;
 		return cached;
+	}
 
 	/* Check signature. Did parent sign child? */
-	if ((pkey = X509_get_pubkey(parent)) == NULL) {
+	if ((pkey = X509_get0_pubkey(parent)) == NULL) {
 		*error = X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY;
 		return 0;
 	}
@@ -554,8 +558,6 @@ x509_verify_parent_signature(X509 *parent, X509 *child, int *error)
 
 	/* Add result to cache */
 	x509_issuer_cache_add(parent->hash, child->hash, ret);
-
-	EVP_PKEY_free(pkey);
 
 	return ret;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifq.c,v 1.53 2023/11/10 15:51:24 bluhm Exp $ */
+/*	$OpenBSD: ifq.c,v 1.56 2025/02/03 08:58:52 mvs Exp $ */
 
 /*
  * Copyright (c) 2015 David Gwynne <dlg@openbsd.org>
@@ -118,12 +118,6 @@ ifq_serialize(struct ifqueue *ifq, struct task *t)
 	mtx_leave(&ifq->ifq_task_mtx);
 }
 
-int
-ifq_is_serialized(struct ifqueue *ifq)
-{
-	return (ifq->ifq_serializer == curcpu());
-}
-
 void
 ifq_start(struct ifqueue *ifq)
 {
@@ -159,6 +153,17 @@ ifq_set_oactive(struct ifqueue *ifq)
 		ifq->ifq_oactives++;
 	}
 	mtx_leave(&ifq->ifq_mtx);
+}
+
+void
+ifq_deq_set_oactive(struct ifqueue *ifq)
+{
+	MUTEX_ASSERT_LOCKED(&ifq->ifq_mtx);
+
+	if (!ifq->ifq_oactive) {
+		ifq->ifq_oactive = 1;
+		ifq->ifq_oactives++;
+	}
 }
 
 void
@@ -791,9 +796,10 @@ ifiq_add_data(struct ifiqueue *ifiq, struct if_data *data)
 }
 
 int
-ifiq_enqueue(struct ifiqueue *ifiq, struct mbuf *m)
+ifiq_enqueue_qlim(struct ifiqueue *ifiq, struct mbuf *m, unsigned int qlim)
 {
 	struct ifnet *ifp = ifiq->ifiq_if;
+	unsigned int len;
 #if NBPFILTER > 0
 	caddr_t if_bpf = ifp->if_bpf;
 #endif
@@ -820,9 +826,21 @@ ifiq_enqueue(struct ifiqueue *ifiq, struct mbuf *m)
 	mtx_enter(&ifiq->ifiq_mtx);
 	ifiq->ifiq_packets++;
 	ifiq->ifiq_bytes += m->m_pkthdr.len;
-	ifiq->ifiq_enqueues++;
-	ml_enqueue(&ifiq->ifiq_ml, m);
+
+	if (qlim && ((len = ml_len(&ifiq->ifiq_ml) >= qlim))) {
+		ifiq->ifiq_qdrops++;
+	} else {
+		ifiq->ifiq_enqueues++;
+		ml_enqueue(&ifiq->ifiq_ml, m);
+		m = NULL;
+	}
+
 	mtx_leave(&ifiq->ifiq_mtx);
+
+	if (m) {
+		m_freem(m);
+		return (0);
+	}
 
 	task_add(ifiq->ifiq_softnet, &ifiq->ifiq_task);
 

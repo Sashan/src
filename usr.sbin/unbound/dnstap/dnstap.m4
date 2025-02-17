@@ -34,8 +34,7 @@ AC_DEFUN([dt_DNSTAP],
                 LDFLAGS="$LDFLAGS -L$withval/lib"
             ],
             [
-                ifdef([PKG_CHECK_MODULES],
-                    [
+                if test -n "$PKG_CONFIG"; then
                         PKG_CHECK_MODULES([PROTOBUFC], [libprotobuf-c],
                             [
                                 CFLAGS="$CFLAGS $PROTOBUFC_CFLAGS"
@@ -56,8 +55,7 @@ AC_DEFUN([dt_DNSTAP],
                                 fi
                             ]
                         )
-                    ],
-                    [
+                else
                         # workaround for protobuf-c includes at old dir before protobuf-c-1.0.0
                         if test -f /usr/include/google/protobuf-c/protobuf-c.h; then
                             CFLAGS="$CFLAGS -I/usr/include/google"
@@ -67,8 +65,7 @@ AC_DEFUN([dt_DNSTAP],
                                 LDFLAGS="$LDFLAGS -L/usr/local/lib"
                             fi
                         fi
-                    ]
-                )
+                fi
             ]
         )
         AC_SEARCH_LIBS([protobuf_c_message_pack], [protobuf-c], [],

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ext2fs_lookup.c,v 1.46 2022/01/11 03:13:59 jsg Exp $	*/
+/*	$OpenBSD: ext2fs_lookup.c,v 1.48 2024/09/20 02:00:46 jsg Exp $	*/
 /*	$NetBSD: ext2fs_lookup.c,v 1.16 2000/08/03 20:29:26 thorpej Exp $	*/
 
 /*
@@ -173,7 +173,11 @@ ext2fs_readdir(void *v)
 				break;
 			}
 			ext2fs_dirconv2ffs(dp, &dstd);
-			if(dstd.d_reclen > uio->uio_resid) {
+			if (memchr(dstd.d_name, '/', dstd.d_namlen) != NULL) {
+				error = EINVAL;
+				break;
+			}
+			if (dstd.d_reclen > uio->uio_resid) {
 				break;
 			}
 			dstd.d_off = off + e2d_reclen;
@@ -772,7 +776,7 @@ ext2fs_direnter(struct inode *ip, struct vnode *dvp,
 		newdir.e2d_type = inot2ext2dt(IFTODT(ip->i_e2fs_mode));
 	} else {
 		newdir.e2d_type = 0;
-	};
+	}
 	memcpy(newdir.e2d_name, cnp->cn_nameptr, (unsigned)cnp->cn_namelen + 1);
 	newentrysize = EXT2FS_DIRSIZ(cnp->cn_namelen);
 	if (dp->i_count == 0) {

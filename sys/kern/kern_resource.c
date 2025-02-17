@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_resource.c,v 1.86 2024/07/09 15:20:15 claudio Exp $	*/
+/*	$OpenBSD: kern_resource.c,v 1.93 2024/11/10 06:45:36 jsg Exp $	*/
 /*	$NetBSD: kern_resource.c,v 1.38 1996/10/23 07:19:38 matthias Exp $	*/
 
 /*-
@@ -51,7 +51,6 @@
 #include <sys/mount.h>
 #include <sys/syscallargs.h>
 
-#include <uvm/uvm_extern.h>
 #include <uvm/uvm.h>
 
 /* Resource usage check interval in msec */
@@ -275,10 +274,10 @@ dosetrlimit(struct proc *p, u_int which, struct rlimit *limp)
 		maxlim = maxsmap;
 		break;
 	case RLIMIT_NOFILE:
-		maxlim = maxfiles;
+		maxlim = atomic_load_int(&maxfiles);
 		break;
 	case RLIMIT_NPROC:
-		maxlim = maxprocess;
+		maxlim = atomic_load_int(&maxprocess);
 		break;
 	default:
 		maxlim = RLIM_INFINITY;
@@ -443,6 +442,37 @@ tuagg_add_process(struct process *pr, struct proc *p)
 	p->p_tu.tu_uticks = p->p_tu.tu_sticks = p->p_tu.tu_iticks = 0;
 }
 
+void
+tuagg_add_runtime(void)
+{
+	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
+	struct proc *p = curproc;
+	struct timespec ts, delta;
+
+	/*
+	 * Compute the amount of time during which the current
+	 * process was running, and add that to its total so far.
+	 */
+	nanouptime(&ts);
+	if (timespeccmp(&ts, &spc->spc_runtime, <)) {
+#if 0
+		printf("uptime is not monotonic! "
+		    "ts=%lld.%09lu, runtime=%lld.%09lu\n",
+		    (long long)tv.tv_sec, tv.tv_nsec,
+		    (long long)spc->spc_runtime.tv_sec,
+		    spc->spc_runtime.tv_nsec);
+#endif
+		timespecclear(&delta);
+	} else {
+		timespecsub(&ts, &spc->spc_runtime, &delta);
+	}
+	/* update spc_runtime */
+	spc->spc_runtime = ts;
+	tu_enter(&p->p_tu);
+	timespecadd(&p->p_tu.tu_runtime, &delta, &p->p_tu.tu_runtime);
+	tu_leave(&p->p_tu);
+}
+
 /*
  * Transform the running time and tick information in a struct tusage
  * into user, system, and interrupt time usage.
@@ -555,9 +585,10 @@ dogetrusage(struct proc *p, int who, struct rusage *rup)
 }
 
 void
-ruadd(struct rusage *ru, struct rusage *ru2)
+ruadd(struct rusage *ru, const struct rusage *ru2)
 {
-	long *ip, *ip2;
+	long *ip;
+	const long *ip2;
 	int i;
 
 	timeradd(&ru->ru_utime, &ru2->ru_utime, &ru->ru_utime);
@@ -577,18 +608,21 @@ void
 rucheck(void *arg)
 {
 	struct rlimit rlim;
+	struct tusage tu = { 0 };
 	struct process *pr = arg;
+	struct proc *q;
 	time_t runtime;
 
 	KERNEL_ASSERT_LOCKED();
 
-	SCHED_LOCK();
-	runtime = pr->ps_tu.tu_runtime.tv_sec;
-	SCHED_UNLOCK();
-
 	mtx_enter(&pr->ps_mtx);
 	rlim = pr->ps_limit->pl_rlimit[RLIMIT_CPU];
+	tuagg_sumup(&tu, &pr->ps_tu);
+	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link)
+		tuagg_sumup(&tu, &q->p_tu);
 	mtx_leave(&pr->ps_mtx);
+
+	runtime = tu.tu_runtime.tv_sec;
 
 	if ((rlim_t)runtime >= rlim.rlim_cur) {
 		if ((rlim_t)runtime >= rlim.rlim_max) {

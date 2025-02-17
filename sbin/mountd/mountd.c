@@ -1,4 +1,4 @@
-/*	$OpenBSD: mountd.c,v 1.92 2024/05/21 05:00:47 jsg Exp $	*/
+/*	$OpenBSD: mountd.c,v 1.97 2025/01/16 12:48:45 kn Exp $	*/
 /*	$NetBSD: mountd.c,v 1.31 1996/02/18 11:57:53 fvdl Exp $	*/
 
 /*
@@ -321,7 +321,10 @@ main(int argc, char *argv[])
 	}
 
 	signal(SIGTERM, (void (*)(int)) send_umntall);
-	imsg_init(&ibuf, socks[0]);
+	if (imsgbuf_init(&ibuf, socks[0]) == -1) {
+		syslog(LOG_ERR, "imsgbuf_init: %m");
+		exit(1);
+	}
 	setproctitle("parent");
 
 	if (debug)
@@ -370,7 +373,23 @@ privchild(int sock)
 	char *path;
 	int error, size;
 
-	imsg_init(&ibuf, sock);
+	if (unveil("/", "r") == -1) {
+		syslog(LOG_ERR, "unveil /: %m");
+		_exit(1);
+	}
+	if (unveil(_PATH_RMOUNTLIST, "rwc") == -1) {
+		syslog(LOG_ERR, "unveil %s: %m", _PATH_RMOUNTLIST);
+		_exit(1);
+	}
+	if (unveil(NULL, NULL) == -1) {
+		syslog(LOG_ERR, "unveil: %m");
+		_exit(1);
+	}
+
+	if (imsgbuf_init(&ibuf, sock) == -1) {
+		syslog(LOG_ERR, "imsgbuf_init: %m");
+		_exit(1);
+	}
 	setproctitle("[priv]");
 	fp = NULL;
 
@@ -398,9 +417,9 @@ privchild(int sock)
 		if (!(pfd[0].revents & POLLIN))
 			continue;
 
-		switch (imsg_read(&ibuf)) {
+		switch (imsgbuf_read(&ibuf)) {
 		case -1:
-			syslog(LOG_ERR, "imsg_read: %m");
+			syslog(LOG_ERR, "imsgbuf_read: %m");
 			_exit(1);
 		case 0:
 			syslog(LOG_ERR, "Socket disconnected");
@@ -621,31 +640,27 @@ imsg_export(const char *dir, struct export_args *args)
 ssize_t
 recv_imsg(struct imsg *imsg)
 {
-	ssize_t n;
+	while (1) {
+		switch (imsg_get(&ibuf, imsg)) {
+		case -1:
+			syslog(LOG_ERR, "imsg_get: %m");
+			return (-1);
+		case 0:
+			break;
+		default:
+			return (imsg_get_len(imsg));
+		}
 
-	n = imsg_read(&ibuf);
-	if (n == -1) {
-		syslog(LOG_ERR, "imsg_read: %m");
-		return (-1);
+		switch (imsgbuf_read(&ibuf)) {
+		case -1:
+			syslog(LOG_ERR, "imsgbuf_read: %m");
+			return (-1);
+		case 0:
+			syslog(LOG_ERR, "Socket disconnected");
+			errno = EINVAL;
+			return (-1);
+		}
 	}
-	if (n == 0) {
-		syslog(LOG_ERR, "Socket disconnected");
-		errno = EINVAL;
-		return (-1);
-	}
-
-	n = imsg_get(&ibuf, imsg);
-	if (n == -1) {
-		syslog(LOG_ERR, "imsg_get: %m");
-		return (-1);
-	}
-	if (n == 0) {
-		syslog(LOG_ERR, "No messages ready");
-		errno = EINVAL;
-		return (-1);
-	}
-
-	return (n - IMSG_HEADER_SIZE);
 }
 
 int
@@ -656,8 +671,8 @@ send_imsg(u_int32_t type, void *data, u_int16_t size)
 		return (-1);
 	}
 
-	if (imsg_flush(&ibuf) == -1) {
-		syslog(LOG_ERR, "imsg_flush: %m");
+	if (imsgbuf_flush(&ibuf) == -1) {
+		syslog(LOG_ERR, "imsgbuf_flush: %m");
 		return (-1);
 	}
 
@@ -2157,7 +2172,7 @@ parsecred(char *namelist, struct xucred *cr)
 	char *name, *names;
 	struct passwd *pw;
 	struct group *gr;
-	int ngroups, cnt;
+	int maxgroups, ngroups, cnt;
 
 	/*
 	 * Set up the unprivileged user.
@@ -2182,9 +2197,12 @@ parsecred(char *namelist, struct xucred *cr)
 			return;
 		}
 		cr->cr_uid = pw->pw_uid;
-		ngroups = NGROUPS_MAX + 1;
-		if (getgrouplist(pw->pw_name, pw->pw_gid, groups, &ngroups))
+		maxgroups = ngroups = NGROUPS_MAX + 1;
+		if (getgrouplist(pw->pw_name, pw->pw_gid, groups, &ngroups) == -1) {
 			syslog(LOG_ERR, "Too many groups for %s: %m", pw->pw_name);
+			/* Truncate group list */
+			ngroups = maxgroups;
+		}
 		/*
 		 * compress out duplicate
 		 */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cd9660_vnops.c,v 1.95 2023/09/08 20:00:28 mvs Exp $	*/
+/*	$OpenBSD: cd9660_vnops.c,v 1.97 2024/10/18 05:52:32 miod Exp $	*/
 /*	$NetBSD: cd9660_vnops.c,v 1.42 1997/10/16 23:56:57 christos Exp $	*/
 
 /*-
@@ -316,6 +316,11 @@ iso_uiodir(struct isoreaddir *idp, struct dirent *dp, off_t off)
 
 	dp->d_name[dp->d_namlen] = 0;
 	dp->d_reclen = DIRENT_SIZE(dp);
+
+	if (memchr(dp->d_name, '/', dp->d_namlen) != NULL) {
+		/* illegal file name */
+		return (EINVAL);
+	}
 
 	if (idp->uio->uio_resid < dp->d_reclen) {
 		idp->eofflag = 0;
@@ -738,7 +743,9 @@ cd9660_strategy(void *v)
 int
 cd9660_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	printf("tag VT_ISOFS, isofs vnode\n");
+#endif
 	return (0);
 }
 

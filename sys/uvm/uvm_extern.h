@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.175 2024/07/24 12:17:31 mpi Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.180 2024/11/19 06:18:26 jsg Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -169,7 +169,6 @@ typedef int		vm_prot_t;
 
 #ifdef _KERNEL
 struct buf;
-struct mount;
 struct pglist;
 struct vmspace;
 struct pmap;
@@ -256,10 +255,6 @@ extern struct vm_map *phys_map;
 /* base of kernel virtual memory */
 extern vaddr_t vm_min_kernel_address;
 
-/* zalloc zeros memory, alloc does not */
-#define uvm_km_zalloc(MAP,SIZE) uvm_km_alloc1(MAP,SIZE,0,TRUE)
-#define uvm_km_alloc(MAP,SIZE)  uvm_km_alloc1(MAP,SIZE,0,FALSE)
-
 #define vm_resident_count(vm) (pmap_resident_count((vm)->vm_map.pmap))
 
 struct plimit;
@@ -284,14 +279,12 @@ int			uvm_vslock_device(struct proc *, void *, size_t,
 			    vm_prot_t, void **);
 void			uvm_vsunlock_device(struct proc *, void *, size_t,
 			    void *);
-void			uvm_pause(void);
 void			uvm_init(void);	
 void			uvm_init_percpu(void);
 int			uvm_io(vm_map_t, struct uio *, int);
 
 #define	UVM_IO_FIXPROT	0x01
 
-vaddr_t			uvm_km_alloc1(vm_map_t, vsize_t, vsize_t, boolean_t);
 void			uvm_km_free(vm_map_t, vaddr_t, vsize_t);
 vaddr_t			uvm_km_kmemalloc_pla(struct vm_map *,
 			    struct uvm_object *, vsize_t, vsize_t, int,

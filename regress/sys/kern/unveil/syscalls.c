@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscalls.c,v 1.35 2022/09/05 05:34:25 anton Exp $	*/
+/*	$OpenBSD: syscalls.c,v 1.37 2024/09/03 04:59:03 anton Exp $	*/
 
 /*
  * Copyright (c) 2017-2019 Bob Beck <beck@openbsd.org>
@@ -679,8 +679,9 @@ test_fork_body(int do_uv)
 	UV_SHOULD_ENOENT((open(uv_file2, O_RDWR|O_CREAT, 0644) == -1), "open after fork");
 	return 0;
 }
+
 static int
-test_fork()
+test_fork(int do_uv)
 {
 	printf("testing fork inhertiance\n");
 	do_unveil();
@@ -867,7 +868,7 @@ test_fork_locked(int do_uv)
 	status = 0;
 	waitpid(pid, &status, 0);
 	if (WIFSIGNALED(status))
-		errx(1, "child exited with signal %d\n", WTERMSIG(status));
+		errx(1, "child exited with signal %d", WTERMSIG(status));
 	if (WEXITSTATUS(status) == 0)
 		return 0;
 	else

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpuvar.h,v 1.12 2022/08/12 02:20:36 cheloha Exp $	*/
+/*	$OpenBSD: cpuvar.h,v 1.14 2024/10/22 10:14:49 jsg Exp $	*/
 /* 	$NetBSD: cpuvar.h,v 1.1 2003/03/01 18:29:28 fvdl Exp $ */
 
 /*-
@@ -84,8 +84,6 @@ struct cpu_attach_args {
 	struct cpu_functions *cpu_func;
 };
 
-#define MP_PICMODE	0x00000001      /* System booted in picmode */
-
 #ifdef _KERNEL
 
 #ifdef MULTIPROCESSOR
@@ -95,7 +93,6 @@ void x86_ipi_init(int);
 
 void identifycpu(struct cpu_info *);
 void cpu_init(struct cpu_info *);
-void cpu_init_first(void);
 
 void tsc_test_sync_bp(struct cpu_info *);
 void tsc_test_sync_ap(struct cpu_info *);

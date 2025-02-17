@@ -1,4 +1,4 @@
-/*	$OpenBSD: pppstats.c,v 1.12 2015/02/09 23:00:14 deraadt Exp $	*/
+/*	$OpenBSD: pppstats.c,v 1.15 2024/11/04 11:12:52 deraadt Exp $	*/
 
 /*
  * print PPP statistics:
@@ -82,7 +82,7 @@ void intpr(void);
 int main(int, char *argv[]);
 
 void
-usage()
+usage(void)
 {
 	extern char *__progname;
 
@@ -97,15 +97,13 @@ usage()
  * Sets a flag to not wait for the alarm.
  */
 void
-catchalarm(arg)
-	int arg;
+catchalarm(int arg)
 {
 	signalled = 1;
 }
 
 void
-get_ppp_stats(curp)
-	struct ppp_stats *curp;
+get_ppp_stats(struct ppp_stats *curp)
 {
 	struct ifpppstatsreq req;
 
@@ -122,8 +120,7 @@ get_ppp_stats(curp)
 }
 
 void
-get_ppp_cstats(csp)
-	struct ppp_comp_stats *csp;
+get_ppp_cstats(struct ppp_comp_stats *csp)
 {
 	struct ifpppcstatsreq creq;
 
@@ -158,7 +155,7 @@ get_ppp_cstats(csp)
  * First line printed is cumulative.
  */
 void
-intpr()
+intpr(void)
 {
 	register int line = 0;
 	sigset_t oldmask, mask;
@@ -306,10 +303,9 @@ intpr()
 }
 
 int
-main(argc, argv)
-	int argc;
-	char *argv[];
+main(int argc, char *argv[])
 {
+	const char *errstr;
 	int c;
 	struct ifreq ifr;
 
@@ -333,13 +329,13 @@ main(argc, argv)
 			zflag = 1;
 			break;
 		case 'c':
-			count = atoi(optarg);
-			if (count <= 0)
+			count = strtonum(optarg, 1, 1000, &errstr);
+			if (errstr)
 				usage();
 			break;
 		case 'w':
-			interval = atoi(optarg);
-			if (interval <= 0)
+			interval = strtonum(optarg, 1, 1000, &errstr);
+			if (errstr)
 				usage();
 			break;
 		default:

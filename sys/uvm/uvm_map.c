@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.330 2024/07/24 12:17:31 mpi Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.338 2025/01/29 15:25:31 mpi Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -461,7 +461,7 @@ void
 uvm_map_lock_entry(struct vm_map_entry *entry)
 {
 	if (entry->aref.ar_amap != NULL) {
-		amap_lock(entry->aref.ar_amap);
+		amap_lock(entry->aref.ar_amap, RW_WRITE);
 	}
 	if (UVM_ET_ISOBJ(entry)) {
 		rw_enter(entry->object.uvm_obj->vmobjlock, RW_WRITE);
@@ -1856,10 +1856,8 @@ uvm_unmap_kill_entry_withlock(struct vm_map *map, struct vm_map_entry *entry,
 {
 	/* Unwire removed map entry. */
 	if (VM_MAPENT_ISWIRED(entry)) {
-		KERNEL_LOCK();
 		entry->wired_count = 0;
 		uvm_fault_unwire_locked(map, entry->start, entry->end);
-		KERNEL_UNLOCK();
 	}
 
 	if (needlock)
@@ -2956,7 +2954,7 @@ uvm_page_printit(struct vm_page *pg, boolean_t full,
 	(*pr)("PAGE %p:\n", pg);
 	(*pr)("  flags=%b, vers=%d, wire_count=%d, pa=0x%llx\n",
 	    pg->pg_flags, page_flagbits, pg->pg_version, pg->wire_count,
-	    (long long)pg->phys_addr);
+	    (long long)VM_PAGE_TO_PHYS(pg));
 	(*pr)("  uobject=%p, uanon=%p, offset=0x%llx\n",
 	    pg->uobject, pg->uanon, (long long)pg->offset);
 #if defined(UVM_PAGE_TRKOWN)
@@ -3010,7 +3008,7 @@ uvm_page_printit(struct vm_page *pg, boolean_t full,
 		pgl = &uvm.page_inactive;
 	} else if (pg->pg_flags & PQ_ACTIVE) {
 		pgl = &uvm.page_active;
- 	} else {
+	} else {
 		pgl = NULL;
 	}
 
@@ -3732,8 +3730,8 @@ uvm_mapent_forkcopy(struct vmspace *new_vm, struct vm_map *new_map,
 				old_entry->etype |= UVM_ET_NEEDSCOPY;
 			}
 
-	  		/* parent must now be write-protected */
-	  		protect_child = FALSE;
+			/* parent must now be write-protected */
+			protect_child = FALSE;
 		} else {
 			/*
 			 * we only need to protect the child if the
@@ -3854,7 +3852,7 @@ uvmspace_fork(struct process *pr)
 			continue;
 		}
 
-	 	/* Update process statistics. */
+		/* Update process statistics. */
 		if (!UVM_ET_ISHOLE(new_entry))
 			new_map->size += new_entry->end - new_entry->start;
 		if (!UVM_ET_ISOBJ(new_entry) && !UVM_ET_ISHOLE(new_entry) &&
@@ -4146,7 +4144,7 @@ check_copyin_add(struct vm_map *map, vaddr_t start, vaddr_t end)
 	map->check_copyin_count++;
 }
 
-/* 
+/*
  * uvm_map_check_copyin_add: remember regions which are X-only for copyin(),
  * copyinstr(), uiomove(), and others
  *
@@ -4168,7 +4166,7 @@ uvm_map_check_copyin_add(struct vm_map *map, vaddr_t start, vaddr_t end)
 }
 #endif /* PMAP_CHECK_COPYIN */
 
-/* 
+/*
  * uvm_map_immutable: block mapping/mprotect for range of addrs in map.
  *
  * => map must be unlocked
@@ -4201,7 +4199,7 @@ uvm_map_immutable(struct vm_map *map, vaddr_t start, vaddr_t end, int imut)
 			goto out;
 		entry1 = RBT_NEXT(uvm_map_addr, entry1);
 	}
-	
+
 	while (entry != NULL && entry->start < end) {
 		UVM_MAP_CLIP_END(map, entry, end);
 		if (imut)
@@ -4383,7 +4381,7 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 		}
 		kernel_map->size += cp_len;
 
-		/* Figure out the best protection */ 
+		/* Figure out the best protection */
 		if ((flags & UVM_EXTRACT_FIXPROT) &&
 		    newentry->protection != PROT_NONE)
 			newentry->protection = newentry->max_protection;
@@ -4494,7 +4492,7 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 		cp_start = MAX(entry->start, start);
 		cp_end = MIN(entry->end, end);
 
-		amap_lock(amap);
+		amap_lock(amap, RW_WRITE);
 		for (; cp_start != cp_end; cp_start += PAGE_SIZE) {
 			anon = amap_lookup(&entry->aref,
 			    cp_start - entry->start);
@@ -4526,11 +4524,6 @@ deactivate_it:
 				uvm_lock_pageq();
 
 				KASSERT(pg->uanon == anon);
-
-				/* zap all mappings for the page. */
-				pmap_page_protect(pg, PROT_NONE);
-
-				/* ...and deactivate the page. */
 				uvm_pagedeactivate(pg);
 
 				uvm_unlock_pageq();
@@ -5110,7 +5103,7 @@ uvm_map_mquery(struct vm_map *map, vaddr_t *addr_p, vsize_t sz, voff_t offset,
 
 	/* Align address to pmap_prefer unless FLAG_FIXED is set. */
 	if (!(flags & UVM_FLAG_FIXED) && offset != UVM_UNKNOWN_OFFSET) {
-	  	tmp = (addr & ~(pmap_align - 1)) | pmap_offset;
+		tmp = (addr & ~(pmap_align - 1)) | pmap_offset;
 		if (tmp < addr)
 			tmp += pmap_align;
 		addr = tmp;
@@ -5201,68 +5194,77 @@ out:
 boolean_t
 vm_map_lock_try_ln(struct vm_map *map, char *file, int line)
 {
-	boolean_t rv;
+	int rv;
 
 	if (map->flags & VM_MAP_INTRSAFE) {
-		rv = mtx_enter_try(&map->mtx);
+		if (!mtx_enter_try(&map->mtx))
+			return FALSE;
 	} else {
+		struct proc *busy;
+
 		mtx_enter(&map->flags_lock);
-		if ((map->flags & VM_MAP_BUSY) && (map->busy != curproc)) {
-			mtx_leave(&map->flags_lock);
-			return (FALSE);
-		}
+		busy = map->busy;
 		mtx_leave(&map->flags_lock);
-		rv = (rw_enter(&map->lock, RW_WRITE|RW_NOSLEEP) == 0);
-		/* check if the lock is busy and back out if we won the race */
-		if (rv) {
-			mtx_enter(&map->flags_lock);
-			if ((map->flags & VM_MAP_BUSY) &&
-			    (map->busy != curproc)) {
-				rw_exit(&map->lock);
-				rv = FALSE;
-			}
-			mtx_leave(&map->flags_lock);
+		if (busy != NULL && busy != curproc)
+			return FALSE;
+
+		rv = rw_enter(&map->lock, RW_WRITE|RW_NOSLEEP);
+		if (rv != 0)
+			return FALSE;
+
+		/* to be sure, to be sure */
+		mtx_enter(&map->flags_lock);
+		busy = map->busy;
+		mtx_leave(&map->flags_lock);
+		if (busy != NULL && busy != curproc) {
+			rw_exit(&map->lock);
+			return FALSE;
 		}
 	}
 
-	if (rv) {
-		map->timestamp++;
-		LPRINTF(("map   lock: %p (at %s %d)\n", map, file, line));
-		uvm_tree_sanity(map, file, line);
-		uvm_tree_size_chk(map, file, line);
-	}
+	map->timestamp++;
+	LPRINTF(("map   lock: %p (at %s %d)\n", map, file, line));
+	uvm_tree_sanity(map, file, line);
+	uvm_tree_size_chk(map, file, line);
 
-	return (rv);
+	return TRUE;
 }
 
 void
 vm_map_lock_ln(struct vm_map *map, char *file, int line)
 {
 	if ((map->flags & VM_MAP_INTRSAFE) == 0) {
-		do {
-			mtx_enter(&map->flags_lock);
-tryagain:
-			while ((map->flags & VM_MAP_BUSY) &&
-			    (map->busy != curproc)) {
-				map->flags |= VM_MAP_WANTLOCK;
-				msleep_nsec(&map->flags, &map->flags_lock,
+		mtx_enter(&map->flags_lock);
+		for (;;) {
+			while (map->busy != NULL && map->busy != curproc) {
+				map->nbusy++;
+				msleep_nsec(&map->busy, &map->flags_lock,
 				    PVM, vmmapbsy, INFSLP);
+				map->nbusy--;
 			}
 			mtx_leave(&map->flags_lock);
-		} while (rw_enter(&map->lock, RW_WRITE|RW_SLEEPFAIL) != 0);
-		/* check if the lock is busy and back out if we won the race */
-		mtx_enter(&map->flags_lock);
-		if ((map->flags & VM_MAP_BUSY) && (map->busy != curproc)) {
-			rw_exit(&map->lock);
-			goto tryagain;
+
+			rw_enter_write(&map->lock);
+
+			/* to be sure, to be sure */
+			mtx_enter(&map->flags_lock);
+			if (map->busy != NULL && map->busy != curproc) {
+				/* go around again */
+				rw_exit_write(&map->lock);
+			} else {
+				/* we won */
+				break;
+			}
 		}
 		mtx_leave(&map->flags_lock);
 	} else {
 		mtx_enter(&map->mtx);
 	}
 
-	if (map->busy != curproc)
+	if (map->busy != curproc) {
+		KASSERT(map->busy == NULL);
 		map->timestamp++;
+	}
 	LPRINTF(("map   lock: %p (at %s %d)\n", map, file, line));
 	uvm_tree_sanity(map, file, line);
 	uvm_tree_size_chk(map, file, line);
@@ -5314,25 +5316,24 @@ vm_map_busy_ln(struct vm_map *map, char *file, int line)
 
 	mtx_enter(&map->flags_lock);
 	map->busy = curproc;
-	map->flags |= VM_MAP_BUSY;
 	mtx_leave(&map->flags_lock);
 }
 
 void
 vm_map_unbusy_ln(struct vm_map *map, char *file, int line)
 {
-	int oflags;
+	unsigned int nbusy;
 
 	KASSERT((map->flags & VM_MAP_INTRSAFE) == 0);
 	KASSERT(map->busy == curproc);
 
 	mtx_enter(&map->flags_lock);
-	oflags = map->flags;
+	nbusy = map->nbusy;
 	map->busy = NULL;
-	map->flags &= ~(VM_MAP_BUSY|VM_MAP_WANTLOCK);
 	mtx_leave(&map->flags_lock);
-	if (oflags & VM_MAP_WANTLOCK)
-		wakeup(&map->flags);
+
+	if (nbusy > 0)
+		wakeup(&map->busy);
 }
 
 void

@@ -1,4 +1,4 @@
-/* $OpenBSD: x509v3.h,v 1.9 2024/07/08 17:01:54 beck Exp $ */
+/* $OpenBSD: x509v3.h,v 1.15 2024/08/31 10:03:03 tb Exp $ */
 /*
  * Copyright (c) 2022 Bob Beck <beck@openbsd.org>
  *
@@ -139,23 +139,8 @@ LCRYPTO_USED(X509V3_EXT_REQ_add_nconf);
 LCRYPTO_USED(X509V3_EXT_CRL_add_nconf);
 LCRYPTO_USED(X509V3_EXT_conf_nid);
 LCRYPTO_USED(X509V3_EXT_conf);
-LCRYPTO_USED(X509V3_EXT_add_conf);
-LCRYPTO_USED(X509V3_EXT_REQ_add_conf);
-LCRYPTO_USED(X509V3_EXT_CRL_add_conf);
-LCRYPTO_USED(X509V3_add_value_bool_nf);
-LCRYPTO_USED(X509V3_get_value_bool);
-LCRYPTO_USED(X509V3_get_value_int);
 LCRYPTO_USED(X509V3_set_nconf);
-LCRYPTO_USED(X509V3_set_conf_lhash);
-LCRYPTO_USED(X509V3_get_string);
-LCRYPTO_USED(X509V3_get_section);
-LCRYPTO_USED(X509V3_string_free);
-LCRYPTO_USED(X509V3_section_free);
 LCRYPTO_USED(X509V3_set_ctx);
-LCRYPTO_USED(X509V3_add_value);
-LCRYPTO_USED(X509V3_add_value_uchar);
-LCRYPTO_USED(X509V3_add_value_bool);
-LCRYPTO_USED(X509V3_add_value_int);
 LCRYPTO_USED(i2s_ASN1_INTEGER);
 LCRYPTO_USED(s2i_ASN1_INTEGER);
 LCRYPTO_USED(i2s_ASN1_ENUMERATED);

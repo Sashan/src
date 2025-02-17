@@ -1,4 +1,4 @@
-/*	$OpenBSD: rpcinfo.c,v 1.16 2023/03/08 04:43:12 guenther Exp $	*/
+/*	$OpenBSD: rpcinfo.c,v 1.20 2024/09/15 07:14:58 jsg Exp $	*/
 
 /*
  * Copyright (c) 2010, Oracle America, Inc.
@@ -50,6 +50,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <arpa/inet.h>
+#include <err.h>
 
 #define MAXHOSTLEN 256
 
@@ -94,6 +95,15 @@ main(int argc, char *argv[])
 	function = NONE;
 	portnum = 0;
 	errflg = 0;
+
+	if (unveil("/etc/rpc", "r") == -1)
+		err(1, "unveil /");
+	if (unveil(NULL, NULL) == -1)
+		err(1, "unveil");
+
+	if (pledge("stdio inet dns rpath", NULL) == -1)
+		err(1, "pledge");
+
 	while ((c = getopt(argc, argv, "ptubdsn:")) != -1) {
 		switch (c) {
 
@@ -190,7 +200,7 @@ main(int argc, char *argv[])
 
 	return (0);
 }
-		
+
 void
 udpping(u_short portnum, int argc, char **argv)
 {
@@ -202,7 +212,7 @@ udpping(u_short portnum, int argc, char **argv)
 	int sock = RPC_ANYSOCK;
 	struct rpc_err rpcerr;
 	int failure;
-    
+
 	if (argc < 2)
 		usage("too few arguments");
 	if (argc > 3)
@@ -479,27 +489,20 @@ void
 pmapdump(int argc, char **argv)
 {
 	struct sockaddr_in server_addr;
-	struct hostent *hp;
 	struct pmaplist *head = NULL;
 	int socket = RPC_ANYSOCK;
 	struct timeval minutetimeout;
 	CLIENT *client;
 	struct rpcent *rpc;
-	
+
 	if (argc > 1)
 		usage("too many arguments");
 
 	if (argc == 1)
 		get_inet_address(&server_addr, argv[0]);
-	else {
-		bzero((char *)&server_addr, sizeof server_addr);
-		server_addr.sin_family = AF_INET;
-		if ((hp = gethostbyname("localhost")) != NULL)
-			bcopy(hp->h_addr, (caddr_t)&server_addr.sin_addr,
-			    hp->h_length);
-		else
-			(void) inet_aton("0.0.0.0", &server_addr.sin_addr);
-	}
+	else
+		get_inet_address(&server_addr, "127.0.0.1");
+
 	minutetimeout.tv_sec = 60;
 	minutetimeout.tv_usec = 0;
 	server_addr.sin_port = htons(PMAPPORT);
@@ -538,8 +541,8 @@ pmapdump(int argc, char **argv)
 	}
 }
 
-/* 
- * reply_proc collects replies from the broadcast. 
+/*
+ * reply_proc collects replies from the broadcast.
  * to get a unique list of responses the output of rpcinfo should
  * be piped through sort(1) and then uniq(1).
  */
@@ -567,7 +570,7 @@ brdcst(int argc, char **argv)
 		usage("program number out of range");
 	if (getul(argv[1], &vers_num))
 		usage("version number out of range");
-		
+
 	rpc_stat = clnt_broadcast(prognum, vers_num, NULLPROC, xdr_void,
 	    (char *)NULL, xdr_void, (char *)NULL, reply_proc);
 	if ((rpc_stat != RPC_SUCCESS) && (rpc_stat != RPC_TIMEDOUT)) {
@@ -613,7 +616,7 @@ setreg(int argc, char **argv)
 		usage("cannot parse port number");
 	if (port_num >= 65536)
 		usage("port number out of range");
-		
+
 	if ((pmap_set(prog_num, version_num, IPPROTO_TCP,
 	    (u_short)port_num)) == 0) {
 		fprintf(stderr, "rpcinfo: Could not set registration "
@@ -689,16 +692,19 @@ fail:
 void
 get_inet_address(struct sockaddr_in *addr, char *host)
 {
-	struct hostent *hp;
+	struct addrinfo hints, *res;
+	int error;
 
-	bzero((char *)addr, sizeof *addr);
-	if (inet_aton(host, &addr->sin_addr) == 0) {
-		if ((hp = gethostbyname(host)) == NULL) {
-			fprintf(stderr, "rpcinfo: %s is unknown host\n",
-			    host);
-			exit(1);
-		}
-		bcopy(hp->h_addr, (char *)&addr->sin_addr, hp->h_length);
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+
+	if ((error = getaddrinfo(host, NULL, &hints, &res))) {
+		fprintf(stderr, "rpcinfo: %s is unknown host: %s\n",
+		    host, gai_strerror(error));
+		exit(1);
 	}
+
 	addr->sin_family = AF_INET;
+	addr->sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+	freeaddrinfo(res);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.h,v 1.237 2024/08/02 14:34:45 mvs Exp $	*/
+/*	$OpenBSD: sysctl.h,v 1.241 2025/02/14 13:29:00 ratchov Exp $	*/
 /*	$NetBSD: sysctl.h,v 1.16 1996/04/09 20:55:36 cgd Exp $	*/
 
 /*
@@ -322,11 +322,13 @@ struct ctlname {
  * KERN_AUDIO
  */
 #define KERN_AUDIO_RECORD	1
-#define KERN_AUDIO_MAXID	2
+#define KERN_AUDIO_KBDCONTROL	2
+#define KERN_AUDIO_MAXID	3
 
 #define CTL_KERN_AUDIO_NAMES { \
 	{ 0, 0 }, \
 	{ "record", CTLTYPE_INT }, \
+	{ "kbdcontrol", CTLTYPE_INT }, \
 }
 
 /*
@@ -568,7 +570,7 @@ struct kinfo_vmentry {
  *	lim - source struct plimits
  *	sa - source struct sigacts
  * There are some members that are not handled by these macros
- * because they're too painful to generalize: p_ppid, p_sid, p_tdev,
+ * because they're too painful to generalize: p_sid, p_tdev,
  * p_tpgid, p_tsess, p_vm_rssize, p_u[us]time_{sec,usec}, p_cpuid
  */
 
@@ -645,6 +647,7 @@ do {									\
 	(kp)->p_sigmask = (p)->p_sigmask;				\
 									\
 	PR_LOCK(pr);							\
+	(kp)->p_ppid = (pr)->ps_ppid;					\
 	(kp)->p_sigignore = (sa) ? (sa)->ps_sigignore : 0;		\
 	(kp)->p_sigcatch = (sa) ? (sa)->ps_sigcatch : 0;		\
 									\
@@ -945,7 +948,7 @@ struct kinfo_file {
 #define	HW_POWER		26	/* int: machine has wall-power */
 #define	HW_BATTERY		27	/* node: battery */
 #define	HW_UCOMNAMES		28	/* strings: ucom names */
-#define	HW_MAXID		30	/* number of valid hw ids */
+#define	HW_MAXID		29	/* number of valid hw ids */
 
 #define	CTL_HW_NAMES { \
 	{ 0, 0 }, \
@@ -1073,7 +1076,6 @@ struct mbuf_queue;
 int sysctl_mq(int *, u_int, void *, size_t *, void *, size_t,
     struct mbuf_queue *);
 struct rtentry;
-struct walkarg;
 int sysctl_dumpentry(struct rtentry *, void *, unsigned int);
 int sysctl_rtable(int *, u_int, void *, size_t *, void *, size_t);
 int sysctl_clockrate(char *, size_t *, void *);

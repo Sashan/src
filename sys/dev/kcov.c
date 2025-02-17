@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.49 2023/07/29 06:52:50 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.51 2025/02/02 21:05:12 gnezdo Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -34,7 +34,7 @@
 #include <uvm/uvm_extern.h>
 
 #define KCOV_BUF_MEMB_SIZE	sizeof(uintptr_t)
-#define KCOV_BUF_MAX_NMEMB	(256 << 10)
+#define KCOV_BUF_MAX_NMEMB	(512 << 10)
 
 #define KCOV_CMP_CONST		0x1
 #define KCOV_CMP_SIZE(x)	((x) << 1)
@@ -132,12 +132,7 @@ struct pool kr_pool;
 static inline int
 inintr(struct cpu_info *ci)
 {
-#if defined(__amd64__) || defined(__arm__) || defined(__arm64__) || \
-    defined(__i386__)
 	return (ci->ci_idepth > 0);
-#else
-	return (0);
-#endif
 }
 
 /*

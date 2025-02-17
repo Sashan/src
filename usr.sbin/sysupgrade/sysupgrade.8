@@ -1,4 +1,4 @@
-.\"	$OpenBSD: sysupgrade.8,v 1.13 2022/06/08 09:03:11 mglocker Exp $
+.\"	$OpenBSD: sysupgrade.8,v 1.22 2024/10/25 03:42:06 deraadt Exp $
 .\"
 .\" Copyright (c) 2019 Florian Obser <florian@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 8 2022 $
+.Dd $Mdocdate: October 25 2024 $
 .Dt SYSUPGRADE 8
 .Os
 .Sh NAME
@@ -22,15 +22,15 @@
 .Nd upgrade system to the next release or a new snapshot
 .Sh SYNOPSIS
 .Nm
-.Op Fl fkn
-.Op Fl r | s
+.Op Fl fkns
 .Op Fl b Ar base-directory
-.Op Ar installurl
+.Op Fl R Ar version
+.Op Ar installurl | path
 .Sh DESCRIPTION
 .Nm
 is a utility to upgrade
 .Ox
-to the next release or a new snapshot if available.
+to a new release or snapshot if available.
 .Pp
 .Nm
 downloads the necessary files to
@@ -55,8 +55,7 @@ Download files to
 instead of
 .Pa /home/_sysupgrade .
 .It Fl f
-Force an already applied upgrade.
-The default is to upgrade to latest snapshot only if available.
+For snapshots, force an already applied upgrade.
 This option has no effect on releases.
 .It Fl k
 Keep the files in
@@ -66,13 +65,24 @@ By default they will be deleted after the upgrade.
 Fetch and verify the files and create
 .Pa /bsd.upgrade
 but do not reboot.
-.It Fl r
-Upgrade to the next release.
-This is the default if the system is currently running a release.
+.It Fl R Ar version
+Upgrade to a specific release version.
+Only upgrades from one version to the next are tested.
+Skipping versions may work.
+Downgrading is unlikely to work.
 .It Fl s
 Upgrade to a snapshot.
-This is the default if the system is currently running a snapshot.
+The default is to upgrade to the next release.
 .El
+.Pp
+When updating to a release or snapshot which lacks the required signify
+keys in
+.Pa /etc/signify ,
+the missing keys will be downloaded in a secure way.
+In the usual case, the keys will already be present because
+.Ox
+releases ship with the current key, the next key, and a collection of
+older keys.
 .Pp
 See
 .Xr upgrade.site 5
@@ -94,7 +104,8 @@ Directory the upgrade is downloaded to.
 .Xr installurl 5 ,
 .Xr upgrade.site 5 ,
 .Xr autoinstall 8 ,
-.Xr release 8
+.Xr release 8 ,
+.Xr sysmerge 8
 .Sh HISTORY
 .Nm
 first appeared in

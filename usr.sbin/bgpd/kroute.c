@@ -1,4 +1,4 @@
-/*	$OpenBSD: kroute.c,v 1.309 2024/01/09 13:41:32 claudio Exp $ */
+/*	$OpenBSD: kroute.c,v 1.313 2025/02/04 16:07:46 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -476,6 +476,9 @@ kr_change(u_int rtableid, struct kroute_full *kf)
 		return (krVPN4_change(kt, kf));
 	case AID_VPN_IPv6:
 		return (krVPN6_change(kt, kf));
+	case AID_EVPN:
+		/* XXX ignored for now */
+		return (0);
 	}
 	log_warnx("%s: not handled AID", __func__);
 	return (-1);
@@ -510,6 +513,9 @@ kr4_change(struct ktable *kt, struct kroute_full *kf)
 			kr->flags |= F_REJECT;
 		else
 			kr->flags &= ~F_REJECT;
+
+		if (kr->flags & F_NEXTHOP)
+			knexthop_update(kt, kf);
 
 		if (send_rtmsg(RTM_CHANGE, kt, kf))
 			kr->flags |= F_BGPD_INSERTED;
@@ -548,6 +554,9 @@ kr6_change(struct ktable *kt, struct kroute_full *kf)
 			kr6->flags |= F_REJECT;
 		else
 			kr6->flags &= ~F_REJECT;
+
+		if (kr6->flags & F_NEXTHOP)
+			knexthop_update(kt, kf);
 
 		if (send_rtmsg(RTM_CHANGE, kt, kf))
 			kr6->flags |= F_BGPD_INSERTED;
@@ -1719,13 +1728,14 @@ kroute_insert(struct ktable *kt, struct kroute_full *kf)
 		break;
 	}
 
-	/* XXX this is wrong for nexthop validated via BGP */
-	if (!(kf->flags & F_BGPD)) {
+	if (bgpd_has_bgpnh() || !(kf->flags & F_BGPD)) {
 		RB_FOREACH(n, knexthop_tree, KT2KNT(kt))
 			if (prefix_compare(&kf->prefix, &n->nexthop,
 			    kf->prefixlen) == 0)
 				knexthop_validate(kt, n);
+	}
 
+	if (!(kf->flags & F_BGPD)) {
 		/* redistribute multipath routes only once */
 		if (!multipath)
 			kr_redistribute(IMSG_NETWORK_ADD, kt, kf);
@@ -1889,6 +1899,9 @@ kroute_remove(struct ktable *kt, struct kroute_full *kf, int any)
 	case AID_VPN_IPv6:
 		multipath = kroute6_remove(kt, kf, any);
 		break;
+	case AID_EVPN:
+		/* XXX ignored for now */
+		return (0);
 	default:
 		log_warnx("%s: not handled AID", __func__);
 		return (-1);

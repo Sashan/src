@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_anon.c,v 1.58 2024/04/06 10:59:52 mpi Exp $	*/
+/*	$OpenBSD: uvm_anon.c,v 1.61 2024/12/27 12:04:40 mpi Exp $	*/
 /*	$NetBSD: uvm_anon.c,v 1.10 2000/11/25 06:27:59 chs Exp $	*/
 
 /*
@@ -170,20 +170,17 @@ uvm_anon_pagein(struct vm_amap *amap, struct vm_anon *anon)
 	rv = uvmfault_anonget(NULL, amap, anon);
 
 	switch (rv) {
-	case VM_PAGER_OK:
+	case 0:
+		/* Success - we have the page. */
 		KASSERT(rw_write_held(anon->an_lock));
 		break;
-
-	case VM_PAGER_ERROR:
-	case VM_PAGER_REFAULT:
-
+	case EACCES:
+	case ERESTART:
 		/*
-		 * Nothing more to do on errors.
-		 * VM_PAGER_REFAULT  means that the anon was freed.
+		 * Nothing more to do on errors.  ERESTART means that the
+		 * anon was freed.
 		 */
-
 		return FALSE;
-
 	default:
 #ifdef DIAGNOSTIC
 		panic("anon_pagein: uvmfault_anonget -> %d", rv);
@@ -205,8 +202,6 @@ uvm_anon_pagein(struct vm_amap *amap, struct vm_anon *anon)
 	/*
 	 * Deactivate the page (to put it on a page queue).
 	 */
-	pmap_clear_reference(pg);
-	pmap_page_protect(pg, PROT_NONE);
 	uvm_lock_pageq();
 	uvm_pagedeactivate(pg);
 	uvm_unlock_pageq();

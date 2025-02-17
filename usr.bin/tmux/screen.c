@@ -1,4 +1,4 @@
-/* $OpenBSD: screen.c,v 1.85 2024/03/21 11:26:28 nicm Exp $ */
+/* $OpenBSD: screen.c,v 1.88 2024/11/15 09:01:16 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -107,10 +107,11 @@ screen_reinit(struct screen *s)
 	s->rlower = screen_size_y(s) - 1;
 
 	s->mode = MODE_CURSOR|MODE_WRAP|(s->mode & MODE_CRLF);
-	if (options_get_number(global_options, "extended-keys") == 2)
-		s->mode |= MODE_KEXTENDED;
 
-	if (s->saved_grid != NULL)
+	if (options_get_number(global_options, "extended-keys") == 2)
+		s->mode = (s->mode & ~EXTENDED_KEY_MODES)|MODE_KEYS_EXTENDED;
+
+	if (SCREEN_IS_ALTERNATE(s))
 		screen_alternate_off(s, NULL, 0);
 	s->saved_cx = UINT_MAX;
 	s->saved_cy = UINT_MAX;
@@ -146,7 +147,7 @@ screen_free(struct screen *s)
 	if (s->write_list != NULL)
 		screen_write_free_list(s);
 
-	if (s->saved_grid != NULL)
+	if (SCREEN_IS_ALTERNATE(s))
 		grid_destroy(s->saved_grid);
 	grid_destroy(s->grid);
 
@@ -167,6 +168,20 @@ screen_reset_tabs(struct screen *s)
 		fatal("bit_alloc failed");
 	for (i = 8; i < screen_size_x(s); i += 8)
 		bit_set(s->tabs, i);
+}
+
+/* Set default cursor style and colour from options. */
+void
+screen_set_default_cursor(struct screen *s, struct options *oo)
+{
+	int	c;
+
+	c = options_get_number(oo, "cursor-colour");
+	s->default_ccolour = c;
+
+	c = options_get_number(oo, "cursor-style");
+	s->default_mode = 0;
+	screen_set_cursor_style(c, &s->default_cstyle, &s->default_mode);
 }
 
 /* Set screen cursor style and mode. */
@@ -597,7 +612,7 @@ screen_alternate_on(struct screen *s, struct grid_cell *gc, int cursor)
 {
 	u_int	sx, sy;
 
-	if (s->saved_grid != NULL)
+	if (SCREEN_IS_ALTERNATE(s))
 		return;
 	sx = screen_size_x(s);
 	sy = screen_size_y(s);
@@ -626,7 +641,7 @@ screen_alternate_off(struct screen *s, struct grid_cell *gc, int cursor)
 	 * If the current size is different, temporarily resize to the old size
 	 * before copying back.
 	 */
-	if (s->saved_grid != NULL)
+	if (SCREEN_IS_ALTERNATE(s))
 		screen_resize(s, s->saved_grid->sx, s->saved_grid->sy, 0);
 
 	/*
@@ -641,7 +656,7 @@ screen_alternate_off(struct screen *s, struct grid_cell *gc, int cursor)
 	}
 
 	/* If not in the alternate screen, do nothing more. */
-	if (s->saved_grid == NULL) {
+	if (!SCREEN_IS_ALTERNATE(s)) {
 		if (s->cx > screen_size_x(s) - 1)
 			s->cx = screen_size_x(s) - 1;
 		if (s->cy > screen_size_y(s) - 1)
@@ -714,8 +729,10 @@ screen_mode_to_string(int mode)
 		strlcat(tmp, "ORIGIN,", sizeof tmp);
 	if (mode & MODE_CRLF)
 		strlcat(tmp, "CRLF,", sizeof tmp);
-	if (mode & MODE_KEXTENDED)
-		strlcat(tmp, "KEXTENDED,", sizeof tmp);
+	if (mode & MODE_KEYS_EXTENDED)
+		strlcat(tmp, "KEYS_EXTENDED,", sizeof tmp);
+	if (mode & MODE_KEYS_EXTENDED_2)
+		strlcat(tmp, "KEYS_EXTENDED_2,", sizeof tmp);
 	tmp[strlen(tmp) - 1] = '\0';
 	return (tmp);
 }

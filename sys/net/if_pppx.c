@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_pppx.c,v 1.129 2024/07/30 13:41:15 yasuoka Exp $ */
+/*	$OpenBSD: if_pppx.c,v 1.133 2024/12/30 02:46:00 guenther Exp $ */
 
 /*
  * Copyright (c) 2010 Claudio Jeker <claudio@openbsd.org>
@@ -443,8 +443,6 @@ pppxioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		    (struct pipex_session_descr_req *)addr);
 		break;
 
-	case FIONBIO:
-		break;
 	case FIONREAD:
 		*(int *)addr = mq_hdatalen(&pxd->pxd_svcq);
 		break;
@@ -562,7 +560,7 @@ pppxclose(dev_t dev, int flags, int mode, struct proc *p)
 	mq_purge(&pxd->pxd_svcq);
 
 	klist_free(&pxd->pxd_rklist);
-	klist_free(&pxd->pxd_rklist);
+	klist_free(&pxd->pxd_wklist);
 
 	free(pxd, M_DEVBUF, sizeof(*pxd));
 
@@ -786,10 +784,8 @@ pppx_set_session_descr(struct pppx_dev *pxd,
 	if (pxi == NULL)
 		return (EINVAL);
 
-	NET_LOCK();
 	(void)memset(pxi->pxi_if.if_description, 0, IFDESCRSIZE);
 	strlcpy(pxi->pxi_if.if_description, req->pdr_descr, IFDESCRSIZE);
-	NET_UNLOCK();
 
 	pppx_if_rele(pxi);
 
@@ -1071,7 +1067,7 @@ pppacopen(dev_t dev, int flags, int mode, struct proc *p)
 
 	ifp->if_softc = sc;
 	ifp->if_type = IFT_L3IPVLAN;
-	ifp->if_hdrlen = sizeof(uint32_t); /* for BPF */;
+	ifp->if_hdrlen = sizeof(uint32_t); /* for BPF */
 	ifp->if_mtu = MAXMCLBYTES - sizeof(uint32_t);
 	ifp->if_flags = IFF_SIMPLEX | IFF_BROADCAST;
 	ifp->if_xflags = IFXF_CLONED | IFXF_MPSAFE;
@@ -1222,8 +1218,6 @@ pppacioctl(dev_t dev, u_long cmd, caddr_t data, int flags, struct proc *p)
 	int error = 0;
 
 	switch (cmd) {
-	case FIONBIO:
-		break;
 	case FIONREAD:
 		*(int *)data = mq_hdatalen(&sc->sc_mq);
 		break;

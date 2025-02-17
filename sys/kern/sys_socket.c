@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_socket.c,v 1.65 2024/04/30 17:59:15 mvs Exp $	*/
+/*	$OpenBSD: sys_socket.c,v 1.68 2025/02/13 12:39:15 bluhm Exp $	*/
 /*	$NetBSD: sys_socket.c,v 1.13 1995/08/12 23:59:09 mycroft Exp $	*/
 
 /*
@@ -86,11 +86,7 @@ soo_ioctl(struct file *fp, u_long cmd, caddr_t data, struct proc *p)
 
 	switch (cmd) {
 
-	case FIONBIO:
-		break;
-
 	case FIOASYNC:
-		solock(so);
 		mtx_enter(&so->so_rcv.sb_mtx);
 		mtx_enter(&so->so_snd.sb_mtx);
 		if (*(int *)data) {
@@ -102,7 +98,6 @@ soo_ioctl(struct file *fp, u_long cmd, caddr_t data, struct proc *p)
 		}
 		mtx_leave(&so->so_snd.sb_mtx);
 		mtx_leave(&so->so_rcv.sb_mtx);
-		sounlock(so);
 		break;
 
 	case FIONREAD:
@@ -153,8 +148,10 @@ soo_stat(struct file *fp, struct stat *ub, struct proc *p)
 	    so->so_rcv.sb_cc != 0)
 		ub->st_mode |= S_IRUSR | S_IRGRP | S_IROTH;
 	mtx_leave(&so->so_rcv.sb_mtx);
+	mtx_enter(&so->so_snd.sb_mtx);
 	if ((so->so_snd.sb_state & SS_CANTSENDMORE) == 0)
 		ub->st_mode |= S_IWUSR | S_IWGRP | S_IWOTH;
+	mtx_leave(&so->so_snd.sb_mtx);
 	ub->st_uid = so->so_euid;
 	ub->st_gid = so->so_egid;
 	(void)pru_sense(so, ub);

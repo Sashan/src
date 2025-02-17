@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_km.c,v 1.152 2024/03/27 15:41:40 kurt Exp $	*/
+/*	$OpenBSD: uvm_km.c,v 1.155 2024/11/01 20:26:18 mpi Exp $	*/
 /*	$NetBSD: uvm_km.c,v 1.42 2001/01/14 02:10:01 thorpej Exp $	*/
 
 /* 
@@ -117,10 +117,10 @@
  * address minus the vm_map_min(kernel_map).
  * example:
  *   suppose kernel_map starts at 0xf8000000 and the kernel does a
- *   uvm_km_alloc(kernel_map, PAGE_SIZE) [allocate 1 wired down page in the
- *   kernel map].    if uvm_km_alloc returns virtual address 0xf8235000,
- *   then that means that the page at offset 0x235000 in kernel_object is
- *   mapped at 0xf8235000.   
+ *   km_alloc(PAGE_SIZE, &kv_any, &kp_none, &kd_waitok)) [allocate 1 wired
+ *   down page in the kernel map].    if km_alloc() returns virtual address
+ *   0xf8235000, then that means that the page at offset 0x235000 in
+ *   kernel_object is mapped at 0xf8235000.
  *
  * kernel objects have one other special property: when the kernel virtual
  * memory mapping them is unmapped, the backing memory in the object is
@@ -431,85 +431,6 @@ void
 uvm_km_free(struct vm_map *map, vaddr_t addr, vsize_t size)
 {
 	uvm_unmap(map, trunc_page(addr), round_page(addr+size));
-}
-
-/*
- * uvm_km_alloc1: allocate wired down memory in the kernel map.
- *
- * => we can sleep if needed
- */
-vaddr_t
-uvm_km_alloc1(struct vm_map *map, vsize_t size, vsize_t align, boolean_t zeroit)
-{
-	vaddr_t kva, loopva;
-	voff_t offset;
-	struct vm_page *pg;
-
-	KASSERT(vm_map_pmap(map) == pmap_kernel());
-
-	size = round_page(size);
-	kva = vm_map_min(map);		/* hint */
-
-	/* allocate some virtual space */
-	if (__predict_false(uvm_map(map, &kva, size, uvm.kernel_object,
-	    UVM_UNKNOWN_OFFSET, align,
-	    UVM_MAPFLAG(PROT_READ | PROT_WRITE,
-	    PROT_READ | PROT_WRITE | PROT_EXEC,
-	    MAP_INHERIT_NONE, MADV_RANDOM, 0)) != 0)) {
-		return 0;
-	}
-
-	/* recover object offset from virtual address */
-	offset = kva - vm_map_min(kernel_map);
-
-	/* now allocate the memory.  we must be careful about released pages. */
-	loopva = kva;
-	while (size) {
-		rw_enter(uvm.kernel_object->vmobjlock, RW_WRITE);
-		/* allocate ram */
-		pg = uvm_pagealloc(uvm.kernel_object, offset, NULL, 0);
-		if (pg) {
-			atomic_clearbits_int(&pg->pg_flags, PG_BUSY);
-			UVM_PAGE_OWN(pg, NULL);
-		}
-		rw_exit(uvm.kernel_object->vmobjlock);
-		if (__predict_false(pg == NULL)) {
-			if (curproc == uvm.pagedaemon_proc) {
-				/*
-				 * It is unfeasible for the page daemon to
-				 * sleep for memory, so free what we have
-				 * allocated and fail.
-				 */
-				uvm_unmap(map, kva, loopva - kva);
-				return (0);
-			} else {
-				uvm_wait("km_alloc1w");	/* wait for memory */
-				continue;
-			}
-		}
-
-		/*
-		 * map it in; note we're never called with an intrsafe
-		 * object, so we always use regular old pmap_enter().
-		 */
-		pmap_enter(map->pmap, loopva, VM_PAGE_TO_PHYS(pg),
-		    PROT_READ | PROT_WRITE,
-		    PROT_READ | PROT_WRITE | PMAP_WIRED);
-
-		loopva += PAGE_SIZE;
-		offset += PAGE_SIZE;
-		size -= PAGE_SIZE;
-	}
-	pmap_update(map->pmap);
-	
-	/*
-	 * zero on request (note that "size" is now zero due to the above loop
-	 * so we need to subtract kva from loopva to reconstruct the size).
-	 */
-	if (zeroit)
-		memset((caddr_t)kva, 0, loopva - kva);
-
-	return kva;
 }
 
 #if defined(__HAVE_PMAP_DIRECT)

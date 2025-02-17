@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.4 2024/07/24 08:27:20 yasuoka Exp $	*/
+/*	$OpenBSD: parser.c,v 1.6 2024/09/15 05:26:05 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2010 Reyk Floeter <reyk@vantronix.net>
@@ -158,6 +158,7 @@ static const struct token t_ipcp[] = {
 	{ KEYWORD,	"dump",		IPCP_DUMP,	t_ipcp_flags },
 	{ KEYWORD,	"monitor",	IPCP_MONITOR,	t_ipcp_flags },
 	{ KEYWORD,	"disconnect",	IPCP_DISCONNECT,t_ipcp_session_seq },
+	{ KEYWORD,	"delete",	IPCP_DELETE,	t_ipcp_session_seq },
 	{ ENDTOKEN,	"",		NONE,		NULL }
 };
 
@@ -371,9 +372,11 @@ match_token(char *word, const struct token table[])
 				break;
 			match++;
 			res.session_seq = strtonum(word, 1, UINT_MAX, &errstr);
-			if (errstr != NULL)
+			if (errstr != NULL) {
 				printf("invalid argument: %s is %s for "
-				"\"session-id\"", word, errstr);
+				    "\"session-id\"\n", word, errstr);
+				return (NULL);
+			}
 			t = &table[i];
 		case MSGAUTH:
 			if (word != NULL &&

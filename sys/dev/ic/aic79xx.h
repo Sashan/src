@@ -1,4 +1,4 @@
-/*	$OpenBSD: aic79xx.h,v 1.31 2024/05/29 00:48:15 jsg Exp $	*/
+/*	$OpenBSD: aic79xx.h,v 1.34 2024/10/22 21:50:02 jsg Exp $	*/
 
 /*
  * Copyright (c) 2004 Milos Urbanek, Kenneth R. Westerback & Marco Peereboom
@@ -409,7 +409,7 @@ typedef enum {
  */
 
 /*
- * Status information embedded in the shared poriton of
+ * Status information embedded in the shared portion of
  * an SCB after passing the cdb to the target.  The kernel
  * driver will only read this data for transactions that
  * complete abnormally.
@@ -831,8 +831,8 @@ struct seeprom_config {
  * BIOS Control Bits
  */
 	uint16_t bios_control;		/* word 16 */
-#define		CFSUPREM	0x0001	/* support all removeable drives */
-#define		CFSUPREMB	0x0002	/* support removeable boot drives */
+#define		CFSUPREM	0x0001	/* support all removable drives */
+#define		CFSUPREMB	0x0002	/* support removable boot drives */
 #define		CFBIOSSTATE	0x000C	/* BIOS Action State */
 #define		    CFBS_DISABLED	0x00
 #define		    CFBS_ENABLED	0x04
@@ -1034,8 +1034,7 @@ typedef uint8_t ahd_mode_state;
 
 typedef void ahd_callback_t (void *);
 
-struct ahd_completion
-{
+struct ahd_completion {
 	uint16_t	tag;
 	uint8_t		sg_status;
 	uint8_t		valid_tag;

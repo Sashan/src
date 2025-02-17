@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_page.c,v 1.177 2024/05/01 12:54:27 mpi Exp $	*/
+/*	$OpenBSD: uvm_page.c,v 1.180 2024/12/27 12:04:40 mpi Exp $	*/
 /*	$NetBSD: uvm_page.c,v 1.44 2000/11/27 08:40:04 chs Exp $	*/
 
 /*
@@ -118,7 +118,7 @@ static vaddr_t      virtual_space_end;
  */
 static void uvm_pageinsert(struct vm_page *);
 static void uvm_pageremove(struct vm_page *);
-int uvm_page_owner_locked_p(struct vm_page *);
+int uvm_page_owner_locked_p(struct vm_page *, boolean_t);
 
 /*
  * inline functions
@@ -279,17 +279,16 @@ uvm_page_init(vaddr_t *kvm_startp, vaddr_t *kvm_endp)
 	mtx_init(&uvm.aiodoned_lock, IPL_BIO);
 
 	/*
-	 * init reserve thresholds
-	 * XXXCDC - values may need adjusting
+	 * init reserve thresholds.
+	 *
+	 * XXX As long as some disk drivers cannot write any physical
+	 * XXX page, we need DMA reachable reserves for the pagedaemon.
+	 * XXX We cannot enforce such requirement but it should be ok
+	 * XXX in most of the cases because the pmemrange tries hard to
+	 * XXX allocate them last.
 	 */
 	uvmexp.reserve_pagedaemon = 4;
-	uvmexp.reserve_kernel = 8;
-	uvmexp.anonminpct = 10;
-	uvmexp.vnodeminpct = 10;
-	uvmexp.vtextminpct = 5;
-	uvmexp.anonmin = uvmexp.anonminpct * 256 / 100;
-	uvmexp.vnodemin = uvmexp.vnodeminpct * 256 / 100;
-	uvmexp.vtextmin = uvmexp.vtextminpct * 256 / 100;
+	uvmexp.reserve_kernel = uvmexp.reserve_pagedaemon + 4;
 
 	uvm.page_init_done = TRUE;
 }
@@ -701,7 +700,7 @@ uvm_pagealloc_pg(struct vm_page *pg, struct uvm_object *obj, voff_t off,
 	pg->offset = off;
 	pg->uobject = obj;
 	pg->uanon = anon;
-	KASSERT(uvm_page_owner_locked_p(pg));
+	KASSERT(uvm_page_owner_locked_p(pg, TRUE));
 	if (anon) {
 		anon->an_page = pg;
 		flags |= PQ_ANON;
@@ -1041,7 +1040,7 @@ uvm_page_unbusy(struct vm_page **pgs, int npgs)
 			continue;
 		}
 
-		KASSERT(uvm_page_owner_locked_p(pg));
+		KASSERT(uvm_page_owner_locked_p(pg, TRUE));
 		KASSERT(pg->pg_flags & PG_BUSY);
 
 		if (pg->pg_flags & PG_WANTED) {
@@ -1073,6 +1072,7 @@ uvm_pagewait(struct vm_page *pg, struct rwlock *lock, const char *wmesg)
 {
 	KASSERT(rw_lock_held(lock));
 	KASSERT((pg->pg_flags & PG_BUSY) != 0);
+	KASSERT(uvm_page_owner_locked_p(pg, FALSE));
 
 	atomic_setbits_int(&pg->pg_flags, PG_WANTED);
 	rwsleep_nsec(pg, lock, PVM | PNORELOCK, wmesg, INFSLP);
@@ -1226,7 +1226,7 @@ uvm_pagelookup(struct uvm_object *obj, voff_t off)
 void
 uvm_pagewire(struct vm_page *pg)
 {
-	KASSERT(uvm_page_owner_locked_p(pg));
+	KASSERT(uvm_page_owner_locked_p(pg, TRUE));
 	MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
 
 	if (pg->wire_count == 0) {
@@ -1245,7 +1245,7 @@ uvm_pagewire(struct vm_page *pg)
 void
 uvm_pageunwire(struct vm_page *pg)
 {
-	KASSERT(uvm_page_owner_locked_p(pg));
+	KASSERT(uvm_page_owner_locked_p(pg, TRUE));
 	MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
 
 	pg->wire_count--;
@@ -1256,7 +1256,7 @@ uvm_pageunwire(struct vm_page *pg)
 }
 
 /*
- * uvm_pagedeactivate: deactivate page -- no pmaps have access to page
+ * uvm_pagedeactivate: deactivate page.
  *
  * => caller must lock page queues
  * => caller must check to make sure page is not wired
@@ -1265,8 +1265,10 @@ uvm_pageunwire(struct vm_page *pg)
 void
 uvm_pagedeactivate(struct vm_page *pg)
 {
-	KASSERT(uvm_page_owner_locked_p(pg));
+	KASSERT(uvm_page_owner_locked_p(pg, FALSE));
 	MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
+
+	pmap_page_protect(pg, PROT_NONE);
 
 	if (pg->pg_flags & PQ_ACTIVE) {
 		TAILQ_REMOVE(&uvm.page_active, pg, pageq);
@@ -1299,7 +1301,7 @@ uvm_pagedeactivate(struct vm_page *pg)
 void
 uvm_pageactivate(struct vm_page *pg)
 {
-	KASSERT(uvm_page_owner_locked_p(pg));
+	KASSERT(uvm_page_owner_locked_p(pg, FALSE));
 	MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
 
 	uvm_pagedequeue(pg);
@@ -1353,12 +1355,14 @@ uvm_pagecopy(struct vm_page *src, struct vm_page *dst)
  * locked.  this is a weak check for runtime assertions only.
  */
 int
-uvm_page_owner_locked_p(struct vm_page *pg)
+uvm_page_owner_locked_p(struct vm_page *pg, boolean_t exclusive)
 {
 	if (pg->uobject != NULL) {
 		if (UVM_OBJ_IS_DUMMY(pg->uobject))
 			return 1;
-		return rw_write_held(pg->uobject->vmobjlock);
+		return exclusive
+		    ? rw_write_held(pg->uobject->vmobjlock)
+		    : rw_lock_held(pg->uobject->vmobjlock);
 	}
 	if (pg->uanon != NULL) {
 		return rw_write_held(pg->uanon->an_lock);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.316 2024/06/03 03:41:47 deraadt Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.323 2025/02/12 14:11:26 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -73,9 +73,8 @@
 
 #if defined(__amd64__)
 #include "vmm.h"
-#if NVMM > 0
+#include "psp.h"
 #include <machine/conf.h>
-#endif
 #endif
 
 #include "drm.h"
@@ -85,16 +84,6 @@ int	 parsepledges(struct proc *p, const char *kname,
 	    const char *promises, u_int64_t *fp);
 int	 canonpath(const char *input, char *buf, size_t bufsize);
 void	 unveil_destroy(struct process *ps);
-
-/* #define DEBUG_PLEDGE */
-#ifdef DEBUG_PLEDGE
-int debug_pledge = 1;
-#define DPRINTF(x...)    do { if (debug_pledge) printf(x); } while (0)
-#define DNPRINTF(n,x...) do { if (debug_pledge >= (n)) printf(x); } while (0)
-#else
-#define DPRINTF(x...)
-#define DNPRINTF(n,x...)
-#endif
 
 /*
  * Ordered in blocks starting with least risky and most required.
@@ -462,7 +451,7 @@ sys_pledge(struct proc *p, void *v, register_t *retval)
 	} */	*uap = v;
 	struct process *pr = p->p_p;
 	uint64_t promises, execpromises;
-	int error;
+	int error = 0;
 	int unveil_cleanup = 0;
 
 	/* Check for any error in user input */
@@ -492,16 +481,16 @@ sys_pledge(struct proc *p, void *v, register_t *retval)
 		/* Only permit reductions */
 		if (ISSET(pr->ps_flags, PS_PLEDGE) &&
 		    (((promises | pr->ps_pledge) != pr->ps_pledge))) {
-			mtx_leave(&pr->ps_mtx);
-			return (EPERM);
+			error = EPERM;
+			goto fail;
 		}
 	}
 	if (SCARG(uap, execpromises)) {
 		/* Only permit reductions */
 		if (ISSET(pr->ps_flags, PS_EXECPLEDGE) &&
 		    (((execpromises | pr->ps_execpledge) != pr->ps_execpledge))) {
-			mtx_leave(&pr->ps_mtx);
-			return (EPERM);
+			error = EPERM;
+			goto fail;
 		}
 	}
 
@@ -520,19 +509,23 @@ sys_pledge(struct proc *p, void *v, register_t *retval)
 		atomic_setbits_int(&pr->ps_flags, PS_EXECPLEDGE);
 	}
 
+fail:
 	mtx_leave(&pr->ps_mtx);
 
 	if (unveil_cleanup) {
 		/*
 		 * Kill off unveil and drop unveil vnode refs if we no
-		 * longer are holding any path-accessing pledge
+		 * longer are holding any path-accessing pledge. This
+		 * must be done single-threaded, because another thread
+		 * may be in a system call sleeping in namei().
 		 */
+		single_thread_set(p, SINGLE_UNWIND);
 		KERNEL_LOCK();
 		unveil_destroy(pr);
 		KERNEL_UNLOCK();
+		single_thread_clear(p);
 	}
-
-	return (0);
+	return (error);
 }
 
 int
@@ -547,7 +540,8 @@ pledge_syscall(struct proc *p, int code, uint64_t *tval)
 	if (pledge_syscalls[code] == PLEDGE_ALWAYS)
 		return (0);
 
-	if (p->p_p->ps_pledge & pledge_syscalls[code])
+	p->p_pledge = READ_ONCE(p->p_p->ps_pledge); /* pledge checks are per-thread */
+	if (p->p_pledge & pledge_syscalls[code])
 		return (0);
 
 	*tval = pledge_syscalls[code];
@@ -570,7 +564,7 @@ pledge_fail(struct proc *p, int error, uint64_t code)
 	if (KTRPOINT(p, KTR_PLEDGE))
 		ktrpledge(p, error, code, p->p_pledge_syscall);
 #endif
-	if (p->p_p->ps_pledge & PLEDGE_ERROR)
+	if (p->p_pledge & PLEDGE_ERROR)
 		return (ENOSYS);
 
 	KERNEL_LOCK();
@@ -604,7 +598,7 @@ pledge_namei(struct proc *p, struct nameidata *ni, char *origpath)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0 ||
 	    (p->p_p->ps_flags & PS_COREDUMP))
 		return (0);
-	pledge = READ_ONCE(p->p_p->ps_pledge);
+	pledge = p->p_pledge;
 
 	if (ni->ni_pledge == 0)
 		panic("pledge_namei: ni_pledge");
@@ -615,8 +609,7 @@ pledge_namei(struct proc *p, struct nameidata *ni, char *origpath)
 	 */
 
 	/* Doing a permitted execve() */
-	if ((ni->ni_pledge & PLEDGE_EXEC) &&
-	    (pledge & PLEDGE_EXEC))
+	if ((ni->ni_pledge & PLEDGE_EXEC) && (pledge & PLEDGE_EXEC))
 		return (0);
 
 	error = canonpath(origpath, path, sizeof(path));
@@ -740,7 +733,7 @@ pledge_namei(struct proc *p, struct nameidata *ni, char *origpath)
 
 	/*
 	 * Ensure each flag of ni_pledge has counterpart allowing it in
-	 * ps_pledge.
+	 * p_pledge.
 	 */
 	if (ni->ni_pledge & ~pledge)
 		return (pledge_fail(p, EPERM, (ni->ni_pledge & ~pledge)));
@@ -759,7 +752,7 @@ pledge_recvfd(struct proc *p, struct file *fp)
 
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	if ((p->p_p->ps_pledge & PLEDGE_RECVFD) == 0)
+	if ((p->p_pledge & PLEDGE_RECVFD) == 0)
 		return pledge_fail(p, EPERM, PLEDGE_RECVFD);
 
 	switch (fp->f_type) {
@@ -787,7 +780,7 @@ pledge_sendfd(struct proc *p, struct file *fp)
 
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	if ((p->p_p->ps_pledge & PLEDGE_SENDFD) == 0)
+	if ((p->p_pledge & PLEDGE_SENDFD) == 0)
 		return pledge_fail(p, EPERM, PLEDGE_SENDFD);
 
 	switch (fp->f_type) {
@@ -815,7 +808,7 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	pledge = READ_ONCE(p->p_p->ps_pledge);
+	pledge = p->p_pledge;
 
 	if (new)
 		return pledge_fail(p, EFAULT, 0);
@@ -998,6 +991,11 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 	    mib[0] == CTL_MACHDEP && mib[1] == CPU_ID_AA64ISAR0)
 		return (0);
 #endif /* CPU_ID_AA64ISAR0 */
+#ifdef CPU_ID_AA64ISAR1
+	if (miblen == 2 &&		/* arm64 libcrypto inspects CPU features */
+	    mib[0] == CTL_MACHDEP && mib[1] == CPU_ID_AA64ISAR1)
+		return (0);
+#endif /* CPU_ID_AA64ISAR1 */
 
 	snprintf(buf, sizeof(buf), "%s(%d): pledge sysctl %d:",
 	    p->p_p->ps_comm, p->p_p->ps_pid, miblen);
@@ -1016,7 +1014,7 @@ pledge_chown(struct proc *p, uid_t uid, gid_t gid)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
-	if (p->p_p->ps_pledge & PLEDGE_CHOWNUID)
+	if (p->p_pledge & PLEDGE_CHOWNUID)
 		return (0);
 
 	if (uid != -1 && uid != p->p_ucred->cr_uid)
@@ -1034,7 +1032,7 @@ pledge_adjtime(struct proc *p, const void *v)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
-	if ((p->p_p->ps_pledge & PLEDGE_SETTIME))
+	if ((p->p_pledge & PLEDGE_SETTIME))
 		return (0);
 	if (delta)
 		return (EPERM);
@@ -1047,7 +1045,7 @@ pledge_sendit(struct proc *p, const void *to)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
-	if ((p->p_p->ps_pledge & (PLEDGE_INET | PLEDGE_UNIX | PLEDGE_DNS)))
+	if ((p->p_pledge & (PLEDGE_INET | PLEDGE_UNIX | PLEDGE_DNS)))
 		return (0);		/* may use address */
 	if (to == NULL)
 		return (0);		/* behaves just like write */
@@ -1063,7 +1061,7 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	pledge = READ_ONCE(p->p_p->ps_pledge);
+	pledge = p->p_pledge;
 
 	/*
 	 * The ioctl's which are always allowed.
@@ -1349,6 +1347,18 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 	}
 #endif
 
+#if NPSP > 0
+	if ((pledge & PLEDGE_VMM)) {
+		if ((fp->f_type == DTYPE_VNODE) &&
+		    (vp->v_type == VCHR) &&
+		    (cdevsw[major(vp->v_rdev)].d_open == pspopen)) {
+			error = pledge_ioctl_psp(p, com);
+			if (error == 0)
+				return (0);
+		}
+	}
+#endif
+
 	return pledge_fail(p, error, PLEDGE_TTY);
 }
 
@@ -1359,7 +1369,7 @@ pledge_sockopt(struct proc *p, int set, int level, int optname)
 
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	pledge = READ_ONCE(p->p_p->ps_pledge);
+	pledge = p->p_pledge;
 
 	/* Always allow these, which are too common to reject */
 	switch (level) {
@@ -1496,7 +1506,7 @@ pledge_socket(struct proc *p, int domain, unsigned int state)
 
 	if (!ISSET(p->p_p->ps_flags, PS_PLEDGE))
 		return 0;
-	pledge = READ_ONCE(p->p_p->ps_pledge);
+	pledge = p->p_pledge;
 
 	if (ISSET(state, SS_DNS)) {
 		if (ISSET(pledge, PLEDGE_DNS))
@@ -1528,7 +1538,7 @@ pledge_flock(struct proc *p)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
-	if ((p->p_p->ps_pledge & PLEDGE_FLOCK))
+	if ((p->p_pledge & PLEDGE_FLOCK))
 		return (0);
 	return (pledge_fail(p, EPERM, PLEDGE_FLOCK));
 }
@@ -1539,7 +1549,7 @@ pledge_swapctl(struct proc *p, int cmd)
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
-	if (p->p_p->ps_pledge & PLEDGE_VMINFO) {
+	if (p->p_pledge & PLEDGE_VMINFO) {
 		switch (cmd) {
 		case SWAP_NSWAP:
 		case SWAP_STATS:
@@ -1574,7 +1584,7 @@ pledge_fcntl(struct proc *p, int cmd)
 {
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
-	if ((p->p_p->ps_pledge & PLEDGE_PROC) == 0 && cmd == F_SETOWN)
+	if ((p->p_pledge & PLEDGE_PROC) == 0 && cmd == F_SETOWN)
 		return pledge_fail(p, EPERM, PLEDGE_PROC);
 	return (0);
 }
@@ -1584,7 +1594,7 @@ pledge_kill(struct proc *p, pid_t pid)
 {
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return 0;
-	if (p->p_p->ps_pledge & PLEDGE_PROC)
+	if (p->p_pledge & PLEDGE_PROC)
 		return 0;
 	if (pid == 0 || pid == p->p_p->ps_pid)
 		return 0;
@@ -1609,7 +1619,7 @@ pledge_protexec(struct proc *p, int prot)
 	/* Before kbind(2) call, ld.so and crt may create EXEC mappings */
 	if (p->p_p->ps_kbind_addr == 0 && p->p_p->ps_kbind_cookie == 0)
 		return 0;
-	if (!(p->p_p->ps_pledge & PLEDGE_PROTEXEC) && (prot & PROT_EXEC))
+	if (!(p->p_pledge & PLEDGE_PROTEXEC) && (prot & PROT_EXEC))
 		return pledge_fail(p, EPERM, PLEDGE_PROTEXEC);
 	return 0;
 }

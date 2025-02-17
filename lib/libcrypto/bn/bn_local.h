@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_local.h,v 1.43 2024/04/16 13:07:14 jsing Exp $ */
+/* $OpenBSD: bn_local.h,v 1.50 2025/02/13 11:04:20 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -138,16 +138,7 @@ struct bn_mont_ctx_st {
 	int flags;
 };
 
-/* Used for reciprocal division/mod functions
- * It cannot be shared between threads
- */
-typedef struct bn_recp_ctx_st {
-	BIGNUM N;	/* the divisor */
-	BIGNUM Nr;	/* the reciprocal */
-	int num_bits;
-	int shift;
-	int flags;
-} BN_RECP_CTX;
+typedef struct bn_recp_ctx_st BN_RECP_CTX;
 
 /* Used for slow "generation" functions. */
 struct bn_gencb_st {
@@ -280,18 +271,18 @@ int bn_rand_interval(BIGNUM *rnd, BN_ULONG lower_word, const BIGNUM *upper_exc);
 
 void	BN_init(BIGNUM *);
 
-int	BN_reciprocal(BIGNUM *r, const BIGNUM *m, int len, BN_CTX *ctx);
+BN_MONT_CTX *BN_MONT_CTX_create(const BIGNUM *bn, BN_CTX *ctx);
 
-void	BN_RECP_CTX_init(BN_RECP_CTX *recp);
-BN_RECP_CTX *BN_RECP_CTX_new(void);
-void	BN_RECP_CTX_free(BN_RECP_CTX *recp);
-int	BN_RECP_CTX_set(BN_RECP_CTX *recp, const BIGNUM *rdiv, BN_CTX *ctx);
+BN_RECP_CTX *BN_RECP_CTX_create(const BIGNUM *N);
+void BN_RECP_CTX_free(BN_RECP_CTX *recp);
+int	BN_div_reciprocal(BIGNUM *dv, BIGNUM *rem, const BIGNUM *m,
+    BN_RECP_CTX *recp, BN_CTX *ctx);
 int	BN_mod_mul_reciprocal(BIGNUM *r, const BIGNUM *x, const BIGNUM *y,
     BN_RECP_CTX *recp, BN_CTX *ctx);
-int	BN_mod_exp_recp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
+int	BN_mod_sqr_reciprocal(BIGNUM *r, const BIGNUM *x, BN_RECP_CTX *recp,
+    BN_CTX *ctx);
+int	BN_mod_exp_reciprocal(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
     const BIGNUM *m, BN_CTX *ctx);
-int	BN_div_recp(BIGNUM *dv, BIGNUM *rem, const BIGNUM *m,
-    BN_RECP_CTX *recp, BN_CTX *ctx);
 
 /* Explicitly const time / non-const time versions for internal use */
 int BN_mod_exp_ct(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,

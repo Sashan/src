@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_ameth.c,v 1.68 2024/05/10 05:12:03 tb Exp $ */
+/* $OpenBSD: ec_ameth.c,v 1.73 2024/11/25 06:51:39 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -56,18 +56,24 @@
  *
  */
 
-#include <stdio.h>
+#include <stddef.h>
+#include <stdlib.h>
 
 #include <openssl/opensslconf.h>
 
+#include <openssl/asn1.h>
+#include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/cms.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pkcs7.h>
+#include <openssl/objects.h>
 #include <openssl/x509.h>
 
 #include "asn1_local.h"
-#include "ec_local.h"
+#include "bn_local.h"
 #include "evp_local.h"
 #include "x509_local.h"
 
@@ -98,7 +104,7 @@ eckey_get_curve_name(const EC_KEY *eckey, int *nid)
 		ECerror(EC_R_MISSING_PARAMETERS);
 		return 0;
 	}
-	if (EC_GROUP_get_asn1_flag(group) != 0)
+	if ((EC_GROUP_get_asn1_flag(group) & OPENSSL_EC_NAMED_CURVE) != 0)
 		*nid = EC_GROUP_get_curve_name(group);
 
 	return 1;
@@ -304,7 +310,7 @@ eckey_pub_cmp(const EVP_PKEY *a, const EVP_PKEY *b)
 	return -2;
 }
 
-static int
+int
 eckey_compute_pubkey(EC_KEY *eckey)
 {
 	const BIGNUM *priv_key;
@@ -322,7 +328,6 @@ eckey_compute_pubkey(EC_KEY *eckey)
 		goto err;
 	if (!EC_KEY_set_public_key(eckey, pub_key))
 		goto err;
-	pub_key = NULL;
 
 	ret = 1;
 
@@ -687,41 +692,6 @@ ec_pkey_ctrl(EVP_PKEY *pkey, int op, long arg1, void *arg2)
 
 	}
 
-}
-
-static int
-ec_pkey_check(const EVP_PKEY *pkey)
-{
-	EC_KEY *eckey = pkey->pkey.ec;
-
-	if (eckey->priv_key == NULL) {
-		ECerror(EC_R_MISSING_PRIVATE_KEY);
-		return 0;
-	}
-
-	return EC_KEY_check_key(eckey);
-}
-
-static int
-ec_pkey_public_check(const EVP_PKEY *pkey)
-{
-	EC_KEY *eckey = pkey->pkey.ec;
-
-	/* This also checks the private key, but oh, well... */
-	return EC_KEY_check_key(eckey);
-}
-
-static int
-ec_pkey_param_check(const EVP_PKEY *pkey)
-{
-	EC_KEY *eckey = pkey->pkey.ec;
-
-	if (eckey->group == NULL) {
-		ECerror(EC_R_MISSING_PARAMETERS);
-		return 0;
-	}
-
-	return EC_GROUP_check(eckey->group, NULL);
 }
 
 #ifndef OPENSSL_NO_CMS
@@ -1092,8 +1062,4 @@ const EVP_PKEY_ASN1_METHOD eckey_asn1_meth = {
 	.pkey_ctrl = ec_pkey_ctrl,
 	.old_priv_decode = old_ec_priv_decode,
 	.old_priv_encode = old_ec_priv_encode,
-
-	.pkey_check = ec_pkey_check,
-	.pkey_public_check = ec_pkey_public_check,
-	.pkey_param_check = ec_pkey_param_check,
 };

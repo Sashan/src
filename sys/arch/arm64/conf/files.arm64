@@ -1,11 +1,11 @@
-# $OpenBSD: files.arm64,v 1.70 2024/07/02 10:25:16 kettenis Exp $
+# $OpenBSD: files.arm64,v 1.72 2024/11/12 04:56:27 jsg Exp $
 
 maxpartitions	16
 maxusers	2 8 128
 
-major	{wd = 16}
-major	{sd = 24}
-major	{cd = 26}
+major	{wd = 0}
+major	{sd = 4}
+major	{cd = 6}
 major	{rd = 17}
 
 file	arch/arm64/arm64/autoconf.c
@@ -37,8 +37,8 @@ file	arch/arm64/arm64/cpufunc_asm.S
 file	arch/arm64/arm64/lse.S
 file	arch/arm64/arm64/support.S
 file	arch/arm64/arm64/bus_dma.c
+file	arch/arm64/arm64/bus_space.c
 
-file	arch/arm64/dev/arm64_bus_space.c
 file	arch/arm64/dev/pci_machdep.c
 
 file	arch/arm64/arm64/cryptox.c		crypto

@@ -1,4 +1,4 @@
-/* $OpenBSD: ipmi_acpi.c,v 1.5 2022/04/06 18:59:27 naddy Exp $ */
+/* $OpenBSD: ipmi_acpi.c,v 1.7 2025/01/28 02:20:49 yasuoka Exp $ */
 /*
  * Copyright (c) 2018 Patrick Wildt <patrick@blueri.se>
  *
@@ -55,6 +55,7 @@ struct ipmi_acpi_softc {
 
 const struct cfattach ipmi_acpi_ca = {
 	sizeof(struct ipmi_acpi_softc), ipmi_acpi_match, ipmi_acpi_attach,
+	NULL, ipmi_activate
 };
 
 const char *ipmi_acpi_hids[] = { ACPI_DEV_IPMI, NULL };
@@ -136,6 +137,9 @@ ipmi_acpi_parse_crs(int crsidx, union acpi_resource *crs, void *arg)
 	char iotype;
 
 	switch (type) {
+	case SR_IRQ:
+		/* Ignore for now. */
+		return 0;
 	case SR_IOPORT:
 		addr = crs->sr_ioport._max;
 		iotype = 'i';

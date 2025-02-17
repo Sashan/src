@@ -1,4 +1,4 @@
-/* $OpenBSD: x509.h,v 1.9 2024/07/26 13:34:56 tb Exp $ */
+/* $OpenBSD: x509.h,v 1.14 2024/08/31 10:46:40 tb Exp $ */
 /*
  * Copyright (c) 2022 Bob Beck <beck@openbsd.org>
  *
@@ -140,8 +140,6 @@ LCRYPTO_USED(X509_REQ_get_pubkey);
 LCRYPTO_USED(i2d_re_X509_REQ_tbs);
 LCRYPTO_USED(X509_REQ_get0_pubkey);
 LCRYPTO_USED(X509_REQ_extension_nid);
-LCRYPTO_USED(X509_REQ_get_extension_nids);
-LCRYPTO_USED(X509_REQ_set_extension_nids);
 LCRYPTO_USED(X509_REQ_get_extensions);
 LCRYPTO_USED(X509_REQ_add_extensions_nid);
 LCRYPTO_USED(X509_REQ_add_extensions);
@@ -243,16 +241,6 @@ LCRYPTO_USED(X509_EXTENSION_set_data);
 LCRYPTO_USED(X509_EXTENSION_get_object);
 LCRYPTO_USED(X509_EXTENSION_get_data);
 LCRYPTO_USED(X509_EXTENSION_get_critical);
-LCRYPTO_UNUSED(X509at_get_attr_count);
-LCRYPTO_USED(X509at_get_attr_by_NID);
-LCRYPTO_USED(X509at_get_attr_by_OBJ);
-LCRYPTO_UNUSED(X509at_get_attr);
-LCRYPTO_UNUSED(X509at_delete_attr);
-LCRYPTO_USED(X509at_add1_attr);
-LCRYPTO_USED(X509at_add1_attr_by_OBJ);
-LCRYPTO_USED(X509at_add1_attr_by_NID);
-LCRYPTO_USED(X509at_add1_attr_by_txt);
-LCRYPTO_USED(X509at_get0_data_by_OBJ);
 LCRYPTO_USED(X509_ATTRIBUTE_create_by_NID);
 LCRYPTO_USED(X509_ATTRIBUTE_create_by_OBJ);
 LCRYPTO_USED(X509_ATTRIBUTE_create_by_txt);
@@ -265,7 +253,6 @@ LCRYPTO_USED(X509_ATTRIBUTE_get0_type);
 LCRYPTO_USED(X509_verify_cert);
 LCRYPTO_USED(X509_find_by_issuer_and_serial);
 LCRYPTO_USED(X509_find_by_subject);
-LCRYPTO_USED(X509_check_trust);
 LCRYPTO_USED(X509_up_ref);
 LCRYPTO_USED(X509_chain_up_ref);
 LCRYPTO_USED(ERR_load_X509_strings);
@@ -387,6 +374,7 @@ LCRYPTO_USED(X509_get_ex_data);
 LCRYPTO_USED(i2d_X509_AUX);
 LCRYPTO_USED(d2i_X509_AUX);
 LCRYPTO_USED(i2d_re_X509_tbs);
+LCRYPTO_USED(X509_get_signature_info);
 LCRYPTO_USED(X509_get0_signature);
 LCRYPTO_USED(X509_get_signature_nid);
 LCRYPTO_USED(X509_alias_set1);
@@ -442,15 +430,6 @@ LCRYPTO_USED(X509_ocspid_print);
 LCRYPTO_USED(X509_CRL_print);
 LCRYPTO_USED(X509_REQ_print_ex);
 LCRYPTO_USED(X509_REQ_print);
-LCRYPTO_UNUSED(EVP_PKEY_get_attr_count);
-LCRYPTO_UNUSED(EVP_PKEY_get_attr_by_NID);
-LCRYPTO_UNUSED(EVP_PKEY_get_attr_by_OBJ);
-LCRYPTO_UNUSED(EVP_PKEY_get_attr);
-LCRYPTO_UNUSED(EVP_PKEY_delete_attr);
-LCRYPTO_UNUSED(EVP_PKEY_add1_attr);
-LCRYPTO_UNUSED(EVP_PKEY_add1_attr_by_OBJ);
-LCRYPTO_UNUSED(EVP_PKEY_add1_attr_by_NID);
-LCRYPTO_UNUSED(EVP_PKEY_add1_attr_by_txt);
 LCRYPTO_USED(PKCS8_PRIV_KEY_INFO_new);
 LCRYPTO_USED(PKCS8_PRIV_KEY_INFO_free);
 LCRYPTO_USED(d2i_PKCS8_PRIV_KEY_INFO);

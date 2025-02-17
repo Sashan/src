@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwx.c,v 1.63 2024/06/11 10:06:35 stsp Exp $	*/
+/*	$OpenBSD: qwx.c,v 1.68 2025/02/05 09:28:01 stsp Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -158,6 +158,7 @@ int qwx_wmi_vdev_install_key(struct qwx_softc *,
 int qwx_dp_peer_rx_pn_replay_config(struct qwx_softc *, struct qwx_vif *,
     struct ieee80211_node *, struct ieee80211_key *, int);
 void qwx_setkey_clear(struct qwx_softc *);
+void qwx_vif_free_all(struct qwx_softc *);
 
 int qwx_scan(struct qwx_softc *);
 void qwx_scan_abort(struct qwx_softc *);
@@ -172,7 +173,8 @@ qwx_node_alloc(struct ieee80211com *ic)
 	struct qwx_node *nq;
 
 	nq = malloc(sizeof(struct qwx_node), M_DEVBUF, M_NOWAIT | M_ZERO);
-	nq->peer.peer_id = HAL_INVALID_PEERID;
+	if (nq != NULL)
+		nq->peer.peer_id = HAL_INVALID_PEERID;
 	return (struct ieee80211_node *)nq;
 }
 
@@ -347,6 +349,8 @@ qwx_stop(struct ifnet *ifp)
 
 	/* power off hardware */
 	qwx_core_deinit(sc);
+
+	qwx_vif_free_all(sc);
 
 	splx(s);
 }
@@ -6687,7 +6691,7 @@ qwx_qmi_decode_msg(struct qwx_softc *sc, void *output, size_t output_len,
 
 			/* Related EIs must have the same type. */
 			if (ei->tlv_type != elem_type) {
-				printf("%s: unexepected element type 0x%x; "
+				printf("%s: unexpected element type 0x%x; "
 				    "expected 0x%x\n", __func__,
 				    ei->tlv_type, elem_type);
 				return -1;
@@ -7467,7 +7471,7 @@ qwx_qrtr_recv_msg(struct qwx_softc *sc, struct mbuf *m)
 		qwx_qrtr_resume_tx(sc);
 }
 
-// Not needed because we don't implenent QMI as a network service.
+// Not needed because we don't implement QMI as a network service.
 #define qwx_qmi_init_service(sc)	(0)
 #define qwx_qmi_deinit_service(sc)	(0)
 
@@ -14257,7 +14261,7 @@ qwx_dp_htt_htc_tx_complete(struct qwx_softc *sc, struct mbuf *m)
 static inline void
 qwx_dp_get_mac_addr(uint32_t addr_l32, uint16_t addr_h16, uint8_t *addr)
 {
-#if 0 /* Not needed on OpenBSD? We do swapping in sofware... */
+#if 0 /* Not needed on OpenBSD? We do swapping in software... */
 	if (IS_ENABLED(CONFIG_CPU_BIG_ENDIAN)) {
 		addr_l32 = swab32(addr_l32);
 		addr_h16 = swab16(addr_h16);
@@ -19836,10 +19840,7 @@ qwx_core_qmi_firmware_ready(struct qwx_softc *sc)
 		goto err_core_stop;
 	}
 
-#if 0 /* TODO: Is this in the right spot for OpenBSD? */
 	sc->ops.irq_enable(sc);
-#endif
-
 #if 0
 	mutex_unlock(&ab->core_lock);
 #endif
@@ -20789,7 +20790,7 @@ qwx_hal_srng_setup(struct qwx_softc *sc, enum hal_ring_type type,
 	memset(srng->ring_base_vaddr, 0,
 	    (srng->entry_size * srng->num_entries) << 2);
 
-#if 0 /* Not needed on OpenBSD? We do swapping in sofware... */
+#if 0 /* Not needed on OpenBSD? We do swapping in software... */
 	/* TODO: Add comments on these swap configurations */
 	if (IS_ENABLED(CONFIG_CPU_BIG_ENDIAN))
 		srng->flags |= HAL_SRNG_FLAGS_MSI_SWAP | HAL_SRNG_FLAGS_DATA_TLV_SWAP |
@@ -22181,13 +22182,30 @@ qwx_reg_update_chan_list(struct qwx_softc *sc, uint8_t pdev_id)
 	int num_channels = 0;
 	size_t params_size;
 	int ret;
+	int scan_2ghz = 1, scan_5ghz = 1;
 #if 0
 	if (ar->state == ATH11K_STATE_RESTARTING)
 		return 0;
 #endif
+	/*
+	 * Scan an appropriate subset of channels if we are running
+	 * in a fixed, user-specified phy mode.
+	 */
+	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) != IFM_AUTO) {
+		if (ic->ic_curmode == IEEE80211_MODE_11A ||
+		    ic->ic_curmode == IEEE80211_MODE_11AC)
+			scan_2ghz = 0;
+		if (ic->ic_curmode == IEEE80211_MODE_11B ||
+		    ic->ic_curmode == IEEE80211_MODE_11G)
+			scan_5ghz = 0;
+	}
+
 	lastc = &ic->ic_channels[IEEE80211_CHAN_MAX];
 	for (channel = &ic->ic_channels[1]; channel <= lastc; channel++) {
 		if (channel->ic_flags == 0)
+			continue;
+		if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(channel)) ||
+		    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(channel)))
 			continue;
 		num_channels++;
 	}
@@ -22213,6 +22231,9 @@ qwx_reg_update_chan_list(struct qwx_softc *sc, uint8_t pdev_id)
 	lastc = &ic->ic_channels[IEEE80211_CHAN_MAX];
 	for (channel = &ic->ic_channels[1]; channel <= lastc; channel++) {
 		if (channel->ic_flags == 0)
+			continue;
+		if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(channel)) ||
+		    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(channel)))
 			continue;
 #ifdef notyet
 		/* TODO: Set to true/false based on some condition? */
@@ -22251,7 +22272,7 @@ qwx_reg_update_chan_list(struct qwx_softc *sc, uint8_t pdev_id)
 		    ch->antennamax, ch->phy_mode);
 
 		ch++;
-		/* TODO: use quarrter/half rate, cfreq12, dfs_cfreq2
+		/* TODO: use quarter/half rate, cfreq12, dfs_cfreq2
 		 * set_agile, reg_class_idx
 		 */
 	}
@@ -22816,6 +22837,18 @@ qwx_vif_free(struct qwx_softc *sc, struct qwx_vif *arvif)
 	}
 
 	free(arvif, M_DEVBUF, sizeof(*arvif));
+}
+
+void
+qwx_vif_free_all(struct qwx_softc *sc)
+{
+	struct qwx_vif *arvif;
+
+	while (!TAILQ_EMPTY(&sc->vif_list)) {
+		arvif = TAILQ_FIRST(&sc->vif_list);
+		TAILQ_REMOVE(&sc->vif_list, arvif, entry);
+		qwx_vif_free(sc, arvif);
+	}
 }
 
 struct qwx_vif *
@@ -24830,6 +24863,7 @@ qwx_scan(struct qwx_softc *sc)
 	struct ieee80211_channel *chan, *lastc;
 	int ret = 0, num_channels, i;
 	uint32_t scan_timeout;
+	int scan_2ghz = 1, scan_5ghz = 1;
 
 	if (arvif == NULL) {
 		printf("%s: no vdev found\n", sc->sc_dev.dv_xname);
@@ -24897,10 +24931,26 @@ qwx_scan(struct qwx_softc *sc)
 	} else
 		arg->scan_flags |= WMI_SCAN_FLAG_PASSIVE;
 
+	/*
+	 * Scan an appropriate subset of channels if we are running
+	 * in a fixed, user-specified phy mode.
+	 */
+	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) != IFM_AUTO) {
+		if (ic->ic_curmode == IEEE80211_MODE_11A ||
+		    ic->ic_curmode == IEEE80211_MODE_11AC)
+			scan_2ghz = 0;
+		if (ic->ic_curmode == IEEE80211_MODE_11B ||
+		    ic->ic_curmode == IEEE80211_MODE_11G)
+			scan_5ghz = 0;
+	}
+
 	lastc = &ic->ic_channels[IEEE80211_CHAN_MAX];
 	num_channels = 0;
 	for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
 		if (chan->ic_flags == 0)
+			continue;
+		if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(chan)) ||
+		    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(chan)))
 			continue;
 		num_channels++;
 	}
@@ -24917,6 +24967,9 @@ qwx_scan(struct qwx_softc *sc)
 		i = 0;
 		for (chan = &ic->ic_channels[1]; chan <= lastc; chan++) {
 			if (chan->ic_flags == 0)
+				continue;
+			if ((!scan_2ghz && IEEE80211_IS_CHAN_2GHZ(chan)) ||
+			    (!scan_5ghz && IEEE80211_IS_CHAN_5GHZ(chan)))
 				continue;
 			if (isset(sc->wmi.svc_map,
 			    WMI_TLV_SERVICE_SCAN_CONFIG_PER_CHANNEL)) {
@@ -24971,7 +25024,7 @@ qwx_scan(struct qwx_softc *sc)
 		 * The current mode might have been fixed during association.
 		 * Ensure all channels get scanned.
 		 */
-		if (IFM_SUBTYPE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
+		if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
 			ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
 	}
 #if 0
@@ -25389,9 +25442,6 @@ qwx_run(struct qwx_softc *sc)
 		   sc->sc_dev.dv_xname, ret);
 		return ret;
 	}
-
-	/* Enable "ext" IRQs for datapath. */
-	sc->ops.irq_enable(sc);
 
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.366 2024/07/10 09:12:11 krw Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.374 2025/02/17 13:10:27 mpi Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -894,8 +894,10 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		bp = &cwdbuf[cwdlen - 1];
 		*bp = '\0';
 
+		KERNEL_LOCK();
 		error = vfs_getcwd_common(p->p_fd->fd_cdir, NULL, &bp, cwdbuf,
 		    cwdlen/2, GETCWD_CHECK_ACCESS, p);
+		KERNEL_UNLOCK();
 
 		if (error) {
 			free(cwdbuf, M_TEMP, cwdlen);
@@ -919,12 +921,16 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 
 	nd.ni_pledge = PLEDGE_RPATH;
 	nd.ni_unveil = UNVEIL_READ;
-	if ((error = namei(&nd)) != 0)
+	KERNEL_LOCK();
+	if ((error = namei(&nd)) != 0) {
+		KERNEL_UNLOCK();
 		goto end;
+	}
 
 	/* release reference from namei */
 	if (nd.ni_vp)
 		vrele(nd.ni_vp);
+	KERNEL_UNLOCK();
 
 	error = copyoutstr(nd.ni_cnd.cn_rpbuf, SCARG(uap, resolved),
 	    MAXPATHLEN, NULL);
@@ -966,6 +972,14 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 	    sizeof(permissions), NULL);
 	if (error)
 		return (error);
+
+	/*
+	 * System calls in other threads may sleep between unveil
+	 * datastructure inspections -- this is the simplest way to
+	 * provide consistancy
+	 */
+	single_thread_set(p, SINGLE_UNWIND);
+
 	pathname = pool_get(&namei_pool, PR_WAITOK);
 	error = copyinstr(SCARG(uap, path), pathname, MAXPATHLEN, &pathlen);
 	if (error)
@@ -1031,6 +1045,7 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 end:
 	pool_put(&namei_pool, pathname);
 
+	single_thread_clear(p);
 	return (error);
 }
 
@@ -1120,23 +1135,20 @@ doopenat(struct proc *p, int fd, const char *path, int oflags, mode_t mode,
 		localtrunc = 1;
 		flags &= ~O_TRUNC;	/* Must do truncate ourselves */
 	}
+	KERNEL_LOCK();
 	if ((error = vn_open(&nd, flags, cmode)) != 0) {
 		fdplock(fdp);
 		if (error == ENODEV &&
 		    p->p_dupfd >= 0 &&			/* XXX from fdopen */
 		    (error =
 			dupfdopen(p, indx, flags)) == 0) {
-			fdpunlock(fdp);
-			closef(fp, p);
 			*retval = indx;
-			return (error);
+			goto error;
 		}
 		if (error == ERESTART)
 			error = EINTR;
 		fdremove(fdp, indx);
-		fdpunlock(fdp);
-		closef(fp, p);
-		return (error);
+		goto error;
 	}
 	p->p_dupfd = 0;
 	vp = nd.ni_vp;
@@ -1161,9 +1173,7 @@ doopenat(struct proc *p, int fd, const char *path, int oflags, mode_t mode,
 			fdplock(fdp);
 			/* closef will vn_close the file for us. */
 			fdremove(fdp, indx);
-			fdpunlock(fdp);
-			closef(fp, p);
-			return (error);
+			goto error;
 		}
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 		atomic_setbits_int(&fp->f_iflags, FIF_HASLOCK);
@@ -1176,7 +1186,7 @@ doopenat(struct proc *p, int fd, const char *path, int oflags, mode_t mode,
 		else if (vp->v_type == VDIR)
 			error = EISDIR;
 		else if ((error = vn_writechk(vp)) == 0) {
-			VATTR_NULL(&vattr);
+			vattr_null(&vattr);
 			vattr.va_size = 0;
 			error = VOP_SETATTR(vp, &vattr, fp->f_cred, p);
 		}
@@ -1185,17 +1195,21 @@ doopenat(struct proc *p, int fd, const char *path, int oflags, mode_t mode,
 			fdplock(fdp);
 			/* closef will close the file for us. */
 			fdremove(fdp, indx);
-			fdpunlock(fdp);
-			closef(fp, p);
-			return (error);
+			goto error;
 		}
 	}
 	VOP_UNLOCK(vp);
+	KERNEL_UNLOCK();
 	*retval = indx;
 	fdplock(fdp);
 	fdinsert(fdp, indx, cloexec, fp);
 	fdpunlock(fdp);
 	FRELE(fp, p);
+	return (error);
+error:
+	KERNEL_UNLOCK();
+	fdpunlock(fdp);
+	closef(fp, p);
 	return (error);
 }
 
@@ -1405,7 +1419,7 @@ sys_fhopen(struct proc *p, void *v, register_t *retval)
 			goto bad;
 	}
 	if (flags & O_TRUNC) {
-		VATTR_NULL(&va);
+		vattr_null(&va);
 		va.va_size = 0;
 		if ((error = VOP_SETATTR(vp, &va, cred, p)) != 0)
 			goto bad;
@@ -1587,7 +1601,7 @@ domknodat(struct proc *p, int fd, const char *path, mode_t mode, dev_t dev)
 	if (vp != NULL)
 		error = EEXIST;
 	else {
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_mode = (mode & ALLPERMS) &~ p->p_fd->fd_cmask;
 		if ((p->p_p->ps_flags & PS_PLEDGE))
 			vattr.va_mode &= ACCESSPERMS;
@@ -1801,7 +1815,7 @@ dosymlinkat(struct proc *p, const char *upath, int fd, const char *link)
 		error = EEXIST;
 		goto out;
 	}
-	VATTR_NULL(&vattr);
+	vattr_null(&vattr);
 	vattr.va_mode = ACCESSPERMS &~ p->p_fd->fd_cmask;
 	error = VOP_SYMLINK(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr, path);
 out:
@@ -1971,7 +1985,7 @@ dofaccessat(struct proc *p, int fd, const char *path, int amode, int flag)
 	struct vnode *vp;
 	struct ucred *newcred, *oldcred;
 	struct nameidata nd;
-	int error;
+	int vflags = 0, error;
 
 	if (amode & ~(R_OK | W_OK | X_OK))
 		return (EINVAL);
@@ -1996,21 +2010,20 @@ dofaccessat(struct proc *p, int fd, const char *path, int amode, int flag)
 	NDINITAT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_USERSPACE, fd, path, p);
 	nd.ni_pledge = PLEDGE_RPATH;
 	nd.ni_unveil = UNVEIL_READ;
+	if (amode & R_OK)
+		vflags |= VREAD;
+	if (amode & W_OK) {
+		vflags |= VWRITE;
+		nd.ni_unveil |= UNVEIL_WRITE;
+	}
+	if (amode & X_OK)
+		vflags |= VEXEC;
 	if ((error = namei(&nd)) != 0)
 		goto out;
 	vp = nd.ni_vp;
 
 	/* Flags == 0 means only check for existence. */
 	if (amode) {
-		int vflags = 0;
-
-		if (amode & R_OK)
-			vflags |= VREAD;
-		if (amode & W_OK)
-			vflags |= VWRITE;
-		if (amode & X_OK)
-			vflags |= VEXEC;
-
 		error = VOP_ACCESS(vp, vflags, p->p_ucred, p);
 		if (!error && (vflags & VWRITE))
 			error = vn_writechk(vp);
@@ -2067,10 +2080,14 @@ dofstatat(struct proc *p, int fd, const char *path, struct stat *buf, int flag)
 	NDINITAT(&nd, LOOKUP, follow | LOCKLEAF, UIO_USERSPACE, fd, path, p);
 	nd.ni_pledge = PLEDGE_RPATH;
 	nd.ni_unveil = UNVEIL_READ;
-	if ((error = namei(&nd)) != 0)
+	KERNEL_LOCK();
+	if ((error = namei(&nd)) != 0) {
+		KERNEL_UNLOCK();
 		return (error);
+	}
 	error = vn_stat(nd.ni_vp, &sb, p);
 	vput(nd.ni_vp);
+	KERNEL_UNLOCK();
 	if (error)
 		return (error);
 	/* Don't let non-root see generation numbers (for NFS security) */
@@ -2304,7 +2321,7 @@ dovchflags(struct proc *p, struct vnode *vp, u_int flags)
 				goto out;
 			}
 		}
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_flags = flags;
 		error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
 	}
@@ -2367,7 +2384,7 @@ dofchmodat(struct proc *p, int fd, const char *path, mode_t mode, int flag)
 	if (vp->v_mount->mnt_flag & MNT_RDONLY)
 		error = EROFS;
 	else {
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_mode = mode & ALLPERMS;
 		error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
 	}
@@ -2403,7 +2420,7 @@ sys_fchmod(struct proc *p, void *v, register_t *retval)
 	if (vp->v_mount && vp->v_mount->mnt_flag & MNT_RDONLY)
 		error = EROFS;
 	else {
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_mode = mode & ALLPERMS;
 		error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
 	}
@@ -2471,7 +2488,7 @@ dofchownat(struct proc *p, int fd, const char *path, uid_t uid, gid_t gid,
 			goto out;
 		if ((uid != -1 || gid != -1) &&
 		    !vnoperm(vp) &&
-		    (suser(p) || suid_clear)) {
+		    (suser(p) || atomic_load_int(&suid_clear))) {
 			error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
 			if (error)
 				goto out;
@@ -2480,7 +2497,7 @@ dofchownat(struct proc *p, int fd, const char *path, uid_t uid, gid_t gid,
 				mode = VNOVAL;
 		} else
 			mode = VNOVAL;
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_uid = uid;
 		vattr.va_gid = gid;
 		vattr.va_mode = mode;
@@ -2524,7 +2541,7 @@ sys_lchown(struct proc *p, void *v, register_t *retval)
 			goto out;
 		if ((uid != -1 || gid != -1) &&
 		    !vnoperm(vp) &&
-		    (suser(p) || suid_clear)) {
+		    (suser(p) || atomic_load_int(&suid_clear))) {
 			error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
 			if (error)
 				goto out;
@@ -2533,7 +2550,7 @@ sys_lchown(struct proc *p, void *v, register_t *retval)
 				mode = VNOVAL;
 		} else
 			mode = VNOVAL;
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_uid = uid;
 		vattr.va_gid = gid;
 		vattr.va_mode = mode;
@@ -2574,7 +2591,7 @@ sys_fchown(struct proc *p, void *v, register_t *retval)
 			goto out;
 		if ((uid != -1 || gid != -1) &&
 		    !vnoperm(vp) &&
-		    (suser(p) || suid_clear)) {
+		    (suser(p) || atomic_load_int(&suid_clear))) {
 			error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
 			if (error)
 				goto out;
@@ -2583,7 +2600,7 @@ sys_fchown(struct proc *p, void *v, register_t *retval)
 				mode = VNOVAL;
 		} else
 			mode = VNOVAL;
-		VATTR_NULL(&vattr);
+		vattr_null(&vattr);
 		vattr.va_uid = uid;
 		vattr.va_gid = gid;
 		vattr.va_mode = mode;
@@ -2706,7 +2723,7 @@ dovutimens(struct proc *p, struct vnode *vp, struct timespec ts[2])
 	}
 #endif
 
-	VATTR_NULL(&vattr);
+	vattr_null(&vattr);
 
 	/*  make sure ctime is updated even if neither mtime nor atime is */
 	vattr.va_vaflags = VA_UTIMES_CHANGE;
@@ -2846,7 +2863,7 @@ dotruncate(struct proc *p, struct vnode *vp, off_t len)
 			return EFBIG;
 		}
 	}
-	VATTR_NULL(&vattr);
+	vattr_null(&vattr);
 	vattr.va_size = len;
 	return VOP_SETATTR(vp, &vattr, p->p_ucred, p);
 }
@@ -3094,7 +3111,7 @@ domkdirat(struct proc *p, int fd, const char *path, mode_t mode)
 		vrele(vp);
 		return (EEXIST);
 	}
-	VATTR_NULL(&vattr);
+	vattr_null(&vattr);
 	vattr.va_type = VDIR;
 	vattr.va_mode = (mode & ACCESSPERMS) &~ p->p_fd->fd_cmask;
 	error = VOP_MKDIR(nd.ni_dvp, &nd.ni_vp, &nd.ni_cnd, &vattr);

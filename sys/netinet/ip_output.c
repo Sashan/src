@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_output.c,v 1.401 2024/07/02 18:33:47 bluhm Exp $	*/
+/*	$OpenBSD: ip_output.c,v 1.404 2025/02/14 13:14:13 dlg Exp $	*/
 /*	$NetBSD: ip_output.c,v 1.28 1996/02/13 23:43:07 christos Exp $	*/
 
 /*
@@ -87,7 +87,7 @@ void in_delayed_cksum(struct mbuf *);
 int ip_output_ipsec_lookup(struct mbuf *m, int hlen,
     const struct ipsec_level *seclevel, struct tdb **, int ipsecflowinfo);
 void ip_output_ipsec_pmtu_update(struct tdb *, struct route *, struct in_addr,
-    int, int);
+    int);
 int ip_output_ipsec_send(struct tdb *, struct mbuf *, struct route *, int);
 
 /*
@@ -211,7 +211,8 @@ reroute:
 			error = EHOSTUNREACH;
 			goto bad;
 		}
-		if ((mtu = ro->ro_rt->rt_mtu) == 0)
+		mtu = atomic_load_int(&ro->ro_rt->rt_mtu);
+		if (mtu == 0)
 			mtu = ifp->if_mtu;
 
 		if (ro->ro_rt->rt_flags & RTF_GATEWAY)
@@ -470,9 +471,14 @@ sendit:
 		 */
 		if (rtisvalid(ro->ro_rt) &&
 		    ISSET(ro->ro_rt->rt_flags, RTF_HOST) &&
-		    !(ro->ro_rt->rt_locks & RTV_MTU) &&
-		    (ro->ro_rt->rt_mtu > ifp->if_mtu)) {
-			ro->ro_rt->rt_mtu = ifp->if_mtu;
+		    !(ro->ro_rt->rt_locks & RTV_MTU)) {
+			u_int rtmtu;
+
+			rtmtu = atomic_load_int(&ro->ro_rt->rt_mtu);
+			if (rtmtu > ifp->if_mtu) {
+				atomic_cas_uint(&ro->ro_rt->rt_mtu, rtmtu,
+				    ifp->if_mtu);
+			}
 		}
 		ipstat_inc(ips_cantfrag);
 		goto bad;
@@ -540,10 +546,12 @@ ip_output_ipsec_lookup(struct mbuf *m, int hlen,
 
 void
 ip_output_ipsec_pmtu_update(struct tdb *tdb, struct route *ro,
-    struct in_addr dst, int rtableid, int transportmode)
+    struct in_addr dst, int rtableid)
 {
 	struct rtentry *rt = NULL;
 	int rt_mtucloned = 0;
+	int transportmode = (tdb->tdb_dst.sa.sa_family == AF_INET) &&
+	    (tdb->tdb_dst.sin.sin_addr.s_addr == dst.s_addr);
 
 	/* Find a host route to store the mtu in */
 	if (ro != NULL)
@@ -558,7 +566,7 @@ ip_output_ipsec_pmtu_update(struct tdb *tdb, struct route *ro,
 	DPRINTF("spi %08x mtu %d rt %p cloned %d",
 	    ntohl(tdb->tdb_spi), tdb->tdb_mtu, rt, rt_mtucloned);
 	if (rt != NULL) {
-		rt->rt_mtu = tdb->tdb_mtu;
+		atomic_store_int(&rt->rt_mtu, tdb->tdb_mtu);
 		if (ro != NULL && ro->ro_rt != NULL) {
 			rtfree(ro->ro_rt);
 			ro->ro_rt = rtalloc(&ro->ro_dstsa, RT_RESOLVE,
@@ -613,12 +621,7 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 	rtableid = m->m_pkthdr.ph_rtableid;
 	if (ip_mtudisc && (ip->ip_off & htons(IP_DF)) && tdb->tdb_mtu &&
 	    len > tdb->tdb_mtu && tdb->tdb_mtutimeout > gettime()) {
-		int transportmode;
-
-		transportmode = (tdb->tdb_dst.sa.sa_family == AF_INET) &&
-		    (tdb->tdb_dst.sin.sin_addr.s_addr == dst.s_addr);
-		ip_output_ipsec_pmtu_update(tdb, ro, dst, rtableid,
-		    transportmode);
+		ip_output_ipsec_pmtu_update(tdb, ro, dst, rtableid);
 		ipsec_adjust_mtu(m, tdb->tdb_mtu);
 		m_freem(m);
 		return EMSGSIZE;
@@ -647,7 +650,8 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 	KERNEL_LOCK();
 	while ((m = ml_dequeue(&ml)) != NULL) {
 		/* Callee frees mbuf */
-		error = ipsp_process_packet(m, tdb, AF_INET, 0);
+		error = ipsp_process_packet(m, tdb, AF_INET, 0,
+		    IPSP_DF_INHERIT);
 		if (error)
 			break;
 	}
@@ -661,7 +665,7 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 	if (!error && tso)
 		tcpstat_inc(tcps_outswtso);
 	if (ip_mtudisc && error == EMSGSIZE)
-		ip_output_ipsec_pmtu_update(tdb, ro, dst, rtableid, 0);
+		ip_output_ipsec_pmtu_update(tdb, ro, dst, rtableid);
 	return error;
 }
 #endif /* IPSEC */

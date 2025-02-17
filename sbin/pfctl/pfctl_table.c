@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_table.c,v 1.89 2024/07/14 19:51:08 sashan Exp $ */
+/*	$OpenBSD: pfctl_table.c,v 1.91 2024/11/20 13:57:29 kirill Exp $ */
 
 /*
  * Copyright (c) 2002 Cedric Berger
@@ -346,9 +346,22 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 		}
 		if (nmatch < b.pfrb_size)
 			rv = 2;
+	} else if (!strcmp(command, "zero") && (argc || file != NULL)) {
+		b.pfrb_type = PFRB_ADDRS;
+		if (load_addr(&b, argc, argv, file, 0, opts))
+			goto _error;
+		if (opts & PF_OPT_VERBOSE)
+			flags |= PFR_FLAG_FEEDBACK;
+		RVTEST(pfr_clr_astats(&table, b.pfrb_caddr, b.pfrb_size,
+		    &nzero, flags));
+		xprintf(opts, "%d/%d addresses cleared", nzero, b.pfrb_size);
+		if (opts & PF_OPT_VERBOSE)
+			PFRB_FOREACH(a, &b)
+				if (opts & PF_OPT_VERBOSE2 ||
+				    a->pfra_fback != PFR_FB_NONE)
+					print_addrx(a, NULL,
+					    opts & PF_OPT_USEDNS);
 	} else if (!strcmp(command, "zero")) {
-		if (argc || file != NULL)
-			usage();
 		flags |= PFR_FLAG_ADDRSTOO;
 		RVTEST(pfr_clr_tstats(&table, 1, &nzero, flags));
 		xprintf(opts, "%d table/stats cleared", nzero);
@@ -528,7 +541,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 		bzero(&tbl_buf, sizeof(tbl_buf));
 		tbl = &tbl_buf;
 	} else {
-		 if (ab->pfrb_size != 0) {
+		if (ab->pfrb_size != 0) {
 			/*
 			 * copy IP addresses which come with table from
 			 * temporal buffer to buffer attached to table.

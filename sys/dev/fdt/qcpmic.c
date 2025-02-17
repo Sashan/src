@@ -1,4 +1,4 @@
-/*	$OpenBSD: qcpmic.c,v 1.1 2022/11/08 19:40:08 patrick Exp $	*/
+/*	$OpenBSD: qcpmic.c,v 1.3 2025/01/03 14:13:55 kettenis Exp $	*/
 /*
  * Copyright (c) 2022 Patrick Wildt <patrick@blueri.se>
  *
@@ -26,8 +26,6 @@
 #include <dev/fdt/spmivar.h>
 
 #include <dev/ofw/openfirm.h>
-#include <dev/ofw/ofw_clock.h>
-#include <dev/ofw/ofw_power.h>
 #include <dev/ofw/fdt.h>
 
 /* PMIC Registers. */
@@ -117,7 +115,7 @@ qcpmic_read(struct qcpmic_softc *sc, uint16_t addr)
 	err = spmi_cmd_read(sc->sc_tag, sc->sc_sid, SPMI_CMD_EXT_READL,
 	    addr, &reg, sizeof(reg));
 	if (err)
-		printf("%s: error (%u) reading 0x%x\n", sc->sc_dev.dv_xname,
+		printf("%s: error (%u) reading 0x%x", sc->sc_dev.dv_xname,
 		    err, addr);
 
 	return reg;

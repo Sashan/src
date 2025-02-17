@@ -1,4 +1,4 @@
-/* $OpenBSD: popup.c,v 1.53 2024/03/21 11:30:42 nicm Exp $ */
+/* $OpenBSD: popup.c,v 1.57 2025/01/12 14:36:28 nicm Exp $ */
 
 /*
  * Copyright (c) 2020 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -353,9 +353,11 @@ popup_make_pane(struct popup_data *pd, enum layout_type type)
 	new_wp = window_add_pane(wp->window, NULL, hlimit, 0);
 	layout_assign_pane(lc, new_wp, 0);
 
-	new_wp->fd = job_transfer(pd->job, &new_wp->pid, new_wp->tty,
-	    sizeof new_wp->tty);
-	pd->job = NULL;
+	if (pd->job != NULL) {
+		new_wp->fd = job_transfer(pd->job, &new_wp->pid, new_wp->tty,
+		    sizeof new_wp->tty);
+		pd->job = NULL;
+	}
 
 	screen_set_title(&pd->s, new_wp->base.title);
 	screen_free(&new_wp->base);
@@ -543,7 +545,7 @@ popup_key_cb(struct client *c, void *data, struct key_event *event)
 	}
 	if ((((pd->flags & (POPUP_CLOSEEXIT|POPUP_CLOSEEXITZERO)) == 0) ||
 	    pd->job == NULL) &&
-	    (event->key == '\033' || event->key == '\003'))
+	    (event->key == '\033' || event->key == ('c'|KEYC_CTRL)))
 		return (1);
 	if (pd->job != NULL) {
 		if (KEYC_IS_MOUSE(event->key)) {
@@ -692,6 +694,7 @@ popup_display(int flags, enum box_lines lines, struct cmdq_item *item, u_int px,
 	pd->border_cell.attr = 0;
 
 	screen_init(&pd->s, jx, jy, 0);
+	screen_set_default_cursor(&pd->s, global_w_options);
 	colour_palette_init(&pd->palette);
 	colour_palette_from_option(&pd->palette, global_w_options);
 
@@ -718,7 +721,7 @@ popup_display(int flags, enum box_lines lines, struct cmdq_item *item, u_int px,
 
 	pd->job = job_run(shellcmd, argc, argv, env, s, cwd,
 	    popup_job_update_cb, popup_job_complete_cb, NULL, pd,
-	    JOB_NOWAIT|JOB_PTY|JOB_KEEPWRITE, jx, jy);
+	    JOB_NOWAIT|JOB_PTY|JOB_KEEPWRITE|JOB_DEFAULTSHELL, jx, jy);
 	pd->ictx = input_init(NULL, job_get_event(pd->job), &pd->palette);
 
 	server_client_set_overlay(c, 0, popup_check_cb, popup_mode_cb,

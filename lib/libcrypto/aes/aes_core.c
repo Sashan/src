@@ -1,4 +1,4 @@
-/* $OpenBSD: aes_core.c,v 1.23 2024/03/30 05:14:12 joshua Exp $ */
+/* $OpenBSD: aes_core.c,v 1.25 2024/11/13 21:00:57 tb Exp $ */
 /**
  * rijndael-alg-fst.c
  *
@@ -35,6 +35,7 @@
 #include <openssl/aes.h>
 
 #include "aes_local.h"
+#include "crypto_arch.h"
 #include "crypto_internal.h"
 
 /*
@@ -1020,7 +1021,7 @@ aes_encrypt_internal(const unsigned char *in, unsigned char *out,
 void
 AES_encrypt(const unsigned char *in, unsigned char *out, const AES_KEY *key)
 {
-	return aes_encrypt_internal(in, out, key);
+	aes_encrypt_internal(in, out, key);
 }
 LCRYPTO_ALIAS(AES_encrypt);
 
@@ -1223,6 +1224,6 @@ aes_decrypt_internal(const unsigned char *in, unsigned char *out,
 void
 AES_decrypt(const unsigned char *in, unsigned char *out, const AES_KEY *key)
 {
-	return aes_decrypt_internal(in, out, key);
+	aes_decrypt_internal(in, out, key);
 }
 LCRYPTO_ALIAS(AES_decrypt);

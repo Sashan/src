@@ -1,4 +1,4 @@
-/*	$OpenBSD: nvme_pci.c,v 1.11 2024/05/24 06:02:58 jsg Exp $ */
+/*	$OpenBSD: nvme_pci.c,v 1.13 2024/11/19 02:31:35 jcs Exp $ */
 
 /*
  * Copyright (c) 2014 David Gwynne <dlg@openbsd.org>
@@ -73,10 +73,6 @@ nvme_pci_match(struct device *parent, void *match, void *aux)
 	return (0);
 }
 
-static const struct pci_matchid nvme_msi_blacklist[] = {
-	{ PCI_VENDOR_INTEL,	PCI_PRODUCT_INTEL_OPTANE },
-};
-
 void
 nvme_pci_attach(struct device *parent, struct device *self, void *aux)
 {
@@ -91,9 +87,6 @@ nvme_pci_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_dmat = pa->pa_dmat;
 
 	printf(": ");
-
-	if (pci_matchbyid(pa, nvme_msi_blacklist, nitems(nvme_msi_blacklist)))
-		CLR(pa->pa_flags, PCI_FLAGS_MSI_ENABLED);
 
 	maptype = pci_mapreg_type(pa->pa_pc, pa->pa_tag, NVME_PCI_BAR);
 	if (pci_mapreg_map(pa, NVME_PCI_BAR, maptype, 0,
@@ -138,7 +131,7 @@ unmap:
 int
 nvme_pci_detach(struct device *self, int flags)
 {
-	return (0);
+	return config_detach_children(self, flags);
 }
 
 int

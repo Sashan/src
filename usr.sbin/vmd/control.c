@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.42 2024/01/18 14:49:59 claudio Exp $	*/
+/*	$OpenBSD: control.c,v 1.49 2024/11/21 13:39:34 claudio Exp $	*/
 
 /*
  * Copyright (c) 2010-2015 Reyk Floeter <reyk@openbsd.org>
@@ -22,14 +22,9 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/tree.h>
-
-#include <net/if.h>
 
 #include <errno.h>
 #include <event.h>
-#include <fcntl.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -310,7 +305,13 @@ control_accept(int listenfd, short event, void *arg)
 		return;
 	}
 
-	imsg_init(&c->iev.ibuf, connfd);
+	if (imsgbuf_init(&c->iev.ibuf, connfd) == -1) {
+		log_warn("%s: failed to init imsgbuf", __func__);
+		close(connfd);
+		free(c);
+		return;
+	}
+	imsgbuf_allow_fdpass(&c->iev.ibuf);
 	c->iev.handler = control_dispatch_imsg;
 	c->iev.events = EV_READ;
 	c->iev.data = cs;
@@ -345,7 +346,7 @@ control_close(int fd, struct control_sock *cs)
 		return;
 	}
 
-	msgbuf_clear(&c->iev.ibuf.w);
+	imsgbuf_clear(&c->iev.ibuf);
 	TAILQ_REMOVE(&ctl_conns, c, entry);
 
 	TAILQ_FOREACH_SAFE(notify, &ctl_notify_q, entry, notify_next) {
@@ -386,14 +387,13 @@ control_dispatch_imsg(int fd, short event, void *arg)
 	}
 
 	if (event & EV_READ) {
-		if (((n = imsg_read(&c->iev.ibuf)) == -1 && errno != EAGAIN) ||
-		    n == 0) {
+		if (imsgbuf_read(&c->iev.ibuf) != 1) {
 			control_close(fd, cs);
 			return;
 		}
 	}
 	if (event & EV_WRITE) {
-		if (msgbuf_write(&c->iev.ibuf.w) <= 0 && errno != EAGAIN) {
+		if (imsgbuf_write(&c->iev.ibuf) == -1) {
 			control_close(fd, cs);
 			return;
 		}
@@ -529,6 +529,6 @@ control_dispatch_imsg(int fd, short event, void *arg)
 		ret = EINVAL;
 	imsg_compose_event(&c->iev, IMSG_CTL_FAIL,
 	    0, 0, -1, &ret, sizeof(ret));
-	imsg_flush(&c->iev.ibuf);
+	imsgbuf_flush(&c->iev.ibuf);
 	control_close(fd, cs);
 }

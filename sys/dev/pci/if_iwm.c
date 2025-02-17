@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwm.c,v 1.416 2024/05/24 06:02:53 jsg Exp $	*/
+/*	$OpenBSD: if_iwm.c,v 1.418 2025/02/04 09:15:04 stsp Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -8529,7 +8529,7 @@ iwm_scan(struct iwm_softc *sc)
 	 * The current mode might have been fixed during association.
 	 * Ensure all channels get scanned.
 	 */
-	if (IFM_SUBTYPE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
+	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
 		ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
 
 	sc->sc_flags |= IWM_FLAG_SCANNING;
@@ -9238,7 +9238,7 @@ iwm_calib_timeout(void *arg)
 		ieee80211_amrr_choose(&sc->sc_amrr, &in->in_ni, &in->in_amn);
 		/* 
 		 * If AMRR has chosen a new TX rate we must update
-		 * the firwmare's LQ rate table.
+		 * the firmware's LQ rate table.
 		 * ni_txrate may change again before the task runs so
 		 * cache the chosen rate in the iwm_node structure.
 		 */

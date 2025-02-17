@@ -1,4 +1,4 @@
-/* $OpenBSD: dsdt.c,v 1.270 2024/08/06 17:38:56 kettenis Exp $ */
+/* $OpenBSD: dsdt.c,v 1.273 2025/01/23 13:40:26 kettenis Exp $ */
 /*
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
  *
@@ -1731,7 +1731,7 @@ aml_val_to_string(const struct aml_value *val)
 	default:
 		snprintf(buffer, sizeof(buffer),
 		    "Failed to convert type %d to string!", val->type);
-	};
+	}
 
 	return (buffer);
 }
@@ -2577,6 +2577,16 @@ aml_rwgsb(struct aml_value *conn, int len, int bpos, int blen,
 			cmdlen = 0;
 			buflen = len;
 			break;
+		case 0x0f:	/* AttribRawProcessBytes */
+			/*
+			 * XXX Not implemented yet but used by various
+			 * WoA laptops.  Force an error status instead
+			 * of a panic for now.
+			 */
+			node = NULL;
+			cmdlen = 0;
+			buflen = len;
+			break;
 		default:
 			aml_die("unsupported access type 0x%x", flag);
 			break;
@@ -2664,6 +2674,7 @@ aml_rwgsb(struct aml_value *conn, int len, int bpos, int blen,
 			break;
 		case 0x0b:	/* AttribBytes */
 		case 0x0e:	/* AttribRawBytes */
+		case 0x0f:	/* AttribRawProcessBytes */
 			buflen = len;
 			break;
 		default:

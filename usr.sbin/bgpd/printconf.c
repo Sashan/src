@@ -1,4 +1,4 @@
-/*	$OpenBSD: printconf.c,v 1.173 2024/05/22 08:41:14 claudio Exp $	*/
+/*	$OpenBSD: printconf.c,v 1.181 2025/01/27 15:22:11 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -45,8 +45,7 @@ void		 print_originsets(struct prefixset_head *);
 void		 print_roa(struct roa_tree *);
 void		 print_aspa(struct aspa_tree *);
 void		 print_rtrs(struct rtr_config_head *);
-void		 print_peer(struct peer_config *, struct bgpd_config *,
-		    const char *);
+void		 print_peer(struct peer *, struct bgpd_config *, const char *);
 const char	*print_auth_alg(enum auth_alg);
 const char	*print_enc_alg(enum auth_enc_alg);
 void		 print_announce(struct peer_config *, const char *);
@@ -395,6 +394,8 @@ print_mainconf(struct bgpd_config *conf)
 		printf("holdtime min %u\n", conf->min_holdtime);
 	if (conf->connectretry != INTERVAL_CONNECTRETRY)
 		printf("connect-retry %u\n", conf->connectretry);
+	if (conf->staletime != INTERVAL_STALE)
+		printf("staletime %u\n", conf->staletime);
 
 	if (conf->flags & BGPD_FLAG_DECISION_ROUTEAGE)
 		printf("rde route-age evaluate\n");
@@ -403,8 +404,8 @@ print_mainconf(struct bgpd_config *conf)
 	if (conf->flags & BGPD_FLAG_DECISION_ALL_PATHS)
 		printf("rde evaluate all\n");
 
-	if (conf->flags & BGPD_FLAG_NO_AS_SET)
-		printf("reject as-set yes\n");
+	if (conf->flags & BGPD_FLAG_PERMIT_AS_SET)
+		printf("reject as-set no\n");
 
 	if (conf->log & BGPD_LOG_UPDATES)
 		printf("log updates\n");
@@ -713,6 +714,39 @@ print_aspa(struct aspa_tree *a)
 	printf("\n}\n\n");
 }
 
+static void
+print_auth(struct auth_config *auth, const char *c)
+{
+	char *method;
+
+	if (auth->method == AUTH_MD5SIG)
+		printf("%s\ttcp md5sig\n", c);
+	else if (auth->method == AUTH_IPSEC_MANUAL_ESP ||
+	    auth->method == AUTH_IPSEC_MANUAL_AH) {
+		if (auth->method == AUTH_IPSEC_MANUAL_ESP)
+			method = "esp";
+		else
+			method = "ah";
+
+		printf("%s\tipsec %s in spi %u %s XXXXXX", c, method,
+		    auth->spi_in, print_auth_alg(auth->auth_alg_in));
+		if (auth->enc_alg_in)
+			printf(" %s XXXXXX", print_enc_alg(auth->enc_alg_in));
+		printf("\n");
+
+		printf("%s\tipsec %s out spi %u %s XXXXXX", c, method,
+		    auth->spi_out, print_auth_alg(auth->auth_alg_out));
+		if (auth->enc_alg_out)
+			printf(" %s XXXXXX",
+			    print_enc_alg(auth->enc_alg_out));
+		printf("\n");
+	} else if (auth->method == AUTH_IPSEC_IKE_AH)
+		printf("%s\tipsec ah ike\n", c);
+	else if (auth->method == AUTH_IPSEC_IKE_ESP)
+		printf("%s\tipsec esp ike\n", c);
+
+}
+
 void
 print_rtrs(struct rtr_config_head *rh)
 {
@@ -724,15 +758,16 @@ print_rtrs(struct rtr_config_head *rh)
 		printf("\tport %u\n", r->remote_port);
 		if (r->local_addr.aid != AID_UNSPEC)
 			printf("local-addr %s\n", log_addr(&r->local_addr));
+		print_auth(&r->auth, "");
 		printf("}\n\n");
 	}
 }
 
 void
-print_peer(struct peer_config *p, struct bgpd_config *conf, const char *c)
+print_peer(struct peer *peer, struct bgpd_config *conf, const char *c)
 {
-	char		*method;
-	struct in_addr	 ina;
+	struct in_addr		 ina;
+	struct peer_config	*p = &peer->conf;
 
 	if ((p->remote_addr.aid == AID_INET && p->remote_masklen != 32) ||
 	    (p->remote_addr.aid == AID_INET6 && p->remote_masklen != 128))
@@ -784,6 +819,8 @@ print_peer(struct peer_config *p, struct bgpd_config *conf, const char *c)
 		printf("%s\tholdtime %u\n", c, p->holdtime);
 	if (p->min_holdtime)
 		printf("%s\tholdtime min %u\n", c, p->min_holdtime);
+	if (p->staletime)
+		printf("%s\tstaletime %u\n", c, p->staletime);
 	if (p->export_type == EXPORT_NONE)
 		printf("%s\texport none\n", c);
 	else if (p->export_type == EXPORT_DEFAULT_ROUTE)
@@ -820,42 +857,18 @@ print_peer(struct peer_config *p, struct bgpd_config *conf, const char *c)
 			printf("%s\trde evaluate all\n", c);
 	}
 
-	if (conf->flags & BGPD_FLAG_NO_AS_SET) {
-		if (!(p->flags & PEERFLAG_NO_AS_SET))
-			printf("%s\treject as-set no\n", c);
-	} else {
-		if (p->flags & PEERFLAG_NO_AS_SET)
+	if (conf->flags & BGPD_FLAG_PERMIT_AS_SET) {
+		if (!(p->flags & PEERFLAG_PERMIT_AS_SET))
 			printf("%s\treject as-set yes\n", c);
+	} else {
+		if (p->flags & PEERFLAG_PERMIT_AS_SET)
+			printf("%s\treject as-set no\n", c);
 	}
 
 	if (p->flags & PEERFLAG_LOG_UPDATES)
 		printf("%s\tlog updates\n", c);
 
-	if (p->auth.method == AUTH_MD5SIG)
-		printf("%s\ttcp md5sig\n", c);
-	else if (p->auth.method == AUTH_IPSEC_MANUAL_ESP ||
-	    p->auth.method == AUTH_IPSEC_MANUAL_AH) {
-		if (p->auth.method == AUTH_IPSEC_MANUAL_ESP)
-			method = "esp";
-		else
-			method = "ah";
-
-		printf("%s\tipsec %s in spi %u %s XXXXXX", c, method,
-		    p->auth.spi_in, print_auth_alg(p->auth.auth_alg_in));
-		if (p->auth.enc_alg_in)
-			printf(" %s XXXXXX", print_enc_alg(p->auth.enc_alg_in));
-		printf("\n");
-
-		printf("%s\tipsec %s out spi %u %s XXXXXX", c, method,
-		    p->auth.spi_out, print_auth_alg(p->auth.auth_alg_out));
-		if (p->auth.enc_alg_out)
-			printf(" %s XXXXXX",
-			    print_enc_alg(p->auth.enc_alg_out));
-		printf("\n");
-	} else if (p->auth.method == AUTH_IPSEC_IKE_AH)
-		printf("%s\tipsec ah ike\n", c);
-	else if (p->auth.method == AUTH_IPSEC_IKE_ESP)
-		printf("%s\tipsec esp ike\n", c);
+	print_auth(&peer->auth_conf, c);
 
 	if (p->ttlsec)
 		printf("%s\tttl-security yes\n", c);
@@ -946,10 +959,24 @@ print_announce(struct peer_config *p, const char *c)
 	else if (p->capabilities.grestart.restart == 0)
 		printf("%s\tannounce restart no\n", c);
 
+	if (p->capabilities.grestart.restart != 0 &&
+	    p->capabilities.grestart.grnotification)
+		printf("%s\tannounce graceful notification yes\n", c);
+
 	if (p->capabilities.as4byte == 2)
 		printf("%s\tannounce as4byte enforce\n", c);
 	else if (p->capabilities.as4byte == 0)
 		printf("%s\tannounce as4byte no\n", c);
+
+	if (p->capabilities.ext_msg == 2)
+		printf("%s\tannounce extended message enforce\n", c);
+	else if (p->capabilities.ext_msg == 1)
+		printf("%s\tannounce extended message yes\n", c);
+
+	if (p->capabilities.ext_nh[AID_INET] == 2)
+		printf("%s\tannounce extended nexthop enforce\n", c);
+	else if (p->capabilities.ext_nh[AID_INET] == 1)
+		printf("%s\tannounce extended nexthop yes\n", c);
 
 	if (p->capabilities.add_path[AID_MIN] & CAPA_AP_RECV_ENFORCE)
 		printf("%s\tannounce add-path recv enforce\n", c);
@@ -1196,39 +1223,36 @@ print_mrt(struct bgpd_config *conf, uint32_t pid, uint32_t gid,
 void
 print_groups(struct bgpd_config *conf)
 {
-	struct peer_config	**peerlist;
-	struct peer		 *p;
-	u_int			  peer_cnt, i;
-	uint32_t		  prev_groupid;
-	const char		 *tab	= "\t";
-	const char		 *nada	= "";
-	const char		 *c;
+	struct peer	**peerlist;
+	struct peer	 *p;
+	u_int		  peer_cnt, i;
+	uint32_t	  prev_groupid;
+	const char	 *c;
 
 	peer_cnt = 0;
 	RB_FOREACH(p, peer_head, &conf->peers)
 		peer_cnt++;
-
-	if ((peerlist = calloc(peer_cnt, sizeof(struct peer_config *))) == NULL)
+	if ((peerlist = calloc(peer_cnt, sizeof(*peerlist))) == NULL)
 		fatal("print_groups calloc");
-
 	i = 0;
 	RB_FOREACH(p, peer_head, &conf->peers)
-		peerlist[i++] = &p->conf;
+		peerlist[i++] = p;
 
-	qsort(peerlist, peer_cnt, sizeof(struct peer_config *), peer_compare);
+	qsort(peerlist, peer_cnt, sizeof(*peerlist), peer_compare);
 
 	prev_groupid = 0;
 	for (i = 0; i < peer_cnt; i++) {
-		if (peerlist[i]->groupid) {
-			c = tab;
-			if (peerlist[i]->groupid != prev_groupid) {
+		if (peerlist[i]->conf.groupid) {
+			c = "\t";
+			if (peerlist[i]->conf.groupid != prev_groupid) {
 				if (prev_groupid)
 					printf("}\n\n");
-				printf("group \"%s\" {\n", peerlist[i]->group);
-				prev_groupid = peerlist[i]->groupid;
+				printf("group \"%s\" {\n",
+				    peerlist[i]->conf.group);
+				prev_groupid = peerlist[i]->conf.groupid;
 			}
 		} else
-			c = nada;
+			c = "";
 
 		print_peer(peerlist[i], conf, c);
 	}
@@ -1242,13 +1266,13 @@ print_groups(struct bgpd_config *conf)
 int
 peer_compare(const void *aa, const void *bb)
 {
-	const struct peer_config * const *a;
-	const struct peer_config * const *b;
+	const struct peer * const *a;
+	const struct peer * const *b;
 
 	a = aa;
 	b = bb;
 
-	return ((*a)->groupid - (*b)->groupid);
+	return ((*a)->conf.groupid - (*b)->conf.groupid);
 }
 
 void
@@ -1276,6 +1300,8 @@ print_config(struct bgpd_config *conf, struct rib_names *rib_l)
 	SIMPLEQ_FOREACH(vpn, &conf->l3vpns, entry)
 		print_l3vpn(vpn);
 	printf("\n");
+	if (conf->filtered_in_locrib)
+		printf("rde rib Loc-RIB include filtered\n");
 	SIMPLEQ_FOREACH(rr, rib_l, entry) {
 		if (rr->flags & F_RIB_NOEVALUATE)
 			printf("rde rib %s no evaluate\n", rr->name);

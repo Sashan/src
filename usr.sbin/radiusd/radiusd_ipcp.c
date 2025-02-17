@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_ipcp.c,v 1.8 2024/08/01 00:58:14 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_ipcp.c,v 1.23 2025/01/29 10:16:05 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2024 Internet Initiative Japan Inc.
@@ -122,8 +122,10 @@ struct module_ipcp_dae {
 		struct sockaddr_in6	 sin6;
 	}				 nas_addr;
 	struct event			 ev_sock;
+	struct event			 ev_reqs;
 	TAILQ_ENTRY(module_ipcp_dae)	 next;
 	TAILQ_HEAD(, assigned_ipv4)	 reqs;
+	int				 ninflight;
 };
 
 struct module_ipcp {
@@ -178,6 +180,8 @@ struct assigned_ipv4
 		    struct in_addr);
 static struct assigned_ipv4
 		*ipcp_ipv4_find(struct module_ipcp *, struct in_addr);
+static void	 ipcp_ipv4_delete(struct module_ipcp *,
+		    struct assigned_ipv4 *, const char *);
 static void	 ipcp_ipv4_release(struct module_ipcp *,
 		    struct assigned_ipv4 *);
 static int	 assigned_ipv4_compar(struct assigned_ipv4 *,
@@ -191,12 +195,14 @@ static void	 ipcp_put_db(struct module_ipcp *, struct assigned_ipv4 *);
 static void	 ipcp_del_db(struct module_ipcp *, struct assigned_ipv4 *);
 static void	 ipcp_db_dump_fill_record(struct radiusd_ipcp_db_dump *, int,
 		    struct assigned_ipv4 *);
+static void	 ipcp_update_time(struct module_ipcp *);
 static void	 ipcp_on_timer(int, short, void *);
 static void	 ipcp_schedule_timer(struct module_ipcp *);
 static void	 ipcp_dae_send_disconnect_request(struct assigned_ipv4 *);
 static void	 ipcp_dae_request_on_timeout(int, short, void *);
 static void	 ipcp_dae_on_event(int, short, void *);
 static void	 ipcp_dae_reset_request(struct assigned_ipv4 *);
+static void	 ipcp_dae_send_pending_requests(int, short, void *);
 static struct ipcp_address
 		*parse_address_range(const char *);
 static const char
@@ -252,6 +258,7 @@ main(int argc, char *argv[])
 	ipcp_fini(&module_ipcp);
 
 	event_loop(0);
+	event_base_free(NULL);
 
 	exit(EXIT_SUCCESS);
 }
@@ -267,6 +274,7 @@ ipcp_init(struct module_ipcp *self)
 	TAILQ_INIT(&self->daes);
 	self->seq = 1;
 	self->no_session_timeout = true;
+	ipcp_update_time(self);
 }
 
 void
@@ -277,6 +285,7 @@ ipcp_start(void *ctx)
 	struct module_ipcp_dae	*dae;
 	int			 sock;
 
+	ipcp_update_time(self);
 	if (self->start_wait == 0)
 		self->start_wait = RADIUSD_IPCP_START_WAIT;
 
@@ -299,18 +308,20 @@ ipcp_start(void *ctx)
 	TAILQ_FOREACH(dae, &self->daes, next) {
 		if ((sock = socket(dae->nas_addr.sin4.sin_family,
 		    SOCK_DGRAM, IPPROTO_UDP)) == -1) {
-			log_warn("could not start dae: %s", strerror(errno));
+			log_warn("%s: could not start dae: socket()", __func__);
 			return;
 		}
 		if (connect(sock, (struct sockaddr *)&dae->nas_addr,
 		    dae->nas_addr.sin4.sin_len) == -1) {
-			log_warn("could not start dae: %s", strerror(errno));
+			log_warn("%s: could not start dae: connect()",
+			    __func__);
 			return;
 		}
 		dae->sock = sock;
 		event_set(&dae->ev_sock, sock, EV_READ | EV_PERSIST,
 		    ipcp_dae_on_event, dae);
 		event_add(&dae->ev_sock, NULL);
+		evtimer_set(&dae->ev_reqs, ipcp_dae_send_pending_requests, dae);
 	}
 
 	module_send_message(self->base, IMSG_OK, NULL);
@@ -322,6 +333,7 @@ ipcp_stop(void *ctx)
 	struct module_ipcp		*self = ctx;
 	struct module_ipcp_dae		*dae;
 
+	ipcp_update_time(self);
 	/* stop the sockets for DAE */
 	TAILQ_FOREACH(dae, &self->daes, next) {
 		if (dae->sock >= 0) {
@@ -329,6 +341,8 @@ ipcp_stop(void *ctx)
 			close(dae->sock);
 			dae->sock = -1;
 		}
+		if (evtimer_pending(&dae->ev_reqs, NULL))
+			event_del(&dae->ev_reqs);
 	}
 	if (evtimer_pending(&self->ev_timer, NULL))
 		evtimer_del(&self->ev_timer);
@@ -341,11 +355,14 @@ ipcp_fini(struct module_ipcp *self)
 	struct user			*user, *usert;
 	struct module_ipcp_ctrlconn	*ctrl, *ctrlt;
 	struct module_ipcp_dae		*dae, *daet;
+	struct ipcp_address		*addr, *addrt;
 
 	RB_FOREACH_SAFE(assign, assigned_ipv4_tree, &self->ipv4s, assignt)
 		ipcp_ipv4_release(self, assign);
-	RB_FOREACH_SAFE(user, user_tree, &self->users, usert)
+	RB_FOREACH_SAFE(user, user_tree, &self->users, usert) {
+		RB_REMOVE(user_tree, &self->users, user);
 		free(user);
+	}
 	TAILQ_FOREACH_SAFE(ctrl, &self->ctrls, next, ctrlt)
 		free(ctrl);
 	TAILQ_FOREACH_SAFE(dae, &self->daes, next, daet) {
@@ -355,6 +372,8 @@ ipcp_fini(struct module_ipcp *self)
 		}
 		free(dae);
 	}
+	TAILQ_FOREACH_SAFE(addr, &self->addrs, next, addrt)
+		free(addr);
 	if (evtimer_pending(&self->ev_timer, NULL))
 		evtimer_del(&self->ev_timer);
 	module_destroy(self->base);
@@ -437,7 +456,7 @@ ipcp_config_set(void *ctx, const char *name, int argc, char * const * argv)
 		SYNTAX_ASSERT(argc == 1 || argc == 2,
 		    "specify 1 or 2 addresses for `name-server'");
 		for (i = 0; i < argc; i++) {
-			if (inet_aton(argv[i], &ina) != 1) {
+			if (inet_pton(AF_INET, argv[i], &ina) != 1) {
 				module_send_message(module->base, IMSG_NG,
 				    "Invalid IP address: %s", argv[i]);
 				return;
@@ -454,7 +473,7 @@ ipcp_config_set(void *ctx, const char *name, int argc, char * const * argv)
 		SYNTAX_ASSERT(argc == 1 || argc == 2,
 		    "specify 1 or 2 addresses for `name-server'");
 		for (i = 0; i < argc; i++) {
-			if (inet_aton(argv[i], &ina) != 1) {
+			if (inet_pton(AF_INET, argv[i], &ina) != 1) {
 				module_send_message(module->base, IMSG_NG,
 				    "Invalid IP address: %s", argv[i]);
 				return;
@@ -485,6 +504,8 @@ ipcp_config_set(void *ctx, const char *name, int argc, char * const * argv)
 			}
 		}
 	} else if (strcmp(name, "dae") == 0) {
+		memset(&dae, 0, sizeof(dae));
+		dae.sock = -1;
 		if (!(argc >= 1 || strcmp(argv[1], "server") == 0)) {
 			module_send_message(module->base, IMSG_NG,
 			    "`%s' is unknown", argv[1]);
@@ -554,6 +575,7 @@ ipcp_dispatch_control(void *ctx, struct imsg *imsg)
 	struct radiusctl_client		*client;
 	const char			*cause;
 
+	ipcp_update_time(self);
 	datalen = imsg->hdr.len - IMSG_HEADER_SIZE;
 	switch (imsg->hdr.type) {
 	case IMSG_RADIUSD_MODULE_CTRL_UNBIND:
@@ -578,7 +600,7 @@ ipcp_dispatch_control(void *ctx, struct imsg *imsg)
 		    imsg->hdr.peerid, 0, -1, NULL, 0);
 		if (imsg->hdr.type == IMSG_RADIUSD_MODULE_IPCP_MONITOR)
 			break;
-		/* FALLTROUGH */
+		/* FALLTHROUGH */
 	case IMSG_RADIUSD_MODULE_IPCP_DUMP:
 		dumpsiz = MAX_IMSGSIZE;
 		if ((dump = calloc(1, dumpsiz)) == NULL) {
@@ -611,10 +633,14 @@ ipcp_dispatch_control(void *ctx, struct imsg *imsg)
 		freezero(dump ,dumpsiz);
 		break;
 	case IMSG_RADIUSD_MODULE_IPCP_DISCONNECT:
+	case IMSG_RADIUSD_MODULE_IPCP_DELETE:
 		if (datalen < sizeof(unsigned)) {
 			log_warn("%s: received "
-			    "IMSG_RADIUSD_MODULE_IPCP_DISCONNECT message size "
-			    "is wrong", __func__);
+			    "%s message size is wrong", __func__,
+			    (imsg->hdr.type ==
+			    IMSG_RADIUSD_MODULE_IPCP_DISCONNECT)
+			    ? "IMSG_RADIUSD_MODULE_IPCP_DISCONNECT"
+			    : "IMSG_RADIUSD_MODULE_IPCP_DELETE");
 			goto fail;
 		}
 		seq = *(unsigned *)imsg->data;
@@ -627,12 +653,19 @@ ipcp_dispatch_control(void *ctx, struct imsg *imsg)
 		}
 		if (assign == NULL) {
 			cause = "session not found";
-			log_warnx("Disconnect seq=%u requested, but the "
-			    "session is not found", seq);
+			log_warnx("%s seq=%u requested, but the "
+			    "session is not found",
+			    (imsg->hdr.type ==
+			    IMSG_RADIUSD_MODULE_IPCP_DISCONNECT)? "Disconnect"
+			    : "Delete", seq);
 			module_imsg_compose(self->base, IMSG_NG,
 			    imsg->hdr.peerid, 0, -1, cause, strlen(cause) + 1);
-		}
-		else {
+		} else if (imsg->hdr.type == IMSG_RADIUSD_MODULE_IPCP_DELETE) {
+			log_info("Delete seq=%u by request", assign->seq);
+			ipcp_ipv4_delete(self,  assign, "By control");
+			module_imsg_compose(self->base, IMSG_OK,
+			    imsg->hdr.peerid, 0, -1, NULL, 0);
+		} else {
 			if (assign->dae == NULL)
 				log_warnx("Disconnect seq=%u requested, but "
 				    "DAE is not configured", assign->seq);
@@ -703,13 +736,13 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 	const struct in_addr	 mask4 = { .s_addr = 0xffffffffUL };
 	int			 res_code, msraserr = 935;
 	struct ipcp_address	*addr;
-	int			 i, j, n;
+	int			 i, n;
 	bool			 found = false;
 	char			 username[256], buf[128];
 	struct user		*user = NULL;
 	struct assigned_ipv4	*assigned = NULL, *assign;
 
-	clock_gettime(CLOCK_BOOTTIME, &self->uptime);
+	ipcp_update_time(self);
 
 	if ((radres = radius_convert_packet(res, reslen)) == NULL) {
 		log_warn("%s: radius_convert_packet() failed", __func__);
@@ -747,9 +780,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		msraserr = 935;
 		if (self->max_sessions != 0) {
 			if (self->nsessions >= self->max_sessions) {
-				log_info("q=%u rejected: number of "
+				log_info("q=%u user=%s rejected: number of "
 				    "sessions reached the limit(%d)", q_id,
-				    self->max_sessions);
+				    user->name, self->max_sessions);
 				goto reject;
 			}
 		}
@@ -758,9 +791,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 			TAILQ_FOREACH(assign, &user->ipv4s, next)
 				n++;
 			if (n >= self->user_max_sessions) {
-				log_info("q=%u rejected: number of "
+				log_info("q=%u user=%s rejected: number of "
 				    "sessions per a user reached the limit(%d)",
-				    q_id, self->user_max_sessions);
+				    q_id, user->name, self->user_max_sessions);
 				goto reject;
 			}
 		}
@@ -769,8 +802,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		if (radius_get_ipv4_attr(radres,
 		    RADIUS_TYPE_FRAMED_IP_ADDRESS, &addr4) == 0) {
 			if (ipcp_ipv4_find(self, addr4) != NULL)
-				log_info("q=%u rejected: server requested IP "
-				    "address is busy", q_id);
+				log_info("q=%u user=%s rejected: server "
+				    "requested IP address is busy", q_id,
+				    user->name);
 			else {
 				/* compare in host byte order */
 				addr4.s_addr = ntohl(addr4.s_addr);
@@ -783,9 +817,10 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 						break;
 				}
 				if (addr == NULL)
-					log_info("q=%u rejected: server "
-					    "requested IP address is out of "
-					    "the range", q_id);
+					log_info("q=%u user=%s rejected: "
+					    "server requested IP address is "
+					    "out of the range", q_id,
+					    user->name);
 				else
 					found = true;
 				/* revert the addr to the network byte order */
@@ -794,36 +829,43 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 			if (!found)
 				goto reject;
 		} else {
+			int inpool_idx = 0;
+
+			/* select a random address */
 			n = arc4random_uniform(self->npools);
 			i = 0;
 			TAILQ_FOREACH(addr, &self->addrs, next) {
 				if (addr->type == ADDRESS_TYPE_POOL) {
 					if (i <= n && n < i + addr->naddrs) {
-						j = n - i;
+						inpool_idx = n - i;
 						break;
 					}
 					i += addr->naddrs;
 				}
 			}
-			for (i = 0; i < self->npools; i++, j++) {
-				if (addr == NULL)
-					break;
-				if (j >= addr->naddrs) { /* next pool */
-					if ((addr = TAILQ_NEXT(addr, next))
-					    == NULL)
-						addr = TAILQ_FIRST(
-						    &self->addrs);
-					j = 0;
-				}
-				addr4.s_addr = htonl(addr->start.s_addr + j);
+			/* loop npools times until a free address is found */
+			for (i = 0; i < self->npools && addr != NULL; i++) {
+				addr4.s_addr = htonl(
+				    addr->start.s_addr + inpool_idx);
 				if (ipcp_ipv4_find(self, addr4) == NULL) {
 					found = true;
 					break;
 				}
+				/* try inpool_idx if it's in the range */
+				if (++inpool_idx < addr->naddrs)
+					continue;
+				/* iterate addr to the next pool */
+				do {
+					addr = TAILQ_NEXT(addr, next);
+					if (addr == NULL)
+						addr = TAILQ_FIRST(
+						    &self->addrs);
+				} while (addr->type != ADDRESS_TYPE_POOL);
+				inpool_idx = 0;	/* try the first */
 			}
 			if (!found) {
-				log_info("q=%u rejected: ran out of the "
-				    "address pool", q_id);
+				log_info("q=%u user=%s rejected: ran out of "
+				    "the address pool", q_id, user->name);
 				goto reject;
 			}
 		}
@@ -855,6 +897,13 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		else if (radius_has_attr(radreq, RADIUS_TYPE_EAP_MESSAGE))
 			strlcpy(assigned->auth_method, "EAP",
 			    sizeof(assigned->auth_method));
+
+		radius_get_ipv4_attr(radreq, RADIUS_TYPE_NAS_IP_ADDRESS,
+		    &assigned->nas_ipv4);
+		radius_get_ipv6_attr(radreq, RADIUS_TYPE_NAS_IPV6_ADDRESS,
+		    &assigned->nas_ipv6);
+		radius_get_string_attr(radreq, RADIUS_TYPE_NAS_IDENTIFIER,
+		    assigned->nas_id, sizeof(assigned->nas_id));
 	}
 
 	if (self->name_server[0].s_addr != 0) {
@@ -895,7 +944,7 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		    RADIUS_VTYPE_MS_SECONDARY_NBNS_SERVER,
 		    self->netbios_server[1]);
 	}
-	if (!self->no_session_timeout &&
+	if (!self->no_session_timeout && assigned != NULL &&
 	    radius_has_attr(radres, RADIUS_TYPE_SESSION_TIMEOUT)) {
 		radius_get_uint32_attr(radres, RADIUS_TYPE_SESSION_TIMEOUT,
 		    &assigned->session_timeout);
@@ -1000,7 +1049,7 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 				 stat;
 	struct module_ipcp_dae	*dae;
 
-	clock_gettime(CLOCK_BOOTTIME, &self->uptime);
+	ipcp_update_time(self);
 
 	if ((radpkt = radius_convert_packet(pkt, pktlen)) == NULL) {
 		log_warn("%s: radius_convert_packet() failed", __func__);
@@ -1046,23 +1095,32 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 			    !IN6_ARE_ADDR_EQUAL(&assign->nas_ipv6, &nas_ipv6) ||
 			    strcmp(assign->nas_id, nas_id) != 0)
 				continue;
-			log_info("Delete record for %s", inet_ntop(AF_INET,
-			    &assign->ipv4, buf, sizeof(buf)));
-			ipcp_del_db(self, assign);
-			ipcp_ipv4_release(self, assign);
+			log_info("q=%u Delete record for %s", q_id,
+			    inet_ntop(AF_INET, &assign->ipv4, buf,
+			    sizeof(buf)));
+			ipcp_ipv4_delete(self, assign,
+			    (type == RADIUS_ACCT_STATUS_TYPE_ACCT_ON)
+			    ? "Receive Acct-On" : "Receive Acct-Off");
 		}
 		return;
 	}
 
 	if (radius_get_ipv4_attr(radpkt, RADIUS_TYPE_FRAMED_IP_ADDRESS, &addr4)
-	    != 0)
+	    != 0) {
+		log_warnx("q=%u no Framed-IP-Address-Address attribute", q_id);
 		goto out;
+	}
 	if (radius_get_string_attr(radpkt, RADIUS_TYPE_USER_NAME, username,
-	    sizeof(username)) != 0)
+	    sizeof(username)) != 0) {
+		log_warnx("q=%u no User-Name attribute", q_id);
 		goto out;
-	if ((assign = ipcp_ipv4_find(self, addr4)) == NULL)
+	}
+	if ((assign = ipcp_ipv4_find(self, addr4)) == NULL) {
 		/* not assigned by this */
+		log_warnx("q=%u %s is not assigned by us", q_id,
+		    inet_ntop(AF_INET, &addr4, buf, sizeof(buf)));
 		goto out;
+	}
 
 	if (radius_get_uint32_attr(radpkt, RADIUS_TYPE_ACCT_DELAY_TIME, &delay)
 	    != 0)
@@ -1131,9 +1189,9 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 
 		if (ipcp_notice_startstop(self, assign, 1, NULL) != 0)
 			goto fail;
-		log_info("Start seq=%u user=%s duration=%dsec session=%s "
-		    "tunnel=%s from=%s auth=%s ip=%s", assign->seq,
-		    assign->user->name, delay, assign->session_id,
+		log_info("q=%u Start seq=%u user=%s duration=%dsec "
+		    "session=%s tunnel=%s from=%s auth=%s ip=%s", q_id,
+		    assign->seq, assign->user->name, delay, assign->session_id,
 		    assign->tun_type, print_addr((struct sockaddr *)
 		    &assign->tun_client, buf1, sizeof(buf1)),
 		    assign->auth_method, inet_ntop(AF_INET, &addr4, buf,
@@ -1167,10 +1225,10 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 			strlcpy(stat.cause, radius_terminate_cause_string(uval),
 			    sizeof(stat.cause));
 
-		log_info("Stop seq=%u user=%s duration=%lldsec session=%s "
-		    "tunnel=%s from=%s auth=%s ip=%s datain=%"PRIu64"bytes,%"
-		    PRIu32"packets dataout=%"PRIu64"bytes,%"PRIu32"packets "
-		    "cause=\"%s\"",
+		log_info("q=%u Stop seq=%u user=%s duration=%lldsec "
+		    "session=%s tunnel=%s from=%s auth=%s ip=%s "
+		    "datain=%"PRIu64"bytes,%" PRIu32"packets dataout=%"PRIu64
+		    "bytes,%"PRIu32"packets cause=\"%s\"", q_id,
 		    assign->seq, assign->user->name, dur.tv_sec,
 		    assign->session_id, assign->tun_type, print_addr(
 		    (struct sockaddr *)&assign->tun_client, buf1, sizeof(buf1)),
@@ -1242,6 +1300,20 @@ ipcp_ipv4_find(struct module_ipcp *self, struct in_addr ina)
 }
 
 void
+ipcp_ipv4_delete(struct module_ipcp *self, struct assigned_ipv4 *assign,
+    const char *cause)
+{
+	struct radiusd_ipcp_statistics stat;
+
+	memset(&stat, 0, sizeof(stat));
+	strlcpy(stat.cause, cause, sizeof(stat.cause));
+
+	ipcp_del_db(self, assign);
+	ipcp_notice_startstop(self, assign, 0, &stat);
+	ipcp_ipv4_release(self, assign);
+}
+
+void
 ipcp_ipv4_release(struct module_ipcp *self, struct assigned_ipv4 *assign)
 {
 	if (assign != NULL) {
@@ -1256,7 +1328,11 @@ ipcp_ipv4_release(struct module_ipcp *self, struct assigned_ipv4 *assign)
 int
 assigned_ipv4_compar(struct assigned_ipv4 *a, struct assigned_ipv4 *b)
 {
-	return (b->ipv4.s_addr - a->ipv4.s_addr);
+	if (a->ipv4.s_addr > b->ipv4.s_addr)
+		return (1);
+	else if (a->ipv4.s_addr < b->ipv4.s_addr)
+		return (-1);
+	return (0);
 }
 
 struct user *
@@ -1465,11 +1541,17 @@ ipcp_db_dump_fill_record(struct radiusd_ipcp_db_dump *dump, int idx,
  * Timer
  ***********************************************************************/
 void
+ipcp_update_time(struct module_ipcp *self)
+{
+	clock_gettime(CLOCK_BOOTTIME, &self->uptime);
+}
+
+void
 ipcp_on_timer(int fd, short ev, void *ctx)
 {
 	struct module_ipcp *self = ctx;
 
-	clock_gettime(CLOCK_BOOTTIME, &self->uptime);
+	ipcp_update_time(self);
 	ipcp_schedule_timer(self);
 }
 
@@ -1548,22 +1630,27 @@ ipcp_dae_send_disconnect_request(struct assigned_ipv4 *assign)
 		radius_set_accounting_request_authenticator(reqpkt,
 		    assign->dae->secret);
 		assign->dae_reqpkt = reqpkt;
+		TAILQ_INSERT_TAIL(&assign->dae->reqs, assign, dae_next);
 	}
 
 	if (assign->dae_ntry == 0) {
+		if (assign->dae->ninflight >= RADIUSD_IPCP_DAE_MAX_INFLIGHT)
+			return;
 		log_info("Sending Disconnect-Request seq=%u to %s",
 		    assign->seq, print_addr((struct sockaddr *)
 		    &assign->dae->nas_addr, buf, sizeof(buf)));
-		TAILQ_INSERT_TAIL(&assign->dae->reqs, assign, dae_next);
 	}
 
 	if (radius_send(assign->dae->sock, assign->dae_reqpkt, 0) < 0)
 		log_warn("%s: sendto: %m", __func__);
 
-	tv.tv_sec = dae_request_timeouts[assign->dae_ntry++];
+	tv.tv_sec = dae_request_timeouts[assign->dae_ntry];
 	tv.tv_usec = 0;
 	evtimer_set(&assign->dae_evtimer, ipcp_dae_request_on_timeout, assign);
 	evtimer_add(&assign->dae_evtimer, &tv);
+	if (assign->dae_ntry == 0)
+		assign->dae->ninflight++;
+	assign->dae_ntry++;
 }
 
 void
@@ -1571,11 +1658,15 @@ ipcp_dae_request_on_timeout(int fd, short ev, void *ctx)
 {
 	struct assigned_ipv4	*assign = ctx;
 	char			 buf[80];
+	struct radiusctl_client	*client;
 
 	if (assign->dae_ntry >= (int)nitems(dae_request_timeouts)) {
 		log_warnx("No answer for Disconnect-Request seq=%u from %s",
 		    assign->seq, print_addr((struct sockaddr *)
 		    &assign->dae->nas_addr, buf, sizeof(buf)));
+		TAILQ_FOREACH(client, &assign->dae_clients, entry)
+			module_imsg_compose(assign->dae->ipcp->base, IMSG_NG,
+			    client->peerid, 0, -1, NULL, 0);
 		ipcp_dae_reset_request(assign);
 	} else
 		ipcp_dae_send_disconnect_request(assign);
@@ -1594,13 +1685,15 @@ ipcp_dae_on_event(int fd, short ev, void *ctx)
 	const char		*cause = "";
 	struct radiusctl_client	*client;
 
+	ipcp_update_time(self);
+
 	if ((ev & EV_READ) == 0)
 		return;
 
 	if ((radres = radius_recv(dae->sock, 0)) == NULL) {
 		if (errno == EAGAIN)
 			return;
-		log_warn("Failed to receive from %s", print_addr(
+		log_warn("%s: Failed to receive from %s", __func__, print_addr(
 		    (struct sockaddr *)&dae->nas_addr, buf, sizeof(buf)));
 		return;
 	}
@@ -1609,16 +1702,16 @@ ipcp_dae_on_event(int fd, short ev, void *ctx)
 			break;
 	}
 	if (assign == NULL) {
-		log_warnx("Received RADIUS packet from %s has unknown id=%d",
-		    print_addr((struct sockaddr *)&dae->nas_addr, buf,
-		    sizeof(buf)), radius_get_id(radres));
+		log_warnx("%s: Received RADIUS packet from %s has unknown "
+		    "id=%d", __func__, print_addr((struct sockaddr *)
+		    &dae->nas_addr, buf, sizeof(buf)), radius_get_id(radres));
 		goto out;
 	}
 
 	radius_set_request_packet(radres, assign->dae_reqpkt);
 	if ((radius_check_response_authenticator(radres, dae->secret)) != 0) {
-		log_warnx("Received RADIUS packet for seq=%u from %s has a bad "
-		    "authenticator", assign->seq, print_addr(
+		log_warnx("%s: Received RADIUS packet for seq=%u from %s has "
+		    "a bad authenticator", __func__, assign->seq, print_addr(
 			(struct sockaddr *)&dae->nas_addr, buf,
 		    sizeof(buf)));
 		goto out;
@@ -1642,13 +1735,13 @@ ipcp_dae_on_event(int fd, short ev, void *ctx)
 		    &dae->nas_addr, buf, sizeof(buf)), cause);
 		break;
 	case RADIUS_CODE_DISCONNECT_NAK:
-		log_warnx("Received Disconnect-NAK for seq=%u from %s%s",
+		log_info("Received Disconnect-NAK for seq=%u from %s%s",
 		    assign->seq, print_addr((struct sockaddr *)
 		    &dae->nas_addr, buf, sizeof(buf)), cause);
 		break;
 	default:
-		log_warn("Received unknown code=%d for id=%u from %s",
-		    code, assign->seq, print_addr((struct sockaddr *)
+		log_warn("%s: Received unknown code=%d for id=%u from %s",
+		    __func__, code, assign->seq, print_addr((struct sockaddr *)
 		    &dae->nas_addr, buf, sizeof(buf)));
 		break;
 	}
@@ -1675,10 +1768,16 @@ void
 ipcp_dae_reset_request(struct assigned_ipv4 *assign)
 {
 	struct radiusctl_client		*client, *clientt;
+	const struct timeval		 zero = { 0, 0 };
 
 	if (assign->dae != NULL) {
-		if (assign->dae_ntry > 0)
+		if (assign->dae_reqpkt != NULL)
 			TAILQ_REMOVE(&assign->dae->reqs, assign, dae_next);
+		if (assign->dae_ntry > 0) {
+			assign->dae->ninflight--;
+			if (!evtimer_pending(&assign->dae->ev_reqs, NULL))
+				evtimer_add(&assign->dae->ev_reqs, &zero);
+		}
 	}
 	if (assign->dae_reqpkt != NULL)
 		radius_delete_packet(assign->dae_reqpkt);
@@ -1690,6 +1789,23 @@ ipcp_dae_reset_request(struct assigned_ipv4 *assign)
 		free(client);
 	}
 	assign->dae_ntry = 0;
+}
+
+void
+ipcp_dae_send_pending_requests(int fd, short ev, void *ctx)
+{
+	struct module_ipcp_dae	*dae = ctx;
+	struct module_ipcp	*self = dae->ipcp;
+	struct assigned_ipv4	*assign, *assignt;
+
+	ipcp_update_time(self);
+
+	TAILQ_FOREACH_SAFE(assign, &dae->reqs, dae_next, assignt) {
+		if (dae->ninflight >= RADIUSD_IPCP_DAE_MAX_INFLIGHT)
+			break;
+		if (assign->dae_ntry == 0)	/* pending */
+			ipcp_dae_send_disconnect_request(assign);
+	}
 }
 
 /***********************************************************************
@@ -1710,22 +1826,24 @@ parse_address_range(const char *range)
 		goto error;
 	if ((sep = strchr(buf, '-')) != NULL) {
 		*sep = '\0';
-		if (inet_aton(buf, &start) != 1)
+		if (inet_pton(AF_INET, buf, &start) != 1)
 			goto error;
-		else if (inet_aton(++sep, &end) != 1)
+		else if (inet_pton(AF_INET, ++sep, &end) != 1)
 			goto error;
 		start.s_addr = ntohl(start.s_addr);
 		end.s_addr = ntohl(end.s_addr);
+		if (end.s_addr < start.s_addr)
+			goto error;
 	} else {
 		if ((sep = strchr(buf, '/')) != NULL) {
 			*sep = '\0';
-			if (inet_aton(buf, &start) != 1)
+			if (inet_pton(AF_INET, buf, &start) != 1)
 				goto error;
 			masklen = strtonum(++sep, 0, 32, &errstr);
 			if (errstr != NULL)
 				goto error;
 		} else {
-			if (inet_aton(buf, &start) != 1)
+			if (inet_pton(AF_INET, buf, &start) != 1)
 				goto error;
 			masklen = 32;
 		}
@@ -1854,7 +1972,7 @@ radius_error_cause_string(unsigned val)
 	    { RADIUS_ERROR_CAUSE_UNSUPPORTED_EXTENSION,
 	      "Unsupported Extension" },
 	    { RADIUS_ERROR_CAUSE_INVALID_ATTRIBUTE_VALUE,
-	      "Invalid Attribute Valu" },
+	      "Invalid Attribute Value" },
 	    { RADIUS_ERROR_CAUSE_ADMINISTRATIVELY_PROHIBITED,
 	      "Administratively Prohibited" },
 	    { RADIUS_ERROR_CAUSE_REQUEST_NOT_ROUTABLE,
@@ -1928,9 +2046,9 @@ parse_addr(const char *str0, int af, struct sockaddr *sa, socklen_t salen)
 		free(str);
 		return (-1);
 	}
+	free(str);
 	if (salen < ai->ai_addrlen) {
 		freeaddrinfo(ai);
-		free(str);
 		return (-1);
 	}
 	memcpy(sa, ai->ai_addr, ai->ai_addrlen);

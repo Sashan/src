@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.h,v 1.25 2023/12/11 22:12:53 kettenis Exp $ */
+/* $OpenBSD: pmap.h,v 1.28 2025/02/03 17:59:40 jca Exp $ */
 /*
  * Copyright (c) 2008,2009,2014 Dale Rahn <drahn@dalerahn.com>
  *
@@ -48,7 +48,6 @@
 
 #define PTED_VA_MANAGED_M	(PMAP_MD3)
 #define PTED_VA_WIRED_M		(PMAP_MD3 << 1)
-#define PTED_VA_EXEC_M		(PMAP_MD3 << 2)
 
 
 #if defined(_KERNEL) && !defined(_LOCORE)
@@ -69,6 +68,7 @@ struct pmap {
 	uint64_t pm_guarded;
 	int have_4_level_pt;
 	int pm_privileged;
+	volatile int pm_active;
 	int pm_refs;				/* ref count */
 	struct pmap_statistics  pm_stats;	/* pmap statistics */
 	uint64_t pm_apiakey[2];
@@ -123,6 +123,7 @@ struct pv_entry;
 int	pmap_fault_fixup(pmap_t, vaddr_t, vm_prot_t);
 
 #define __HAVE_PMAP_MPSAFE_ENTER_COW
+#define __HAVE_PMAP_POPULATE
 
 #endif /* _KERNEL && !_LOCORE */
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: dsa.h,v 1.44 2024/03/02 09:33:14 tb Exp $ */
+/* $OpenBSD: dsa.h,v 1.47 2025/01/25 17:59:44 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -66,10 +66,6 @@
 #define HEADER_DSA_H
 
 #include <openssl/opensslconf.h>
-
-#ifdef OPENSSL_NO_DSA
-#error DSA is disabled.
-#endif
 
 #ifndef OPENSSL_NO_BIO
 #include <openssl/bio.h>
@@ -176,15 +172,6 @@ int	DSA_print(BIO *bp, const DSA *x, int off);
 #endif
 int	DSAparams_print_fp(FILE *fp, const DSA *x);
 int	DSA_print_fp(FILE *bp, const DSA *x, int off);
-
-/*
- * Primality test according to FIPS PUB 186-4, Appendix C.3. Set the number
- * to 64 rounds of Miller-Rabin, which corresponds to 128 bits of security.
- * This is necessary for keys of size >= 3072.
- */
-#define DSS_prime_checks 64
-#define DSA_is_prime(n, callback, cb_arg) \
-	BN_is_prime(n, DSS_prime_checks, callback, NULL, cb_arg)
 
 #ifndef OPENSSL_NO_DH
 /* Convert DSA structure (key or just parameters) into DH structure

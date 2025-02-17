@@ -1,4 +1,4 @@
-/*	$OpenBSD: msdosfs_vnops.c,v 1.141 2024/05/13 11:17:40 semarie Exp $	*/
+/*	$OpenBSD: msdosfs_vnops.c,v 1.143 2024/10/18 05:52:32 miod Exp $	*/
 /*	$NetBSD: msdosfs_vnops.c,v 1.63 1997/10/17 11:24:19 ws Exp $	*/
 
 /*-
@@ -717,7 +717,7 @@ msdosfs_write(void *v)
 		 * it.  Otherwise, if on a cluster boundary write it
 		 * asynchronously so we can move on to the next block
 		 * without delay.  Otherwise do a delayed write because we
-		 * may want to write somemore into the block later.
+		 * may want to write some more into the block later.
 		 */
 #if 0
 		if (ioflag & IO_NOCACHE)
@@ -1802,6 +1802,7 @@ msdosfs_strategy(void *v)
 int
 msdosfs_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 	struct denode *dep = VTODE(ap->a_vp);
 
@@ -1813,6 +1814,7 @@ msdosfs_print(void *v)
 	    VOP_ISLOCKED(ap->a_vp) ? "(LOCKED)" : "");
 #ifdef DIAGNOSTIC
 	printf("\n");
+#endif
 #endif
 
 	return (0);

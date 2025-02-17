@@ -1,4 +1,4 @@
-/*	$OpenBSD: signalvar.h,v 1.54 2022/05/13 15:32:00 claudio Exp $	*/
+/*	$OpenBSD: signalvar.h,v 1.57 2024/11/04 22:41:50 claudio Exp $	*/
 /*	$NetBSD: signalvar.h,v 1.17 1996/04/22 01:23:31 christos Exp $	*/
 
 /*
@@ -102,6 +102,7 @@ struct sigctx {
 	int		sig_info;
 	int		sig_ignore;
 	int		sig_catch;
+	int		sig_stop;
 };
 
 /*
@@ -109,12 +110,12 @@ struct sigctx {
  */
 int	coredump(struct proc *p);
 void	execsigs(struct proc *p);
-int	cursig(struct proc *p, struct sigctx *);
+int	cursig(struct proc *p, struct sigctx *, int);
 void	pgsigio(struct sigio_ref *sir, int sig, int checkctty);
 void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
 void	psignal(struct proc *p, int sig);
 void	ptsignal(struct proc *p, int sig, enum signal_type type);
-#define prsignal(pr,sig)	ptsignal((pr)->ps_mainproc, (sig), SPROCESS)
+void	prsignal(struct process *pr, int sig);
 void	trapsignal(struct proc *p, int sig, u_long code, int type,
 	    union sigval val);
 __dead void sigexit(struct proc *, int);

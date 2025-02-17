@@ -1,4 +1,4 @@
-/* $OpenBSD: wsdisplay.c,v 1.152 2023/01/10 16:33:18 tobhe Exp $ */
+/* $OpenBSD: wsdisplay.c,v 1.154 2024/11/05 16:53:30 miod Exp $ */
 /* $NetBSD: wsdisplay.c,v 1.82 2005/02/27 00:27:52 perry Exp $ */
 
 /*
@@ -203,9 +203,9 @@ struct wsdisplay_softc {
 extern struct cfdriver wsdisplay_cd;
 
 /* Autoconfiguration definitions. */
-int	wsdisplay_emul_match(struct device *, void *, void *);
-void	wsdisplay_emul_attach(struct device *, struct device *, void *);
-int	wsdisplay_emul_detach(struct device *, int);
+int	wsdisplay_match(struct device *, void *, void *);
+void	wsdisplay_attach(struct device *, struct device *, void *);
+int	wsdisplay_detach(struct device *, int);
 
 int	wsdisplay_activate(struct device *, int);
 
@@ -215,9 +215,9 @@ struct cfdriver wsdisplay_cd = {
 	NULL, "wsdisplay", DV_TTY
 };
 
-const struct cfattach wsdisplay_emul_ca = {
-	sizeof(struct wsdisplay_softc), wsdisplay_emul_match,
-	wsdisplay_emul_attach, wsdisplay_emul_detach, wsdisplay_activate
+const struct cfattach wsdisplay_ca = {
+	sizeof(struct wsdisplay_softc), wsdisplay_match,
+	wsdisplay_attach, wsdisplay_detach, wsdisplay_activate
 };
 
 void	wsdisplaystart(struct tty *);
@@ -231,11 +231,6 @@ int	wsdisplayparam(struct tty *, struct termios *);
 
 #define	WSSCREEN_HAS_TTY(scr)		((scr)->scr_tty != NULL)
 
-void	wsdisplay_common_attach(struct wsdisplay_softc *sc,
-	    int console, int mux, const struct wsscreen_list *,
-	    const struct wsdisplay_accessops *accessops,
-	    void *accesscookie, u_int defaultscreens);
-int	wsdisplay_common_detach(struct wsdisplay_softc *, int);
 void	wsdisplay_kbdholdscr(struct wsscreen *, int);
 
 #ifdef WSDISPLAY_COMPAT_RAWKBD
@@ -535,7 +530,7 @@ wsdisplay_delscreen(struct wsdisplay_softc *sc, int idx, int flags)
  * Autoconfiguration functions.
  */
 int
-wsdisplay_emul_match(struct device *parent, void *match, void *aux)
+wsdisplay_match(struct device *parent, void *match, void *aux)
 {
 	struct cfdata *cf = match;
 	struct wsemuldisplaydev_attach_args *ap = aux;
@@ -566,39 +561,6 @@ wsdisplay_emul_match(struct device *parent, void *match, void *aux)
 	return (1);
 }
 
-void
-wsdisplay_emul_attach(struct device *parent, struct device *self, void *aux)
-{
-	struct wsdisplay_softc *sc = (struct wsdisplay_softc *)self;
-	struct wsemuldisplaydev_attach_args *ap = aux;
-
-	wsdisplay_common_attach(sc, ap->console,
-	    sc->sc_dv.dv_cfdata->wsemuldisplaydevcf_mux, ap->scrdata,
-	    ap->accessops, ap->accesscookie, ap->defaultscreens);
-
-	if (ap->console && cn_tab == &wsdisplay_cons) {
-		int maj;
-
-		/* locate the major number */
-		for (maj = 0; maj < nchrdev; maj++)
-			if (cdevsw[maj].d_open == wsdisplayopen)
-				break;
-
-		cn_tab->cn_dev = makedev(maj, WSDISPLAYMINOR(self->dv_unit, 0));
-	}
-}
-
-/*
- * Detach a display.
- */
-int
-wsdisplay_emul_detach(struct device *self, int flags)
-{
-	struct wsdisplay_softc *sc = (struct wsdisplay_softc *)self;
-
-	return (wsdisplay_common_detach(sc, flags));
-}
-
 int
 wsdisplay_activate(struct device *self, int act)
 {
@@ -613,9 +575,13 @@ wsdisplay_activate(struct device *self, int act)
 	return (ret);
 }
 
+/*
+ * Detach a display.
+ */
 int
-wsdisplay_common_detach(struct wsdisplay_softc *sc, int flags)
+wsdisplay_detach(struct device *self, int flags)
 {
+	struct wsdisplay_softc *sc = (struct wsdisplay_softc *)self;
 	int i;
 	int rc;
 
@@ -699,15 +665,16 @@ wsemuldisplaydevsubmatch(struct device *parent, void *match, void *aux)
 }
 
 void
-wsdisplay_common_attach(struct wsdisplay_softc *sc, int console, int kbdmux,
-    const struct wsscreen_list *scrdata,
-    const struct wsdisplay_accessops *accessops, void *accesscookie,
-    u_int defaultscreens)
+wsdisplay_attach(struct device *parent, struct device *self, void *aux)
 {
+	struct wsdisplay_softc *sc = (struct wsdisplay_softc *)self;
+	struct wsemuldisplaydev_attach_args *ap = aux;
+	u_int defaultscreens = ap->defaultscreens;
 	int i, start = 0;
 #if NWSKBD > 0
 	struct wsevsrc *kme;
 #if NWSMUX > 0
+	int kbdmux = sc->sc_dv.dv_cfdata->wsemuldisplaydevcf_mux;
 	struct wsmux_softc *mux;
 
 	if (kbdmux >= 0)
@@ -729,12 +696,12 @@ wsdisplay_common_attach(struct wsdisplay_softc *sc, int console, int kbdmux,
 #endif	/* NWSMUX > 0 */
 #endif	/* NWSKBD > 0 */
 
-	sc->sc_isconsole = console;
+	sc->sc_isconsole = ap->console;
 	sc->sc_resumescreen = WSDISPLAY_NULLSCREEN;
 
 	sc->sc_taskq = taskq_create(sc->sc_dv.dv_xname, 1, IPL_TTY, 0);
 
-	if (console) {
+	if (ap->console) {
 		KASSERT(wsdisplay_console_initted);
 		KASSERT(wsdisplay_console_device == NULL);
 
@@ -771,9 +738,9 @@ wsdisplay_common_attach(struct wsdisplay_softc *sc, int console, int kbdmux,
 		wsmux_set_display(mux, &sc->sc_dv);
 #endif
 
-	sc->sc_accessops = accessops;
-	sc->sc_accesscookie = accesscookie;
-	sc->sc_scrdata = scrdata;
+	sc->sc_accessops = ap->accessops;
+	sc->sc_accesscookie = ap->accesscookie;
+	sc->sc_scrdata = ap->scrdata;
 
 	/*
 	 * Set up a number of virtual screens if wanted. The
@@ -802,7 +769,7 @@ wsdisplay_common_attach(struct wsdisplay_softc *sc, int console, int kbdmux,
 #endif
 
 #if NWSKBD > 0 && NWSMUX == 0
-	if (console == 0) {
+	if (ap->console == 0) {
 		/*
 		 * In the non-wsmux world, always connect wskbd0 and wsdisplay0
 		 * together.
@@ -817,6 +784,17 @@ wsdisplay_common_attach(struct wsdisplay_softc *sc, int console, int kbdmux,
 		}
 	}
 #endif
+
+	if (ap->console && cn_tab == &wsdisplay_cons) {
+		int maj;
+
+		/* locate the major number */
+		for (maj = 0; maj < nchrdev; maj++)
+			if (cdevsw[maj].d_open == wsdisplayopen)
+				break;
+
+		cn_tab->cn_dev = makedev(maj, WSDISPLAYMINOR(self->dv_unit, 0));
+	}
 }
 
 void
@@ -1314,25 +1292,6 @@ wsdisplay_driver_ioctl(struct wsdisplay_softc *sc, u_long cmd, caddr_t data,
     int flag, struct proc *p)
 {
 	int error;
-
-#if defined(OpenBSD7_1) || defined(OpenBSD7_2) || defined(OpenBSD7_3)
-	if (cmd == WSDISPLAYIO_OGINFO) {
-		struct wsdisplay_ofbinfo *oinfo =
-			(struct wsdisplay_ofbinfo *)data;
-		struct wsdisplay_fbinfo info;
-
-		error = (*sc->sc_accessops->ioctl)(sc->sc_accesscookie,
-		    WSDISPLAYIO_GINFO, (caddr_t)&info, flag, p);
-		if (error)
-			return error;
-
-		oinfo->height = info.height;
-		oinfo->width = info.width;
-		oinfo->depth = info.depth;
-		oinfo->cmsize = info.cmsize;
-		return (0);
-	}
-#endif
 
 	error = ((*sc->sc_accessops->ioctl)(sc->sc_accesscookie, cmd, data,
 	    flag, p));

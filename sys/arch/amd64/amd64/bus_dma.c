@@ -1,4 +1,4 @@
-/*	$OpenBSD: bus_dma.c,v 1.51 2019/06/09 12:52:04 kettenis Exp $	*/
+/*	$OpenBSD: bus_dma.c,v 1.59 2024/10/08 19:40:00 kettenis Exp $	*/
 /*	$NetBSD: bus_dma.c,v 1.3 2003/05/07 21:33:58 fvdl Exp $	*/
 
 /*-
@@ -96,8 +96,13 @@
 
 #include <uvm/uvm_extern.h>
 
+/* #define FORCE_BOUNCE_BUFFER	1 */
+#ifndef FORCE_BOUNCE_BUFFER
+#define FORCE_BOUNCE_BUFFER	0
+#endif
+
 int _bus_dmamap_load_buffer(bus_dma_tag_t, bus_dmamap_t, void *, bus_size_t,
-    struct proc *, int, paddr_t *, int *, int);
+    struct proc *, int, paddr_t *, int *, int *, int);
 
 /*
  * Common function for DMA map creation.  May be called by bus-specific
@@ -108,8 +113,15 @@ _bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
     bus_size_t maxsegsz, bus_size_t boundary, int flags, bus_dmamap_t *dmamp)
 {
 	struct bus_dmamap *map;
+	struct pglist mlist;
+	struct vm_page **pg, *pgnext;
+	size_t mapsize, sz, ssize;
+	vaddr_t va, sva;
 	void *mapstore;
-	size_t mapsize;
+	int npages, error;
+	const struct kmem_dyn_mode *kd;
+	/* allocate and use bounce buffers when running as SEV guest */
+	int use_bounce_buffer = cpu_sev_guestmode || FORCE_BOUNCE_BUFFER;
 
 	/*
 	 * Allocate and initialize the DMA map.  The end of the map
@@ -125,9 +137,18 @@ _bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	 */
 	mapsize = sizeof(struct bus_dmamap) +
 	    (sizeof(bus_dma_segment_t) * (nsegments - 1));
-	if ((mapstore = malloc(mapsize, M_DEVBUF,
-	    (flags & BUS_DMA_NOWAIT) ?
-	        (M_NOWAIT|M_ZERO) : (M_WAITOK|M_ZERO))) == NULL)
+
+	if (use_bounce_buffer) {
+		/* this many pages plus one in case we get split */
+		npages = round_page(size) / PAGE_SIZE + 1;
+		if (npages < nsegments)
+			npages = nsegments;
+		mapsize += sizeof(struct vm_page *) * npages;
+	}
+
+	mapstore = malloc(mapsize, M_DEVBUF,
+	    (flags & BUS_DMA_NOWAIT) ? (M_NOWAIT|M_ZERO) : (M_WAITOK|M_ZERO));
+	if (mapstore == NULL)
 		return (ENOMEM);
 
 	map = (struct bus_dmamap *)mapstore;
@@ -135,7 +156,58 @@ _bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	map->_dm_segcnt = nsegments;
 	map->_dm_maxsegsz = maxsegsz;
 	map->_dm_boundary = boundary;
+	if (use_bounce_buffer) {
+		map->_dm_pages = (void *)&map->dm_segs[nsegments];
+		map->_dm_npages = npages;
+	}
 	map->_dm_flags = flags & ~(BUS_DMA_WAITOK|BUS_DMA_NOWAIT);
+
+	if (!use_bounce_buffer) {
+		*dmamp = map;
+		return (0);
+	}
+
+	sz = npages << PGSHIFT;
+	kd = flags & BUS_DMA_NOWAIT ? &kd_trylock : &kd_waitok;
+	va = (vaddr_t)km_alloc(sz, &kv_any, &kp_none, kd);
+	if (va == 0) {
+		map->_dm_npages = 0;
+		free(map, M_DEVBUF, mapsize);
+		return (ENOMEM);
+	}
+
+	TAILQ_INIT(&mlist);
+	error = uvm_pglistalloc(sz, 0, -1, PAGE_SIZE, 0, &mlist, nsegments,
+	    (flags & BUS_DMA_NOWAIT) ? UVM_PLA_NOWAIT : UVM_PLA_WAITOK);
+	if (error) {
+		map->_dm_npages = 0;
+		km_free((void *)va, sz, &kv_any, &kp_none);
+		free(map, M_DEVBUF, mapsize);
+		return (ENOMEM);
+	}
+
+	sva = va;
+	ssize = sz;
+	pgnext = TAILQ_FIRST(&mlist);
+	for (pg = map->_dm_pages; npages--; va += PAGE_SIZE, pg++) {
+		*pg = pgnext;
+		error = pmap_enter(pmap_kernel(), va, VM_PAGE_TO_PHYS(*pg),
+		    PROT_READ | PROT_WRITE,
+		    PROT_READ | PROT_WRITE | PMAP_WIRED |
+		    PMAP_CANFAIL | PMAP_NOCRYPT);
+		if (error) {
+			pmap_update(pmap_kernel());
+			map->_dm_npages = 0;
+			km_free((void *)sva, ssize, &kv_any, &kp_none);
+			free(map, M_DEVBUF, mapsize);
+			uvm_pglistfree(&mlist);
+			return (ENOMEM);
+		}
+		pgnext = TAILQ_NEXT(*pg, pageq);
+		bzero((void *)va, PAGE_SIZE);
+	}
+	pmap_update(pmap_kernel());
+	map->_dm_pgva = sva;
 
 	*dmamp = map;
 	return (0);
@@ -149,9 +221,28 @@ void
 _bus_dmamap_destroy(bus_dma_tag_t t, bus_dmamap_t map)
 {
 	size_t mapsize;
-	
+	struct vm_page **pg;
+	struct pglist mlist;
+	int use_bounce_buffer = cpu_sev_guestmode || FORCE_BOUNCE_BUFFER;
+
+	if (map->_dm_pgva) {
+		km_free((void *)map->_dm_pgva, map->_dm_npages << PGSHIFT,
+		    &kv_any, &kp_none);
+	}
+
 	mapsize = sizeof(struct bus_dmamap) +
 		(sizeof(bus_dma_segment_t) * (map->_dm_segcnt - 1));
+	if (use_bounce_buffer)
+		mapsize += sizeof(struct vm_page *) * map->_dm_npages;
+
+	if (map->_dm_pages) {
+		TAILQ_INIT(&mlist);
+		for (pg = map->_dm_pages; map->_dm_npages--; pg++) {
+			TAILQ_INSERT_TAIL(&mlist, *pg, pageq);
+		}
+		uvm_pglistfree(&mlist);
+	}
+
 	free(map, M_DEVBUF, mapsize);
 }
 
@@ -164,7 +255,7 @@ _bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
     bus_size_t buflen, struct proc *p, int flags)
 {
 	bus_addr_t lastaddr = 0;
-	int seg, error;
+	int seg, used, error;
 
 	/*
 	 * Make sure that on error condition we return "no valid mappings".
@@ -176,11 +267,13 @@ _bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 		return (EINVAL);
 
 	seg = 0;
+	used = 0;
 	error = _bus_dmamap_load_buffer(t, map, buf, buflen, p, flags,
-	    &lastaddr, &seg, 1);
+	    &lastaddr, &seg, &used, 1);
 	if (error == 0) {
 		map->dm_mapsize = buflen;
 		map->dm_nsegs = seg + 1;
+		map->_dm_nused = used;
 	}
 	return (error);
 }
@@ -193,7 +286,7 @@ _bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map, struct mbuf *m0,
     int flags)
 {
 	paddr_t lastaddr = 0;
-	int seg, error, first;
+	int seg, used, error, first;
 	struct mbuf *m;
 
 	/*
@@ -212,17 +305,19 @@ _bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map, struct mbuf *m0,
 
 	first = 1;
 	seg = 0;
+	used = 0;
 	error = 0;
 	for (m = m0; m != NULL && error == 0; m = m->m_next) {
 		if (m->m_len == 0)
 			continue;
 		error = _bus_dmamap_load_buffer(t, map, m->m_data, m->m_len,
-		    NULL, flags, &lastaddr, &seg, first);
+		    NULL, flags, &lastaddr, &seg, &used, first);
 		first = 0;
 	}
 	if (error == 0) {
 		map->dm_mapsize = m0->m_pkthdr.len;
 		map->dm_nsegs = seg + 1;
+		map->_dm_nused = used;
 	}
 	return (error);
 }
@@ -235,7 +330,7 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dmamap_t map, struct uio *uio,
     int flags)
 {
 	paddr_t lastaddr = 0;
-	int seg, i, error, first;
+	int seg, used, i, error, first;
 	bus_size_t minlen, resid;
 	struct proc *p = NULL;
 	struct iovec *iov;
@@ -260,6 +355,7 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dmamap_t map, struct uio *uio,
 
 	first = 1;
 	seg = 0;
+	used = 0;
 	error = 0;
 	for (i = 0; i < uio->uio_iovcnt && resid != 0 && error == 0; i++) {
 		/*
@@ -270,7 +366,7 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dmamap_t map, struct uio *uio,
 		addr = (caddr_t)iov[i].iov_base;
 
 		error = _bus_dmamap_load_buffer(t, map, addr, minlen,
-		    p, flags, &lastaddr, &seg, first);
+		    p, flags, &lastaddr, &seg, &used, first);
 		first = 0;
 
 		resid -= minlen;
@@ -278,6 +374,7 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dmamap_t map, struct uio *uio,
 	if (error == 0) {
 		map->dm_mapsize = uio->uio_resid;
 		map->dm_nsegs = seg + 1;
+		map->_dm_nused = used;
 	}
 	return (error);
 }
@@ -321,8 +418,8 @@ _bus_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map, bus_dma_segment_t *segs,
 
 			if (paddr > dma_constraint.ucr_high &&
 			    (map->_dm_flags & BUS_DMA_64BIT) == 0)
-				panic("Non dma-reachable buffer at paddr %#lx(raw)",
-				    paddr);
+				panic("Non dma-reachable buffer at "
+				    "paddr %#lx(raw)", paddr);
 
 			/*
 			 * Make sure we don't cross any boundaries.
@@ -383,6 +480,7 @@ _bus_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t map)
 	 */
 	map->dm_mapsize = 0;
 	map->dm_nsegs = 0;
+	map->_dm_nused = 0;
 }
 
 /*
@@ -393,7 +491,41 @@ void
 _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t addr,
     bus_size_t size, int op)
 {
-	/* Nothing to do here. */
+	bus_dma_segment_t *sg;
+	int i, off = addr;
+	bus_size_t l;
+	int use_bounce_buffer = cpu_sev_guestmode || FORCE_BOUNCE_BUFFER;
+
+	if (!use_bounce_buffer)
+		return;
+
+	for (i = map->_dm_segcnt, sg = map->dm_segs; size && i; i--, sg++) {
+		if (off >= sg->ds_len) {
+			off -= sg->ds_len;
+			continue;
+		}
+
+		l = sg->ds_len - off;
+		if (l > size)
+			l = size;
+		size -= l;
+
+		/* PREREAD and POSTWRITE are no-ops. */
+
+		/* READ: device -> memory */
+		if (op & BUS_DMASYNC_POSTREAD) {
+			bcopy((void *)(sg->_ds_bounce_va + off),
+			    (void *)(sg->_ds_va + off), l);
+		}
+
+		/* WRITE: memory -> device */
+		if (op & BUS_DMASYNC_PREWRITE) {
+			bcopy((void *)(sg->_ds_va + off),
+			    (void *)(sg->_ds_bounce_va + off), l);
+		}
+
+		off = 0;
+	}
 }
 
 /*
@@ -405,15 +537,18 @@ _bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
     bus_size_t boundary, bus_dma_segment_t *segs, int nsegs, int *rsegs,
     int flags)
 {
+	paddr_t low, high;
 
-	/*
-	 * XXX in the presence of decent (working) iommus and bouncebuffers
-	 * we can then fallback this allocation to a range of { 0, -1 }.
-	 * However for now  we err on the side of caution and allocate dma
-	 * memory under the 4gig boundary.
-	 */
-	return (_bus_dmamem_alloc_range(t, size, alignment, boundary,
-	    segs, nsegs, rsegs, flags, (bus_addr_t)0, (bus_addr_t)0xffffffff));
+	if (flags & BUS_DMA_64BIT) {
+		low = no_constraint.ucr_low;
+		high = no_constraint.ucr_high;
+	} else {
+		low = dma_constraint.ucr_low;
+		high = dma_constraint.ucr_high;
+	}
+
+	return _bus_dmamem_alloc_range(t, size, alignment, boundary,
+	    segs, nsegs, rsegs, flags, low, high);
 }
 
 /*
@@ -561,20 +696,23 @@ _bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs, off_t off,
  */
 int
 _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
-    bus_size_t buflen, struct proc *p, int flags, paddr_t *lastaddrp, int *segp,
-    int first)
+    bus_size_t buflen, struct proc *p, int flags, paddr_t *lastaddrp,
+    int *segp, int *usedp, int first)
 {
 	bus_size_t sgsize;
 	bus_addr_t curaddr, lastaddr, baddr, bmask;
-	vaddr_t vaddr = (vaddr_t)buf;
-	int seg;
+	vaddr_t pgva = -1, vaddr = (vaddr_t)buf;
+	int seg, page, off;
 	pmap_t pmap;
+	struct vm_page *pg;
+	int use_bounce_buffer = cpu_sev_guestmode || FORCE_BOUNCE_BUFFER;
 
 	if (p != NULL)
 		pmap = p->p_vmspace->vm_map.pmap;
 	else
 		pmap = pmap_kernel();
 
+	page = *usedp;
 	lastaddr = *lastaddrp;
 	bmask  = ~(map->_dm_boundary - 1);
 
@@ -588,6 +726,17 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 		    (map->_dm_flags & BUS_DMA_64BIT) == 0)
 			panic("Non dma-reachable buffer at curaddr %#lx(raw)",
 			    curaddr);
+
+		if (use_bounce_buffer) {
+			if (page >= map->_dm_npages)
+				return (EFBIG);
+
+			off = vaddr & PAGE_MASK;
+			pg = map->_dm_pages[page];
+			curaddr = VM_PAGE_TO_PHYS(pg) + off;
+			pgva = map->_dm_pgva + (page << PGSHIFT) + off;
+			page++;
+		}
 
 		/*
 		 * Compute the segment size, and adjust counts.
@@ -612,6 +761,8 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 		if (first) {
 			map->dm_segs[seg].ds_addr = curaddr;
 			map->dm_segs[seg].ds_len = sgsize;
+			map->dm_segs[seg]._ds_va = vaddr;
+			map->dm_segs[seg]._ds_bounce_va = pgva;
 			first = 0;
 		} else {
 			if (curaddr == lastaddr &&
@@ -619,13 +770,17 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 			     map->_dm_maxsegsz &&
 			    (map->_dm_boundary == 0 ||
 			     (map->dm_segs[seg].ds_addr & bmask) ==
-			     (curaddr & bmask)))
+			     (curaddr & bmask)) &&
+			    (!use_bounce_buffer || (map->dm_segs[seg]._ds_va +
+			     map->dm_segs[seg].ds_len) == vaddr)) {
 				map->dm_segs[seg].ds_len += sgsize;
-			else {
+			} else {
 				if (++seg >= map->_dm_segcnt)
 					break;
 				map->dm_segs[seg].ds_addr = curaddr;
 				map->dm_segs[seg].ds_len = sgsize;
+				map->dm_segs[seg]._ds_va = vaddr;
+				map->dm_segs[seg]._ds_bounce_va = pgva;
 			}
 		}
 
@@ -635,6 +790,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 	}
 
 	*segp = seg;
+	*usedp = page;
 	*lastaddrp = lastaddr;
 
 	/*
@@ -714,4 +870,3 @@ _bus_dmamem_alloc_range(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
 
 	return (0);
 }
-

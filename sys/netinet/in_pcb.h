@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.h,v 1.158 2024/07/12 19:50:35 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.h,v 1.165 2025/02/12 21:28:11 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.h,v 1.14 1996/02/13 23:42:00 christos Exp $	*/
 
 /*
@@ -79,9 +79,9 @@
  *	I	immutable after creation
  *	N	net lock
  *	t	inpt_mtx		pcb table mutex
- *	y	inpt_notify		pcb table rwlock for notify
  *	L	pf_inp_mtx		link pf to inp mutex
  *	s	so_lock			socket rwlock
+ *	f	inp_sofree_mtx		socket detach and lock
  */
 
 /*
@@ -125,11 +125,11 @@ union inpaddru {
  * control block.
  */
 struct inpcb {
+	struct	  inpcbtable *inp_table;	/* [I] inet queue/hash table */
+	TAILQ_ENTRY(inpcb) inp_queue;		/* [t] inet PCB queue */
+	/* keep fields above in sync with struct inpcb_iterator */
 	LIST_ENTRY(inpcb) inp_hash;		/* [t] local and foreign hash */
 	LIST_ENTRY(inpcb) inp_lhash;		/* [t] local port hash */
-	TAILQ_ENTRY(inpcb) inp_queue;		/* [t] inet PCB queue */
-	SIMPLEQ_ENTRY(inpcb) inp_notify;	/* [y] notify or udp append */
-	struct	  inpcbtable *inp_table;	/* [I] inet queue/hash table */
 	union	  inpaddru inp_faddru;		/* [t] Foreign address. */
 	union	  inpaddru inp_laddru;		/* [t] Local address. */
 #define	inp_faddr	inp_faddru.iau_addr
@@ -138,9 +138,10 @@ struct inpcb {
 #define	inp_laddr6	inp_laddru.iau_addr6
 	u_int16_t inp_fport;		/* [t] foreign port */
 	u_int16_t inp_lport;		/* [t] local port */
-	struct	  socket *inp_socket;	/* [I] back pointer to socket */
+	struct	  socket *inp_socket;	/* [f] back pointer to socket */
+	struct	  mutex inp_sofree_mtx;	/* protect socket free */
 	caddr_t	  inp_ppcb;		/* pointer to per-protocol pcb */
-	struct    route inp_route;	/* cached route */
+	struct    route inp_route;	/* [s] cached route */
 	struct    refcnt inp_refcnt;	/* refcount PCB, delay memory free */
 	int	  inp_flags;		/* generic IP/datagram flags */
 	union {				/* Header prototype. */
@@ -178,9 +179,20 @@ struct inpcb {
 
 LIST_HEAD(inpcbhead, inpcb);
 
+struct inpcb_iterator {
+	struct	  inpcbtable *inp_table;	/* [I] always NULL */
+	TAILQ_ENTRY(inpcb) inp_queue;		/* [t] inet PCB queue */
+	/* keep fields above in sync with struct inpcb */
+};
+
+static inline int
+in_pcb_is_iterator(struct inpcb *inp)
+{
+	return (inp->inp_table == NULL ? 1 : 0);
+}
+
 struct inpcbtable {
 	struct mutex inpt_mtx;			/* protect queue and hash */
-	struct rwlock inpt_notify;		/* protect inp_notify list */
 	TAILQ_HEAD(inpthead, inpcb) inpt_queue;	/* [t] inet PCB queue */
 	struct	inpcbhead *inpt_hashtbl;	/* [t] local and foreign hash */
 	struct	inpcbhead *inpt_lhashtbl;	/* [t] local port hash */
@@ -298,10 +310,18 @@ int	 in_pcbaddrisavail(const struct inpcb *, struct sockaddr_in *, int,
 	    struct proc *);
 int	 in_pcbconnect(struct inpcb *, struct mbuf *);
 void	 in_pcbdetach(struct inpcb *);
+struct socket *
+	 in_pcbsolock_ref(struct inpcb *);
+void	 in_pcbsounlock_rele(struct inpcb *, struct socket *);
 struct inpcb *
 	 in_pcbref(struct inpcb *);
 void	 in_pcbunref(struct inpcb *);
 void	 in_pcbdisconnect(struct inpcb *);
+struct inpcb *
+	 in_pcb_iterator(struct inpcbtable *, struct inpcb *,
+	    struct inpcb_iterator *);
+void	 in_pcb_iterator_abort(struct inpcbtable *, struct inpcb *,
+	    struct inpcb_iterator *);
 struct inpcb *
 	 in_pcblookup(struct inpcbtable *, struct in_addr,
 			       u_int, struct in_addr, u_int, u_int);
@@ -334,7 +354,7 @@ struct inpcb *
 void	 in_pcbnotifyall(struct inpcbtable *, const struct sockaddr_in *,
 	    u_int, int, void (*)(struct inpcb *, int));
 void	 in_pcbrehash(struct inpcb *);
-void	 in_rtchange(struct inpcb *, int);
+void	 in_pcbrtchange(struct inpcb *, int);
 void	 in_setpeeraddr(struct inpcb *, struct mbuf *);
 void	 in_setsockaddr(struct inpcb *, struct mbuf *);
 int	 in_sockaddr(struct socket *, struct mbuf *);

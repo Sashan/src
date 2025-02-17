@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.115 2024/07/10 09:27:33 dv Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.123 2025/01/08 15:46:10 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -25,19 +25,14 @@
 #include <dev/pv/virtioreg.h>
 #include <dev/pci/virtio_pcireg.h>
 #include <dev/pv/vioblkreg.h>
-#include <dev/pv/vioscsireg.h>
 #include <dev/vmm/vmm.h>
 
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
-#include <netinet/ip.h>
 
 #include <errno.h>
 #include <event.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -73,6 +68,7 @@ static int virtio_dev_launch(struct vmd_vm *, struct virtio_dev *);
 static void virtio_dispatch_dev(int, short, void *);
 static int handle_dev_msg(struct viodev_msg *, struct virtio_dev *);
 static int virtio_dev_closefds(struct virtio_dev *);
+static void vmmci_pipe_dispatch(int, short, void *);
 
 const char *
 virtio_reg_name(uint8_t reg)
@@ -280,17 +276,29 @@ virtio_rnd_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 	return (0);
 }
 
+/*
+ * vmmci_ctl
+ *
+ * Inject a command into the vmmci device, potentially delivering interrupt.
+ *
+ * Called by the vm process's event(3) loop.
+ */
 int
 vmmci_ctl(unsigned int cmd)
 {
+	int ret = 0;
 	struct timeval tv = { 0, 0 };
 
+	mutex_lock(&vmmci.mutex);
+
 	if ((vmmci.cfg.device_status &
-	    VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK) == 0)
-		return (-1);
+	    VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK) == 0) {
+		ret = -1;
+		goto unlock;
+	}
 
 	if (cmd == vmmci.cmd)
-		return (0);
+		goto unlock;
 
 	switch (cmd) {
 	case VMMCI_NONE:
@@ -312,7 +320,7 @@ vmmci_ctl(unsigned int cmd)
 		vcpu_assert_irq(vmmci.vm_id, 0, vmmci.irq);
 
 		/* Add ACK timeout */
-		tv.tv_sec = VMMCI_TIMEOUT;
+		tv.tv_sec = VMMCI_TIMEOUT_SHORT;
 		evtimer_add(&vmmci.timeout, &tv);
 		break;
 	case VMMCI_SYNCRTC:
@@ -331,14 +339,22 @@ vmmci_ctl(unsigned int cmd)
 		fatalx("invalid vmmci command: %d", cmd);
 	}
 
-	return (0);
+unlock:
+	mutex_unlock(&vmmci.mutex);
+
+	return (ret);
 }
 
+/*
+ * vmmci_ack
+ *
+ * Process a write to the command register.
+ *
+ * Called by the vcpu thread. Must be called with the mutex held.
+ */
 void
 vmmci_ack(unsigned int cmd)
 {
-	struct timeval	 tv = { 0, 0 };
-
 	switch (cmd) {
 	case VMMCI_NONE:
 		break;
@@ -352,8 +368,7 @@ vmmci_ack(unsigned int cmd)
 		if (vmmci.cmd == 0) {
 			log_debug("%s: vm %u requested shutdown", __func__,
 			    vmmci.vm_id);
-			tv.tv_sec = VMMCI_TIMEOUT;
-			evtimer_add(&vmmci.timeout, &tv);
+			vm_pipe_send(&vmmci.dev_pipe, VMMCI_SET_TIMEOUT_SHORT);
 			return;
 		}
 		/* FALLTHROUGH */
@@ -365,12 +380,10 @@ vmmci_ack(unsigned int cmd)
 		 * rc.shutdown on the VM), so increase the timeout before
 		 * killing it forcefully.
 		 */
-		if (cmd == vmmci.cmd &&
-		    evtimer_pending(&vmmci.timeout, NULL)) {
+		if (cmd == vmmci.cmd) {
 			log_debug("%s: vm %u acknowledged shutdown request",
 			    __func__, vmmci.vm_id);
-			tv.tv_sec = VMMCI_SHUTDOWN_TIMEOUT;
-			evtimer_add(&vmmci.timeout, &tv);
+			vm_pipe_send(&vmmci.dev_pipe, VMMCI_SET_TIMEOUT_LONG);
 		}
 		break;
 	case VMMCI_SYNCRTC:
@@ -397,6 +410,7 @@ vmmci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 {
 	*intr = 0xFF;
 
+	mutex_lock(&vmmci.mutex);
 	if (dir == 0) {
 		switch (reg) {
 		case VIRTIO_CONFIG_DEVICE_FEATURES:
@@ -471,6 +485,8 @@ vmmci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 			break;
 		}
 	}
+	mutex_unlock(&vmmci.mutex);
+
 	return (0);
 }
 
@@ -487,6 +503,27 @@ virtio_get_base(int fd, char *path, size_t npath, int type, const char *dpath)
 	return -1;
 }
 
+static void
+vmmci_pipe_dispatch(int fd, short event, void *arg)
+{
+	enum pipe_msg_type msg;
+	struct timeval tv = { 0, 0 };
+
+	msg = vm_pipe_recv(&vmmci.dev_pipe);
+	switch (msg) {
+	case VMMCI_SET_TIMEOUT_SHORT:
+		tv.tv_sec = VMMCI_TIMEOUT_SHORT;
+		evtimer_add(&vmmci.timeout, &tv);
+		break;
+	case VMMCI_SET_TIMEOUT_LONG:
+		tv.tv_sec = VMMCI_TIMEOUT_LONG;
+		evtimer_add(&vmmci.timeout, &tv);
+		break;
+	default:
+		log_warnx("%s: invalid pipe message type %d", __func__, msg);
+	}
+}
+
 void
 virtio_init(struct vmd_vm *vm, int child_cdrom,
     int child_disks[][VM_MAX_BASE_PER_DISK], int *child_taps)
@@ -496,6 +533,7 @@ virtio_init(struct vmd_vm *vm, int child_cdrom,
 	struct virtio_dev *dev;
 	uint8_t id;
 	uint8_t i, j;
+	int ret = 0;
 
 	/* Virtio entropy device */
 	if (pci_add_device(&id, PCI_VENDOR_QUMRANET,
@@ -750,8 +788,15 @@ virtio_init(struct vmd_vm *vm, int child_cdrom,
 	vmmci.vm_id = vcp->vcp_id;
 	vmmci.irq = pci_get_dev_irq(id);
 	vmmci.pci_id = id;
+	ret = pthread_mutex_init(&vmmci.mutex, NULL);
+	if (ret) {
+		errno = ret;
+		fatal("could not initialize vmmci mutex");
+	}
 
 	evtimer_set(&vmmci.timeout, vmmci_timeout, NULL);
+	vm_pipe_init(&vmmci.dev_pipe, vmmci_pipe_dispatch);
+	event_add(&vmmci.dev_pipe.read_ev, NULL);
 }
 
 /*
@@ -825,8 +870,8 @@ virtio_shutdown(struct vmd_vm *vm)
 		if (ret == -1)
 			fatalx("%s: failed to send shutdown to device",
 			    __func__);
-		if (imsg_flush(ibuf) == -1)
-			fatalx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1)
+			fatalx("%s: imsgbuf_flush", __func__);
 	}
 
 	/*
@@ -1132,8 +1177,8 @@ vionet_dump(int fd)
 			    __func__, dev->vionet.idx);
 			return (-1);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush", __func__);
 			return (-1);
 		}
 
@@ -1190,8 +1235,8 @@ vioblk_dump(int fd)
 			    __func__, dev->vioblk.idx);
 			return (-1);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush", __func__);
 			return (-1);
 		}
 
@@ -1301,7 +1346,7 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 	char *nargv[12], num[32], vmm_fd[32], vm_name[VM_NAME_MAX], t[2];
 	pid_t dev_pid;
 	int sync_fds[2], async_fds[2], ret = 0;
-	size_t sz = 0;
+	size_t i, sz = 0;
 	struct viodev_msg msg;
 	struct virtio_dev *dev_entry;
 	struct imsg imsg;
@@ -1386,10 +1431,12 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		 * communication will be synchronous. We expect the child to
 		 * report itself "ready" to confirm the launch was a success.
 		 */
-		imsg_init(&iev->ibuf, sync_fds[0]);
-		do
-			ret = imsg_read(&iev->ibuf);
-		while (ret == -1 && errno == EAGAIN);
+		if (imsgbuf_init(&iev->ibuf, sync_fds[0]) == -1) {
+			log_warn("%s: failed to init imsgbuf", __func__);
+			goto err;
+		}
+		imsgbuf_allow_fdpass(&iev->ibuf);
+		ret = imsgbuf_read_one(&iev->ibuf, &imsg);
 		if (ret == 0 || ret == -1) {
 			log_warnx("%s: failed to receive ready message from "
 			    "'%c' type device", __func__, dev->dev_type);
@@ -1398,12 +1445,6 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		}
 		ret = 0;
 
-		log_debug("%s: receiving reply", __func__);
-		if (imsg_get(&iev->ibuf, &imsg) < 1) {
-			log_warnx("%s: imsg_get", __func__);
-			ret = EIO;
-			goto err;
-		}
 		IMSG_SIZE_CHECK(&imsg, &msg);
 		memcpy(&msg, imsg.data, sizeof(msg));
 		imsg_free(&imsg);
@@ -1446,7 +1487,6 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 				fatalx("unable to close other virtio devs");
 		}
 
-		memset(&nargv, 0, sizeof(nargv));
 		memset(num, 0, sizeof(num));
 		snprintf(num, sizeof(num), "%d", sync_fds[1]);
 		memset(vmm_fd, 0, sizeof(vmm_fd));
@@ -1458,25 +1498,25 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		t[0] = dev->dev_type;
 		t[1] = '\0';
 
-		nargv[0] = env->argv0;
-		nargv[1] = "-X";
-		nargv[2] = num;
-		nargv[3] = "-t";
-		nargv[4] = t;
-		nargv[5] = "-i";
-		nargv[6] = vmm_fd;
-		nargv[7] = "-p";
-		nargv[8] = vm_name;
-		nargv[9] = "-n";
-		nargv[10] = NULL;
-
-		if (env->vmd_verbose == 1) {
-			nargv[10] = VMD_VERBOSE_1;
-			nargv[11] = NULL;
-		} else if (env->vmd_verbose > 1) {
-			nargv[10] = VMD_VERBOSE_2;
-			nargv[11] = NULL;
-		}
+		i = 0;
+		nargv[i++] = env->argv0;
+		nargv[i++] = "-X";
+		nargv[i++] = num;
+		nargv[i++] = "-t";
+		nargv[i++] = t;
+		nargv[i++] = "-i";
+		nargv[i++] = vmm_fd;
+		nargv[i++] = "-p";
+		nargv[i++] = vm_name;
+		if (env->vmd_debug)
+			nargv[i++] = "-d";
+		if (env->vmd_verbose == 1)
+			nargv[i++] = "-v";
+		else if (env->vmd_verbose > 1)
+			nargv[i++] = "-vv";
+		nargv[i++] = NULL;
+		if (i > sizeof(nargv) / sizeof(nargv[0]))
+			fatalx("%s: nargv overflow", __func__);
 
 		/* Control resumes in vmd.c:main(). */
 		execvp(nargv[0], nargv);
@@ -1510,7 +1550,9 @@ vm_device_pipe(struct virtio_dev *dev, void (*cb)(int, short, void *),
 	log_debug("%s: initializing '%c' device pipe (fd=%d)", __func__,
 	    dev->dev_type, fd);
 
-	imsg_init(&iev->ibuf, fd);
+	if (imsgbuf_init(&iev->ibuf, fd) == -1)
+		fatal("imsgbuf_init");
+	imsgbuf_allow_fdpass(&iev->ibuf);
 	iev->handler = cb;
 	iev->data = dev;
 	iev->events = EV_READ;
@@ -1530,8 +1572,8 @@ virtio_dispatch_dev(int fd, short event, void *arg)
 	ssize_t			 n = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("%s: imsg_read", __func__);
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("%s: imsgbuf_read", __func__);
 		if (n == 0) {
 			/* this pipe is dead, so remove the event handler */
 			log_debug("%s: pipe dead (EV_READ)", __func__);
@@ -1542,14 +1584,15 @@ virtio_dispatch_dev(int fd, short event, void *arg)
 	}
 
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("%s: msgbuf_write", __func__);
-		if (n == 0) {
-			/* this pipe is dead, so remove the event handler */
-			log_debug("%s: pipe dead (EV_WRITE)", __func__);
-			event_del(&iev->ev);
-			event_loopexit(NULL);
-			return;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE) {
+				/* this pipe is dead, remove the handler */
+				log_debug("%s: pipe dead (EV_WRITE)", __func__);
+				event_del(&iev->ev);
+				event_loopexit(NULL);
+				return;
+			}
+			fatal("%s: imsgbuf_write", __func__);
 		}
 	}
 
@@ -1624,7 +1667,6 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 	struct imsgbuf *ibuf = &dev->sync_iev.ibuf;
 	struct imsg imsg;
 	struct viodev_msg msg;
-	ssize_t n;
 	int ret = 0;
 
 	memset(&msg, 0, sizeof(msg));
@@ -1649,8 +1691,8 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 			    " device", __func__);
 			return (ret);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush (write)", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush (write)", __func__);
 			return (-1);
 		}
 	} else {
@@ -1664,28 +1706,17 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 			    " device", __func__);
 			return (ret);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush (read)", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush (read)", __func__);
 			return (-1);
 		}
 
 		/* Read our reply. */
-		do
-			n = imsg_read(ibuf);
-		while (n == -1 && errno == EAGAIN);
-		if (n == 0 || n == -1) {
-			log_warn("%s: imsg_read (n=%ld)", __func__, n);
+		ret = imsgbuf_read_one(ibuf, &imsg);
+		if (ret == 0 || ret == -1) {
+			log_warn("%s: imsgbuf_read (n=%d)", __func__, ret);
 			return (-1);
 		}
-		if ((n = imsg_get(ibuf, &imsg)) == -1) {
-			log_warn("%s: imsg_get (n=%ld)", __func__, n);
-			return (-1);
-		}
-		if (n == 0) {
-			log_warnx("%s: invalid imsg", __func__);
-			return (-1);
-		}
-
 		IMSG_SIZE_CHECK(&imsg, &msg);
 		memcpy(&msg, imsg.data, sizeof(msg));
 		imsg_free(&imsg);

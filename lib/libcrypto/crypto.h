@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto.h,v 1.74 2024/04/10 15:13:23 beck Exp $ */
+/* $OpenBSD: crypto.h,v 1.77 2025/01/20 17:50:12 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -182,7 +182,7 @@ extern "C" {
 #define CRYPTO_LOCK_ECDSA               32
 #define CRYPTO_LOCK_EC			33
 #define CRYPTO_LOCK_ECDH		34
-#define CRYPTO_LOCK_BN  		35
+#define CRYPTO_LOCK_BN			35
 #define CRYPTO_LOCK_EC_PRE_COMP		36
 #define CRYPTO_LOCK_STORE		37
 #define CRYPTO_LOCK_COMP		38
@@ -373,8 +373,6 @@ __attribute__((__noreturn__))
 void OpenSSLDie(const char *file, int line, const char *assertion);
 #define OPENSSL_assert(e)       (void)((e) ? 0 : (OpenSSLDie(__FILE__, __LINE__, #e),1))
 
-uint64_t OPENSSL_cpu_caps(void);
-
 int FIPS_mode(void);
 int FIPS_mode_set(int r);
 
@@ -418,9 +416,17 @@ int CRYPTO_memcmp(const void *a, const void *b, size_t len);
 #define OPENSSL_INIT_reserved_internal		_OPENSSL_INIT_FLAG_NOOP
 #define OPENSSL_INIT_ATFORK			_OPENSSL_INIT_FLAG_NOOP
 #define OPENSSL_INIT_ENGINE_ALL_BUILTIN		_OPENSSL_INIT_FLAG_NOOP
+#define OPENSSL_INIT_NO_ATEXIT			_OPENSSL_INIT_FLAG_NOOP
 
 int OPENSSL_init_crypto(uint64_t opts, const void *settings);
 void OPENSSL_cleanup(void);
+
+/*
+ * CPU capabilities.
+ */
+#define	CRYPTO_CPU_CAPS_ACCELERATED_AES		0x00000001ULL
+
+uint64_t OPENSSL_cpu_caps(void);
 
 /*
  * OpenSSL helpfully put OPENSSL_gmtime() here because all other time related

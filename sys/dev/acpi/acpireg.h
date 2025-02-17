@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpireg.h,v 1.60 2023/09/12 08:32:58 jmatthew Exp $	*/
+/*	$OpenBSD: acpireg.h,v 1.62 2025/02/02 15:52:20 patrick Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Marco Peereboom <marco@openbsd.org>
@@ -477,6 +477,30 @@ struct acpi_tpm2 {
 } __packed;
 
 /*
+ * Intel ACPI Low Power S0 Idle
+ */
+struct acpi_lpit {
+	struct acpi_table_header	hdr;
+#define LPIT_SIG	"LPIT"
+	/* struct acpi_lpit_entry[]; */
+} __packed;
+
+struct acpi_lpit_entry {
+	uint32_t	type;
+	uint32_t	length;
+	uint16_t	uid;
+	uint16_t	reserved;
+	uint32_t	flags;
+#define LPIT_DISABLED			(1L << 0)
+#define LPIT_COUNTER_NOT_AVAILABLE	(1L << 1)
+	struct acpi_gas	entry_trigger;
+	uint32_t	residency;
+	uint32_t	latency;
+	struct acpi_gas	residency_counter;
+	uint64_t	residency_frequency;
+};
+
+/*
  * Intel ACPI DMA Remapping Entries
  */
 struct acpidmar_devpath {
@@ -774,6 +798,27 @@ struct acpi_iort_smmu_context_interrupt {
 struct acpi_iort_smmu_pmu_interrupt {
 	uint32_t	gsiv;
 	uint32_t	flags;
+} __packed;
+
+struct acpi_iort_smmu_v3_node {
+	uint64_t	base_address;
+	uint32_t	flags;
+#define ACPI_IORT_SMMU_V3_COHACC_OVERRIDE(x)	(((x) >> 0) & 0x1)
+#define ACPI_IORT_SMMU_V3_HTTU_OVERRIDE(x)	(((x) >> 1) & 0x3)
+#define ACPI_IORT_SMMU_V3_PROX_DOM_VALID	(1 << 3)
+#define ACPI_IORT_SMMU_V3_DEVID_MAP_VALID	(1 << 4)
+	uint32_t	reserved;
+	uint64_t	vatos_address;
+	uint32_t	model;
+#define ACPI_IORT_SMMU_V3_GENERIC		0
+#define ACPI_IORT_SMMU_V3_HISILICON_HI161X	1
+#define ACPI_IORT_SMMU_V3_CAVIUM_CN99X		2
+	uint32_t	event;
+	uint32_t	pri;
+	uint32_t	gerr;
+	uint32_t	sync;
+	uint32_t	proximity_domain;
+	uint32_t	deviceid_mapping_index;
 } __packed;
 
 struct acpi_iort_mapping {

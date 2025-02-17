@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.24 2024/07/11 10:48:51 florian Exp $	*/
+/*	$OpenBSD: engine.c,v 1.31 2024/12/24 17:40:06 florian Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021, 2024 Florian Obser <florian@openbsd.org>
@@ -135,6 +135,7 @@ void			 request_dhcp_discover(struct dhcp6leased_iface *);
 void			 request_dhcp_request(struct dhcp6leased_iface *);
 void			 configure_interfaces(struct dhcp6leased_iface *);
 void			 deconfigure_interfaces(struct dhcp6leased_iface *);
+void			 deprecate_interfaces(struct dhcp6leased_iface *);
 int			 prefixcmp(struct prefix *, struct prefix *, int);
 void			 send_reconfigure_interface(struct iface_pd_conf *,
 			     struct prefix *, enum reconfigure_action);
@@ -215,7 +216,9 @@ engine(int debug, int verbose)
 	if ((iev_main = malloc(sizeof(struct imsgev))) == NULL)
 		fatal(NULL);
 
-	imsg_init(&iev_main->ibuf, 3);
+	if (imsgbuf_init(&iev_main->ibuf, 3) == -1)
+		fatal(NULL);
+	imsgbuf_allow_fdpass(&iev_main->ibuf);
 	iev_main->handler = engine_dispatch_main;
 
 	/* Setup event handlers. */
@@ -235,9 +238,9 @@ __dead void
 engine_shutdown(void)
 {
 	/* Close pipes. */
-	msgbuf_clear(&iev_frontend->ibuf.w);
+	imsgbuf_clear(&iev_frontend->ibuf);
 	close(iev_frontend->ibuf.fd);
-	msgbuf_clear(&iev_main->ibuf.w);
+	imsgbuf_clear(&iev_main->ibuf);
 	close(iev_main->ibuf.fd);
 
 	free(iev_frontend);
@@ -276,16 +279,18 @@ engine_dispatch_frontend(int fd, short event, void *bula)
 	uint32_t			 if_index;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* Connection closed. */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* Connection closed. */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -383,16 +388,18 @@ engine_dispatch_main(int fd, short event, void *bula)
 	int				 shut = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* Connection closed. */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* Connection closed. */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -419,7 +426,8 @@ engine_dispatch_main(int fd, short event, void *bula)
 			if (iev_frontend == NULL)
 				fatal(NULL);
 
-			imsg_init(&iev_frontend->ibuf, fd);
+			if (imsgbuf_init(&iev_frontend->ibuf, fd) == -1)
+				fatal(NULL);
 			iev_frontend->handler = engine_dispatch_frontend;
 			iev_frontend->events = EV_READ;
 
@@ -1042,8 +1050,19 @@ state_transition(struct dhcp6leased_iface *iface, enum if_state new_state)
 
 	switch (new_state) {
 	case IF_DOWN:
+		switch (old_state) {
+		case IF_RENEWING:
+		case IF_REBINDING:
+		case IF_REBOOTING:
+		case IF_BOUND:
+			deprecate_interfaces(iface);
+			break;
+		default:
+			break;
+		}
 		/*
-		 * Nothing to do until iface comes up. IP addresses will expire.
+		 * Nothing else to do until iface comes up.
+		 * IP addresses will expire.
 		 */
 		iface->timo.tv_sec = -1;
 		break;
@@ -1378,6 +1397,58 @@ deconfigure_interfaces(struct dhcp6leased_iface *iface)
 		}
 	}
 	memset(iface->pds, 0, sizeof(iface->pds));
+}
+
+void
+deprecate_interfaces(struct dhcp6leased_iface *iface)
+{
+	struct iface_conf	*iface_conf;
+	struct iface_ia_conf	*ia_conf;
+	struct iface_pd_conf	*pd_conf;
+	struct timespec		 now, diff;
+	uint32_t	 	 i;
+	char		 	 ntopbuf[INET6_ADDRSTRLEN];
+	char			 ifnamebuf[IF_NAMESIZE], *if_name;
+
+
+	if ((if_name = if_indextoname(iface->if_index, ifnamebuf)) == NULL) {
+		log_debug("%s: unknown interface %d", __func__,
+		    iface->if_index);
+		return;
+	}
+	if ((iface_conf = find_iface_conf(&engine_conf->iface_list, if_name))
+	    == NULL) {
+		log_debug("%s: no interface configuration for %d", __func__,
+		    iface->if_index);
+		return;
+	}
+
+	for (i = 0; i < iface_conf->ia_count; i++) {
+		struct prefix *pd = &iface->pds[i];
+
+		log_info("%s went down, deprecating prefix delegation #%d %s/%d"
+		    " from server %s", if_name, i, inet_ntop(AF_INET6,
+		    &pd->prefix, ntopbuf, INET6_ADDRSTRLEN), pd->prefix_len,
+		    dhcp_duid2str(iface->serverid_len, iface->serverid));
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	timespecsub(&now, &iface->request_time, &diff);
+
+	SIMPLEQ_FOREACH(ia_conf, &iface_conf->iface_ia_list, entry) {
+		struct prefix	*pd = &iface->pds[ia_conf->id];
+
+		if (pd->vltime > diff.tv_sec)
+			pd->vltime -= diff.tv_sec;
+		else
+			pd->vltime = 0;
+
+		pd->pltime = 0;
+
+		SIMPLEQ_FOREACH(pd_conf, &ia_conf->iface_pd_list, entry) {
+			send_reconfigure_interface(pd_conf, pd, CONFIGURE);
+		}
+	}
 }
 
 int

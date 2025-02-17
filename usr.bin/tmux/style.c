@@ -1,4 +1,4 @@
-/* $OpenBSD: style.c,v 1.34 2024/01/22 16:34:46 nicm Exp $ */
+/* $OpenBSD: style.c,v 1.36 2024/11/15 13:12:20 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -39,6 +39,8 @@ static struct style style_default = {
 
 	STYLE_RANGE_NONE, 0, "",
 
+	STYLE_WIDTH_DEFAULT, STYLE_PAD_DEFAULT,
+
 	STYLE_DEFAULT_BASE
 };
 
@@ -58,10 +60,11 @@ int
 style_parse(struct style *sy, const struct grid_cell *base, const char *in)
 {
 	struct style	saved;
-	const char	delimiters[] = " ,\n", *cp;
+	const char	delimiters[] = " ,\n", *errstr;
 	char		tmp[256], *found;
 	int		value;
 	size_t		end;
+	u_int		n;
 
 	if (*in == '\0')
 		return (0);
@@ -137,34 +140,31 @@ style_parse(struct style *sy, const struct grid_cell *base, const char *in)
 					goto error;
 				if (*found != '%' || found[1] == '\0')
 					goto error;
-				for (cp = found + 1; *cp != '\0'; cp++) {
-					if (!isdigit((u_char)*cp))
-						goto error;
-				}
+				n = strtonum(found + 1, 0, UINT_MAX, &errstr);
+				if (errstr != NULL)
+					goto error;
 				sy->range_type = STYLE_RANGE_PANE;
-				sy->range_argument = atoi(found + 1);
+				sy->range_argument = n;
 				style_set_range_string(sy, "");
 			} else if (strcasecmp(tmp + 6, "window") == 0) {
 				if (found == NULL)
 					goto error;
-				for (cp = found; *cp != '\0'; cp++) {
-					if (!isdigit((u_char)*cp))
-						goto error;
-				}
+				n = strtonum(found, 0, UINT_MAX, &errstr);
+				if (errstr != NULL)
+					goto error;
 				sy->range_type = STYLE_RANGE_WINDOW;
-				sy->range_argument = atoi(found);
+				sy->range_argument = n;
 				style_set_range_string(sy, "");
 			} else if (strcasecmp(tmp + 6, "session") == 0) {
 				if (found == NULL)
 					goto error;
 				if (*found != '$' || found[1] == '\0')
 					goto error;
-				for (cp = found + 1; *cp != '\0'; cp++) {
-					if (!isdigit((u_char)*cp))
-						goto error;
-				}
+				n = strtonum(found + 1, 0, UINT_MAX, &errstr);
+				if (errstr != NULL)
+					goto error;
 				sy->range_type = STYLE_RANGE_SESSION;
-				sy->range_argument = atoi(found + 1);
+				sy->range_argument = n;
 				style_set_range_string(sy, "");
 			} else if (strcasecmp(tmp + 6, "user") == 0) {
 				if (found == NULL)
@@ -218,6 +218,16 @@ style_parse(struct style *sy, const struct grid_cell *base, const char *in)
 			if ((value = attributes_fromstring(tmp + 2)) == -1)
 				goto error;
 			sy->gc.attr &= ~value;
+		} else if (end > 6 && strncasecmp(tmp, "width=", 6) == 0) {
+                        n = strtonum(tmp + 6, 0, UINT_MAX, &errstr);
+                        if (errstr != NULL)
+                                goto error;
+                        sy->width = (int)n;
+		} else if (end > 4 && strncasecmp(tmp, "pad=", 4) == 0) {
+                        n = strtonum(tmp + 4, 0, UINT_MAX, &errstr);
+                        if (errstr != NULL)
+                                goto error;
+                        sy->pad = (int)n;
 		} else {
 			if ((value = attributes_fromstring(tmp)) == -1)
 				goto error;
@@ -328,7 +338,16 @@ style_tostring(struct style *sy)
 		    attributes_tostring(gc->attr));
 		comma = ",";
 	}
-
+        if (sy->width >= 0) {
+                xsnprintf(s + off, sizeof s - off, "%swidth=%u", comma,
+		    sy->width);
+		comma = ",";
+	}
+        if (sy->pad >= 0) {
+                xsnprintf(s + off, sizeof s - off, "%spad=%u", comma,
+		    sy->pad);
+		comma = ",";
+	}
 	if (*s == '\0')
 		return ("default");
 	return (s);
@@ -382,4 +401,25 @@ void
 style_copy(struct style *dst, struct style *src)
 {
 	memcpy(dst, src, sizeof *dst);
+}
+
+void
+style_set_scrollbar_style_from_option(struct style *sb_style, struct options *oo)
+{
+	struct style	*sy;
+
+	sy = options_string_to_style(oo, "pane-scrollbars-style", NULL);
+	if (sy == NULL) {
+		style_set(sb_style, &grid_default_cell);
+		sb_style->width = PANE_SCROLLBARS_DEFAULT_WIDTH;
+		sb_style->pad = PANE_SCROLLBARS_DEFAULT_PADDING;
+		utf8_set(&sb_style->gc.data, PANE_SCROLLBARS_CHARACTER);
+	} else {
+		style_copy(sb_style, sy);
+		if (sb_style->width < 1)
+			sb_style->width = PANE_SCROLLBARS_DEFAULT_WIDTH;
+		if (sb_style->pad < 0)
+			sb_style->pad = PANE_SCROLLBARS_DEFAULT_PADDING;
+		utf8_set(&sb_style->gc.data, PANE_SCROLLBARS_CHARACTER);
+	}
 }

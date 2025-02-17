@@ -1,4 +1,4 @@
-/*	$OpenBSD: mkswap.c,v 1.19 2021/11/28 19:26:03 deraadt Exp $	*/
+/*	$OpenBSD: mkswap.c,v 1.21 2024/10/30 07:28:17 jsg Exp $	*/
 /*	$NetBSD: mkswap.c,v 1.5 1996/08/31 20:58:27 mycroft Exp $	*/
 
 /*
@@ -97,7 +97,6 @@ mkoneswap(struct config *cf)
 	}
 	if (fputs("\
 #include <sys/param.h>\n\
-#include <sys/conf.h>\n\
 #include <sys/systm.h>\n\n", fp) == EOF)
 		goto wrerror;
 	nv = cf->cf_root;
@@ -108,13 +107,13 @@ mkoneswap(struct config *cf)
 	if (fprintf(fp, "dev_t\tdumpdev = %s;\t/* %s */\n",
 	    mkdevstr(nv->nv_int), nv->nv_str) < 0)
 		goto wrerror;
-	if (fputs("\nstruct\tswdevt swdevt[] = {\n", fp) == EOF)
+	if (fputs("\ndev_t\tswdevt[] = {\n", fp) == EOF)
 		goto wrerror;
 	for (nv = cf->cf_swap; nv != NULL; nv = nv->nv_next)
-		if (fprintf(fp, "\t{ %s,\t0 },\t/* %s */\n",
+		if (fprintf(fp, "\t%s,\t/* %s */\n",
 		    mkdevstr(nv->nv_int), nv->nv_str) < 0)
 			goto wrerror;
-	if (fputs("\t{ NODEV, 0 }\n};\n\n", fp) == EOF)
+	if (fputs("\tNODEV\n};\n\n", fp) == EOF)
 		goto wrerror;
 	mountroot =
 	    cf->cf_root->nv_str == s_nfs ? "nfs_mountroot" : "dk_mountroot";

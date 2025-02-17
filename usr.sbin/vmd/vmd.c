@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.159 2024/07/10 09:27:33 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.163 2024/11/06 14:26:20 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -18,7 +18,6 @@
 
 #include <sys/types.h>
 #include <sys/queue.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/tty.h>
@@ -28,7 +27,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <errno.h>
 #include <event.h>
 #include <fcntl.h>
@@ -661,7 +659,7 @@ main(int argc, char **argv)
 	int			 ch;
 	enum privsep_procid	 proc_id = PROC_PARENT;
 	int			 proc_instance = 0, vm_launch = 0;
-	int			 vmm_fd = -1, vm_fd = -1;
+	int			 vmm_fd = -1, vm_fd = -1, psp_fd = -1;
 	const char		*errp, *title = NULL;
 	int			 argc0 = argc;
 	char			 dev_type = '\0';
@@ -673,7 +671,7 @@ main(int argc, char **argv)
 	env->vmd_fd = -1;
 	env->vmd_fd6 = -1;
 
-	while ((ch = getopt(argc, argv, "D:P:I:V:X:df:i:nt:vp:")) != -1) {
+	while ((ch = getopt(argc, argv, "D:P:I:V:X:df:i:j:nt:vp:")) != -1) {
 		switch (ch) {
 		case 'D':
 			if (cmdline_symset(optarg) < 0)
@@ -735,6 +733,12 @@ main(int argc, char **argv)
 			if (errp)
 				fatalx("invalid vmm fd");
 			break;
+		case 'j':
+			/* -1 means no PSP available */
+			psp_fd = strtonum(optarg, -1, 128, &errp);
+			if (errp)
+				fatalx("invalid psp fd");
+			break;
 		default:
 			usage();
 		}
@@ -763,6 +767,7 @@ main(int argc, char **argv)
 
 	ps = &env->vmd_ps;
 	ps->ps_env = env;
+	env->vmd_psp_fd = psp_fd;
 
 	if (config_init(env) == -1)
 		fatal("failed to initialize configuration");
@@ -836,6 +841,12 @@ main(int argc, char **argv)
 
 	if (!env->vmd_noaction)
 		proc_connect(ps);
+
+	env->vmd_psp_fd = -1;
+#ifdef __amd64__
+	if (env->vmd_noaction == 0 && proc_id == PROC_PARENT)
+		psp_setup();
+#endif
 
 	if (vmd_configure() == -1)
 		fatalx("configuration failed");
@@ -916,6 +927,12 @@ vmd_configure(void)
 	/* Send VMM device fd to vmm proc. */
 	proc_compose_imsg(&env->vmd_ps, PROC_VMM, -1,
 	    IMSG_VMDOP_RECEIVE_VMM_FD, -1, env->vmd_fd, NULL, 0);
+
+	/* Send PSP device fd to vmm proc. */
+	if (env->vmd_psp_fd != -1) {
+		proc_compose_imsg(&env->vmd_ps, PROC_VMM, -1,
+		    IMSG_VMDOP_RECEIVE_PSP_FD, -1, env->vmd_psp_fd, NULL, 0);
+	}
 
 	/* Send shared global configuration to all children */
 	if (config_setconfig(env) == -1)

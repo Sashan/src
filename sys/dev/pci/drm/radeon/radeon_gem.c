@@ -26,6 +26,7 @@
  *          Jerome Glisse
  */
 
+#include <linux/debugfs.h>
 #include <linux/iosys-map.h>
 #include <linux/pci.h>
 
@@ -42,8 +43,6 @@ struct dma_buf *radeon_gem_prime_export(struct drm_gem_object *gobj,
 struct sg_table *radeon_gem_prime_get_sg_table(struct drm_gem_object *obj);
 int radeon_gem_prime_pin(struct drm_gem_object *obj);
 void radeon_gem_prime_unpin(struct drm_gem_object *obj);
-
-const struct drm_gem_object_funcs radeon_gem_object_funcs;
 
 #ifdef __linux__
 static vm_fault_t radeon_gem_fault(struct vm_fault *vmf)
@@ -115,13 +114,13 @@ unlock_resv:
 unlock_mclk:
 	switch (ret) {
 	case VM_FAULT_NOPAGE:
-		ret = VM_PAGER_OK;
+		ret = 0;
 		break;
 	case VM_FAULT_RETRY:
-		ret = VM_PAGER_REFAULT;
+		ret = ERESTART;
 		break;
 	default:
-		ret = VM_PAGER_BAD;
+		ret = EACCES;
 		break;
 	}
 	up_read(&rdev->pm.mclk_lock);
@@ -158,7 +157,7 @@ static void radeon_gem_object_free(struct drm_gem_object *gobj)
 
 	if (robj) {
 		radeon_mn_unregister(robj);
-		radeon_bo_unref(&robj);
+		ttm_bo_put(&robj->tbo);
 	}
 }
 
@@ -202,7 +201,6 @@ retry:
 		return r;
 	}
 	*obj = &robj->tbo.base;
-	(*obj)->funcs = &radeon_gem_object_funcs;
 #ifdef __linux__
 	robj->pid = task_pid_nr(current);
 #else
@@ -991,7 +989,7 @@ DEFINE_SHOW_ATTRIBUTE(radeon_debugfs_gem_info);
 void radeon_gem_debugfs_init(struct radeon_device *rdev)
 {
 #if defined(CONFIG_DEBUG_FS)
-	struct dentry *root = rdev->ddev->primary->debugfs_root;
+	struct dentry *root = rdev_to_drm(rdev)->primary->debugfs_root;
 
 	debugfs_create_file("radeon_gem_info", 0444, root, rdev,
 			    &radeon_debugfs_gem_info_fops);

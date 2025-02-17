@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.175 2024/07/21 19:41:31 bluhm Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.179 2024/10/22 10:14:49 jsg Exp $	*/
 /*	$NetBSD: cpu.h,v 1.1 2003/04/26 18:39:39 fvdl Exp $	*/
 
 /*-
@@ -73,8 +73,8 @@ struct vmx {
 	uint32_t	vmx_vmxon_revision;
 	uint32_t	vmx_msr_table_size;
 	uint32_t	vmx_cr3_tgt_count;
-	uint64_t	vmx_vm_func;
 	uint8_t		vmx_has_l1_flush_msr;
+	uint64_t	vmx_invept_mode;
 };
 
 /*
@@ -237,12 +237,12 @@ struct cpu_info {
 	union		vmm_cpu_cap ci_vmm_cap;
 	paddr_t		ci_vmxon_region_pa;
 	struct vmxon_region *ci_vmxon_region;
-	struct vcpu	*ci_guest_vcpu;		/* [o] last vcpu resumed */
-
-	char		ci_panicbuf[512];
-
 	paddr_t		ci_vmcs_pa;
 	struct rwlock	ci_vmcs_lock;
+	struct pmap		*ci_ept_pmap;	/* [o] last used EPT pmap */
+	struct vcpu		*ci_guest_vcpu;	/* [o] last vcpu resumed */
+
+	char		ci_panicbuf[512];
 
 	struct clockqueue ci_queue;
 };
@@ -415,13 +415,13 @@ void	x86_print_cacheinfo(struct cpu_info *);
 void	identifycpu(struct cpu_info *);
 int	cpu_amd64speed(int *);
 extern int cpuspeed;
+extern int amd64_pos_cbit;
 
 /* machdep.c */
 void	dumpconf(void);
 void	cpu_set_vendor(struct cpu_info *, int _level, const char *_vendor);
 void	cpu_reset(void);
 void	x86_64_proc0_tss_ldt_init(void);
-void	cpu_proc_fork(struct proc *, struct proc *);
 int	amd64_pa_used(paddr_t);
 #define	cpu_idle_enter()	do { /* nothing */ } while (0)
 extern void (*cpu_idle_cycle_fcn)(void);

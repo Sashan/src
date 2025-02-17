@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_subr.c,v 1.201 2024/04/17 20:48:51 bluhm Exp $	*/
+/*	$OpenBSD: tcp_subr.c,v 1.208 2025/02/12 21:28:11 bluhm Exp $	*/
 /*	$NetBSD: tcp_subr.c,v 1.22 1996/02/13 23:44:00 christos Exp $	*/
 
 /*
@@ -184,9 +184,6 @@ tcp_init(void)
 
 	/* Initialize the compressed state engine. */
 	syn_cache_init();
-
-	/* Initialize timer state. */
-	tcp_timer_init();
 }
 
 /*
@@ -311,7 +308,7 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 
 	if (tp) {
 		struct socket *so = tp->t_inpcb->inp_socket;
-		win = sbspace(so, &so->so_rcv);
+		win = sbspace(&so->so_rcv);
 		/*
 		 * If this is called with an unconnected
 		 * socket/tp/pcb (tp->pf is 0), we lose.
@@ -334,11 +331,11 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 		th = (struct tcphdr *)(ip6 + 1);
 		tlen = sizeof(*ip6) + sizeof(*th);
 		if (th0) {
-			bcopy(template, ip6, sizeof(*ip6));
-			bcopy(th0, th, sizeof(*th));
+			memcpy(ip6, template, sizeof(*ip6));
+			memcpy(th, th0, sizeof(*th));
 			xchg(ip6->ip6_dst, ip6->ip6_src, struct in6_addr);
 		} else {
-			bcopy(template, ip6, tlen);
+			memcpy(ip6, template, tlen);
 		}
 		break;
 #endif /* INET6 */
@@ -347,11 +344,11 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 		th = (struct tcphdr *)(ip + 1);
 		tlen = sizeof(*ip) + sizeof(*th);
 		if (th0) {
-			bcopy(template, ip, sizeof(*ip));
-			bcopy(th0, th, sizeof(*th));
+			memcpy(ip, template, sizeof(*ip));
+			memcpy(th, th0, sizeof(*th));
 			xchg(ip->ip_dst.s_addr, ip->ip_src.s_addr, u_int32_t);
 		} else {
-			bcopy(template, ip, tlen);
+			memcpy(ip, template, tlen);
 		}
 		break;
 	}
@@ -437,15 +434,18 @@ tcp_newtcpcb(struct inpcb *inp, int wait)
 	if (tp == NULL)
 		return (NULL);
 	TAILQ_INIT(&tp->t_segq);
-	tp->t_maxseg = tcp_mssdflt;
+	tp->t_maxseg = atomic_load_int(&tcp_mssdflt);
 	tp->t_maxopd = 0;
 
+	tp->t_inpcb = inp;
 	for (i = 0; i < TCPT_NTIMERS; i++)
 		TCP_TIMER_INIT(tp, i);
+	timeout_set_flags(&tp->t_timer_reaper, tcp_timer_reaper, tp,
+	    KCLOCK_NONE, TIMEOUT_PROC | TIMEOUT_MPSAFE);
 
-	tp->sack_enable = tcp_do_sack;
-	tp->t_flags = tcp_do_rfc1323 ? (TF_REQ_SCALE|TF_REQ_TSTMP) : 0;
-	tp->t_inpcb = inp;
+	tp->sack_enable = atomic_load_int(&tcp_do_sack);
+	tp->t_flags = atomic_load_int(&tcp_do_rfc1323) ?
+	    (TF_REQ_SCALE|TF_REQ_TSTMP) : 0;
 	/*
 	 * Init srtt to TCPTV_SRTTBASE (0), so we can tell that we have no
 	 * rtt estimate.  Set rttvar so that srtt + 2 * rttvar gives
@@ -529,11 +529,11 @@ tcp_close(struct tcpcb *tp)
 
 	m_free(tp->t_template);
 	/* Free tcpcb after all pending timers have been run. */
-	TCP_TIMER_ARM(tp, TCPT_REAPER, 1);
-
+	timeout_add(&tp->t_timer_reaper, 0);
 	inp->inp_ppcb = NULL;
 	soisdisconnected(so);
 	in_pcbdetach(inp);
+	tcpstat_inc(tcps_closed);
 	return (NULL);
 }
 
@@ -576,6 +576,8 @@ tcp_notify(struct inpcb *inp, int error)
 	struct tcpcb *tp = intotcpcb(inp);
 	struct socket *so = inp->inp_socket;
 
+	soassertlocked(so);
+
 	/*
 	 * Ignore some errors if we are hooked up.
 	 * If connection hasn't completed, has retransmitted several times,
@@ -602,12 +604,10 @@ void
 tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 {
 	struct tcphdr th;
-	struct tcpcb *tp;
 	void (*notify)(struct inpcb *, int) = tcp_notify;
 	struct ip6_hdr *ip6;
 	const struct sockaddr_in6 *sa6_src = NULL;
 	struct sockaddr_in6 *sa6 = satosin6(sa);
-	struct inpcb *inp;
 	struct mbuf *m;
 	tcp_seq seq;
 	int off;
@@ -633,7 +633,7 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		/* XXX there's no PRC_QUENCH in IPv6 */
 		return;
 	} else if (PRC_IS_REDIRECT(cmd))
-		notify = in_rtchange, d = NULL;
+		notify = in_pcbrtchange, d = NULL;
 	else if (cmd == PRC_MSGSIZE)
 		; /* special code is present, see below */
 	else if (cmd == PRC_HOSTDEAD)
@@ -655,6 +655,10 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 	}
 
 	if (ip6) {
+		struct inpcb *inp;
+		struct socket *so = NULL;
+		struct tcpcb *tp = NULL;
+
 		/*
 		 * XXX: We assume that when ip6 is non NULL,
 		 * M and OFF are valid.
@@ -687,18 +691,27 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 			in_pcbunref(inp);
 			return;
 		}
-		if (inp) {
+		if (inp != NULL)
+			so = in_pcbsolock_ref(inp);
+		if (so != NULL)
+			tp = intotcpcb(inp);
+		if (tp != NULL) {
 			seq = ntohl(th.th_seq);
 			if ((tp = intotcpcb(inp)) &&
 			    SEQ_GEQ(seq, tp->snd_una) &&
 			    SEQ_LT(seq, tp->snd_max))
 				notify(inp, inet6ctlerrmap[cmd]);
-		} else if (inet6ctlerrmap[cmd] == EHOSTUNREACH ||
+		}
+		in_pcbsounlock_rele(inp, so);
+		in_pcbunref(inp);
+
+		if (tp == NULL &&
+		    (inet6ctlerrmap[cmd] == EHOSTUNREACH ||
 		    inet6ctlerrmap[cmd] == ENETUNREACH ||
-		    inet6ctlerrmap[cmd] == EHOSTDOWN)
+		    inet6ctlerrmap[cmd] == EHOSTDOWN)) {
 			syn_cache_unreach(sin6tosa_const(sa6_src), sa, &th,
 			    rdomain);
-		in_pcbunref(inp);
+		}
 	} else {
 		in6_pcbnotify(&tcb6table, sa6, 0,
 		    sa6_src, 0, rdomain, cmd, NULL, notify);
@@ -711,8 +724,6 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 {
 	struct ip *ip = v;
 	struct tcphdr *th;
-	struct tcpcb *tp;
-	struct inpcb *inp;
 	struct in_addr faddr;
 	tcp_seq seq;
 	u_int mtu;
@@ -735,8 +746,12 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		 */
 		return;
 	else if (PRC_IS_REDIRECT(cmd))
-		notify = in_rtchange, ip = 0;
+		notify = in_pcbrtchange, ip = NULL;
 	else if (cmd == PRC_MSGSIZE && ip_mtudisc && ip) {
+		struct inpcb *inp;
+		struct socket *so = NULL;
+		struct tcpcb *tp = NULL;
+
 		/*
 		 * Verify that the packet in the icmp payload refers
 		 * to an existing TCP connection.
@@ -746,7 +761,11 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		inp = in_pcblookup(&tcbtable,
 		    ip->ip_dst, th->th_dport, ip->ip_src, th->th_sport,
 		    rdomain);
-		if (inp && (tp = intotcpcb(inp)) &&
+		if (inp != NULL)
+			so = in_pcbsolock_ref(inp);
+		if (so != NULL)
+			tp = intotcpcb(inp);
+		if (tp != NULL &&
 		    SEQ_GEQ(seq, tp->snd_una) &&
 		    SEQ_LT(seq, tp->snd_max)) {
 			struct icmp *icp;
@@ -760,6 +779,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 			 */
 			mtu = (u_int)ntohs(icp->icmp_nextmtu);
 			if (mtu >= tp->t_pmtud_mtu_sent) {
+				in_pcbsounlock_rele(inp, so);
 				in_pcbunref(inp);
 				return;
 			}
@@ -780,6 +800,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 				 */
 				if (tp->t_flags & TF_PMTUD_PEND) {
 					if (SEQ_LT(tp->t_pmtud_th_seq, seq)) {
+						in_pcbsounlock_rele(inp, so);
 						in_pcbunref(inp);
 						return;
 					}
@@ -789,37 +810,52 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 				tp->t_pmtud_nextmtu = icp->icmp_nextmtu;
 				tp->t_pmtud_ip_len = icp->icmp_ip.ip_len;
 				tp->t_pmtud_ip_hl = icp->icmp_ip.ip_hl;
+				in_pcbsounlock_rele(inp, so);
 				in_pcbunref(inp);
 				return;
 			}
 		} else {
 			/* ignore if we don't have a matching connection */
+			in_pcbsounlock_rele(inp, so);
 			in_pcbunref(inp);
 			return;
 		}
+		in_pcbsounlock_rele(inp, so);
 		in_pcbunref(inp);
-		notify = tcp_mtudisc, ip = 0;
+		notify = tcp_mtudisc, ip = NULL;
 	} else if (cmd == PRC_MTUINC)
-		notify = tcp_mtudisc_increase, ip = 0;
+		notify = tcp_mtudisc_increase, ip = NULL;
 	else if (cmd == PRC_HOSTDEAD)
-		ip = 0;
+		ip = NULL;
 	else if (errno == 0)
 		return;
 
 	if (ip) {
+		struct inpcb *inp;
+		struct socket *so = NULL;
+		struct tcpcb *tp = NULL;
+
 		th = (struct tcphdr *)((caddr_t)ip + (ip->ip_hl << 2));
 		inp = in_pcblookup(&tcbtable,
 		    ip->ip_dst, th->th_dport, ip->ip_src, th->th_sport,
 		    rdomain);
-		if (inp) {
+		if (inp != NULL)
+			so = in_pcbsolock_ref(inp);
+		if (so != NULL)
+			tp = intotcpcb(inp);
+		if (tp != NULL) {
 			seq = ntohl(th->th_seq);
-			if ((tp = intotcpcb(inp)) &&
-			    SEQ_GEQ(seq, tp->snd_una) &&
+			if (SEQ_GEQ(seq, tp->snd_una) &&
 			    SEQ_LT(seq, tp->snd_max))
 				notify(inp, errno);
-		} else if (inetctlerrmap[cmd] == EHOSTUNREACH ||
+		}
+		in_pcbsounlock_rele(inp, so);
+		in_pcbunref(inp);
+
+		if (tp == NULL &&
+		    (inetctlerrmap[cmd] == EHOSTUNREACH ||
 		    inetctlerrmap[cmd] == ENETUNREACH ||
-		    inetctlerrmap[cmd] == EHOSTDOWN) {
+		    inetctlerrmap[cmd] == EHOSTDOWN)) {
 			struct sockaddr_in sin;
 
 			bzero(&sin, sizeof(sin));
@@ -829,7 +865,6 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 			sin.sin_addr = ip->ip_src;
 			syn_cache_unreach(sintosa(&sin), sa, th, rdomain);
 		}
-		in_pcbunref(inp);
 	} else
 		in_pcbnotifyall(&tcbtable, satosin(sa), rdomain, errno, notify);
 }
@@ -871,7 +906,7 @@ tcp_mtudisc(struct inpcb *inp, int errno)
 		 * If this was not a host route, remove and realloc.
 		 */
 		if ((rt->rt_flags & RTF_HOST) == 0) {
-			in_rtchange(inp, errno);
+			in_pcbrtchange(inp, errno);
 			if ((rt = in_pcbrtentry(inp)) == NULL)
 				return;
 		}
@@ -901,7 +936,7 @@ tcp_mtudisc_increase(struct inpcb *inp, int errno)
 		 * If this was a host route, remove and realloc.
 		 */
 		if (rt->rt_flags & RTF_HOST)
-			in_rtchange(inp, errno);
+			in_pcbrtchange(inp, errno);
 
 		/* also takes care of congestion window */
 		tcp_mss(tp, -1);

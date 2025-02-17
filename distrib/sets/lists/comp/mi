@@ -1,4 +1,5 @@
 ./sys
+./usr/bin/addr2line
 ./usr/bin/c++filt
 ./usr/bin/cpp
 ./usr/bin/ctfdump
@@ -10,6 +11,7 @@
 ./usr/bin/lorder
 ./usr/bin/objdump
 ./usr/bin/ranlib
+./usr/bin/readelf
 ./usr/bin/rpcgen
 ./usr/bin/yacc
 ./usr/include/FlexLexer.h
@@ -351,12 +353,15 @@
 ./usr/include/dev/ic/pgtreg.h
 ./usr/include/dev/ic/pgtvar.h
 ./usr/include/dev/ic/pluartvar.h
+./usr/include/dev/ic/pspvar.h
 ./usr/include/dev/ic/qlareg.h
 ./usr/include/dev/ic/qlavar.h
 ./usr/include/dev/ic/qlwreg.h
 ./usr/include/dev/ic/qlwvar.h
 ./usr/include/dev/ic/qwxreg.h
 ./usr/include/dev/ic/qwxvar.h
+./usr/include/dev/ic/qwzreg.h
+./usr/include/dev/ic/qwzvar.h
 ./usr/include/dev/ic/r92creg.h
 ./usr/include/dev/ic/ramdac.h
 ./usr/include/dev/ic/revar.h
@@ -560,6 +565,8 @@
 ./usr/include/dev/pci/if_em_osdep.h
 ./usr/include/dev/pci/if_em_soc.h
 ./usr/include/dev/pci/if_etreg.h
+./usr/include/dev/pci/if_icereg.h
+./usr/include/dev/pci/if_icevar.h
 ./usr/include/dev/pci/if_igc.h
 ./usr/include/dev/pci/if_ipwreg.h
 ./usr/include/dev/pci/if_ipwvar.h
@@ -916,6 +923,7 @@
 ./usr/include/grp.h
 ./usr/include/histedit.h
 ./usr/include/icdb.h
+./usr/include/ieeefp.h
 ./usr/include/ifaddrs.h
 ./usr/include/imsg.h
 ./usr/include/inttypes.h
@@ -969,6 +977,7 @@
 ./usr/include/net/bpfdesc.h
 ./usr/include/net/ethertypes.h
 ./usr/include/net/fq_codel.h
+./usr/include/net/frame.h
 ./usr/include/net/hfsc.h
 ./usr/include/net/if.h
 ./usr/include/net/if_arp.h
@@ -1115,7 +1124,6 @@
 ./usr/include/openssl/cms.h
 ./usr/include/openssl/comp.h
 ./usr/include/openssl/conf.h
-./usr/include/openssl/conf_api.h
 ./usr/include/openssl/crypto.h
 ./usr/include/openssl/ct.h
 ./usr/include/openssl/curve25519.h
@@ -1166,8 +1174,6 @@
 ./usr/include/openssl/ts.h
 ./usr/include/openssl/txt_db.h
 ./usr/include/openssl/ui.h
-./usr/include/openssl/ui_compat.h
-./usr/include/openssl/whrlpool.h
 ./usr/include/openssl/x509.h
 ./usr/include/openssl/x509_vfy.h
 ./usr/include/openssl/x509v3.h
@@ -1276,6 +1282,7 @@
 ./usr/include/stddef.h
 ./usr/include/stdint.h
 ./usr/include/stdio.h
+./usr/include/stdio_ext.h
 ./usr/include/stdlib.h
 ./usr/include/string.h
 ./usr/include/strings.h
@@ -1578,7 +1585,9 @@
 ./usr/lib/liby_p.a
 ./usr/lib/libz.a
 ./usr/lib/libz_p.a
+./usr/libdata/ldscripts
 ./usr/sbin/kgmon
+./usr/share/info/bfd.info
 ./usr/share/info/binutils.info
 ./usr/share/man/man1/addr2line.1
 ./usr/share/man/man1/ar.1
@@ -1927,19 +1936,15 @@
 ./usr/share/man/man3/EVP_PKEY_CTX_new.3
 ./usr/share/man/man3/EVP_PKEY_CTX_set_hkdf_md.3
 ./usr/share/man/man3/EVP_PKEY_CTX_set_tls1_prf_md.3
-./usr/share/man/man3/EVP_PKEY_add1_attr.3
 ./usr/share/man/man3/EVP_PKEY_asn1_get_count.3
-./usr/share/man/man3/EVP_PKEY_asn1_new.3
-./usr/share/man/man3/EVP_PKEY_check.3
 ./usr/share/man/man3/EVP_PKEY_cmp.3
 ./usr/share/man/man3/EVP_PKEY_decrypt.3
 ./usr/share/man/man3/EVP_PKEY_derive.3
 ./usr/share/man/man3/EVP_PKEY_encrypt.3
 ./usr/share/man/man3/EVP_PKEY_get_default_digest_nid.3
 ./usr/share/man/man3/EVP_PKEY_keygen.3
-./usr/share/man/man3/EVP_PKEY_meth_get0_info.3
-./usr/share/man/man3/EVP_PKEY_meth_new.3
 ./usr/share/man/man3/EVP_PKEY_new.3
+./usr/share/man/man3/EVP_PKEY_new_CMAC_key.3
 ./usr/share/man/man3/EVP_PKEY_print_private.3
 ./usr/share/man/man3/EVP_PKEY_set1_RSA.3
 ./usr/share/man/man3/EVP_PKEY_sign.3
@@ -1950,15 +1955,17 @@
 ./usr/share/man/man3/EVP_SignInit.3
 ./usr/share/man/man3/EVP_VerifyInit.3
 ./usr/share/man/man3/EVP_aes_128_cbc.3
+./usr/share/man/man3/EVP_aes_128_ccm.3
+./usr/share/man/man3/EVP_aes_128_gcm.3
 ./usr/share/man/man3/EVP_camellia_128_cbc.3
 ./usr/share/man/man3/EVP_chacha20.3
 ./usr/share/man/man3/EVP_des_cbc.3
+./usr/share/man/man3/EVP_rc2_cbc.3
 ./usr/share/man/man3/EVP_rc4.3
 ./usr/share/man/man3/EVP_sha1.3
 ./usr/share/man/man3/EVP_sha3_224.3
 ./usr/share/man/man3/EVP_sm3.3
 ./usr/share/man/man3/EVP_sm4_cbc.3
-./usr/share/man/man3/EVP_whirlpool.3
 ./usr/share/man/man3/EXTENDED_KEY_USAGE_new.3
 ./usr/share/man/man3/GENERAL_NAME_new.3
 ./usr/share/man/man3/HMAC.3
@@ -2023,6 +2030,7 @@
 ./usr/share/man/man3/RAND_bytes.3
 ./usr/share/man/man3/RAND_load_file.3
 ./usr/share/man/man3/RAND_set_rand_method.3
+./usr/share/man/man3/RC2_encrypt.3
 ./usr/share/man/man3/RC4.3
 ./usr/share/man/man3/RIPEMD160.3
 ./usr/share/man/man3/RMD160Init.3
@@ -2176,7 +2184,6 @@
 ./usr/share/man/man3/STACK_OF.3
 ./usr/share/man/man3/SipHash24_Init.3
 ./usr/share/man/man3/TS_REQ_new.3
-./usr/share/man/man3/UI_UTIL_read_pw.3
 ./usr/share/man/man3/UI_create_method.3
 ./usr/share/man/man3/UI_get_string_type.3
 ./usr/share/man/man3/UI_new.3
@@ -2185,6 +2192,7 @@
 ./usr/share/man/man3/X509V3_EXT_print.3
 ./usr/share/man/man3/X509V3_extensions_print.3
 ./usr/share/man/man3/X509V3_get_d2i.3
+./usr/share/man/man3/X509V3_parse_list.3
 ./usr/share/man/man3/X509_ALGOR_dup.3
 ./usr/share/man/man3/X509_ATTRIBUTE_get0_object.3
 ./usr/share/man/man3/X509_ATTRIBUTE_new.3
@@ -2225,7 +2233,6 @@
 ./usr/share/man/man3/X509_STORE_new.3
 ./usr/share/man/man3/X509_STORE_set1_param.3
 ./usr/share/man/man3/X509_STORE_set_verify_cb_func.3
-./usr/share/man/man3/X509_TRUST_set.3
 ./usr/share/man/man3/X509_VERIFY_PARAM_new.3
 ./usr/share/man/man3/X509_VERIFY_PARAM_set_flags.3
 ./usr/share/man/man3/X509_add1_trust_object.3
@@ -2234,7 +2241,6 @@
 ./usr/share/man/man3/X509_check_issued.3
 ./usr/share/man/man3/X509_check_private_key.3
 ./usr/share/man/man3/X509_check_purpose.3
-./usr/share/man/man3/X509_check_trust.3
 ./usr/share/man/man3/X509_cmp.3
 ./usr/share/man/man3/X509_cmp_time.3
 ./usr/share/man/man3/X509_digest.3
@@ -2256,8 +2262,6 @@
 ./usr/share/man/man3/X509_sign.3
 ./usr/share/man/man3/X509_signature_dump.3
 ./usr/share/man/man3/X509_verify_cert.3
-./usr/share/man/man3/X509at_add1_attr.3
-./usr/share/man/man3/X509at_get_attr.3
 ./usr/share/man/man3/X509v3_addr_add_inherit.3
 ./usr/share/man/man3/X509v3_addr_get_range.3
 ./usr/share/man/man3/X509v3_addr_inherits.3
@@ -2265,8 +2269,10 @@
 ./usr/share/man/man3/X509v3_addr_validate_path.3
 ./usr/share/man/man3/X509v3_asid_add_id_or_range.3
 ./usr/share/man/man3/X509v3_get_ext_by_NID.3
+./usr/share/man/man3/__fpending.3
 ./usr/share/man/man3/__tfork_thread.3
 ./usr/share/man/man3/a2d_ASN1_OBJECT.3
+./usr/share/man/man3/a2i_ipadd.3
 ./usr/share/man/man3/a64l.3
 ./usr/share/man/man3/abort.3
 ./usr/share/man/man3/abs.3
@@ -3027,6 +3033,7 @@
 ./usr/share/man/man3/utime.3
 ./usr/share/man/man3/uu_lock.3
 ./usr/share/man/man3/uuid_compare.3
+./usr/share/man/man3/v2i_ASN1_BIT_STRING.3
 ./usr/share/man/man3/va_start.3
 ./usr/share/man/man3/valloc.3
 ./usr/share/man/man3/vis.3

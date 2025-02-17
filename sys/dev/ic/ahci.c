@@ -1,4 +1,4 @@
-/*	$OpenBSD: ahci.c,v 1.41 2024/05/28 01:37:53 jsg Exp $ */
+/*	$OpenBSD: ahci.c,v 1.43 2024/11/22 09:29:41 jan Exp $ */
 
 /*
  * Copyright (c) 2006 David Gwynne <dlg@openbsd.org>
@@ -268,7 +268,7 @@ noccc:
 	sc->sc_ncmds = max(2, sc->sc_ncmds);
 	for (i = 0; i < AHCI_MAX_PORTS; i++) {
 		if (!ISSET(pi, 1U << i)) {
-			/* dont allocate stuff if the port isnt implemented */
+			/* don't allocate stuff if the port isn't implemented */
 			continue;
 		}
 
@@ -320,6 +320,9 @@ noccc:
 	}
 
 	sc->sc_atascsi = atascsi_attach(&sc->sc_dev, &aaa);
+
+	/* Flush all residual bits of the interrupt status register */
+	ahci_write(sc, AHCI_REG_IS, ahci_read(sc, AHCI_REG_IS));
 
 	/* Enable interrupts */
 	ahci_write(sc, AHCI_REG_GHC, AHCI_REG_GHC_AE | AHCI_REG_GHC_IE);

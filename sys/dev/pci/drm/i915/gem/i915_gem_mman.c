@@ -287,6 +287,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 	struct vm_area_struct *area = vmf->vma;
 	struct i915_mmap_offset *mmo = area->vm_private_data;
 	struct drm_i915_gem_object *obj = mmo->obj;
+	unsigned long obj_offset;
 	resource_size_t iomap;
 	int err;
 
@@ -308,10 +309,11 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		iomap -= obj->mm.region->region.start;
 	}
 
+	obj_offset = area->vm_pgoff - drm_vma_node_start(&mmo->vma_node);
 	/* PTEs are revoked in obj->ops->put_pages() */
 	err = remap_io_sg(area,
 			  area->vm_start, area->vm_end - area->vm_start,
-			  obj->mm.pages->sgl, iomap);
+			  obj->mm.pages->sgl, obj_offset, iomap);
 
 	if (area->vm_flags & VM_WRITE) {
 		GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
@@ -323,6 +325,47 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 out:
 	i915_gem_object_unlock(obj);
 	return i915_error_to_vmf_fault(err);
+}
+
+static void set_address_limits(struct vm_area_struct *area,
+			       struct i915_vma *vma,
+			       unsigned long obj_offset,
+			       resource_size_t gmadr_start,
+			       unsigned long *start_vaddr,
+			       unsigned long *end_vaddr,
+			       unsigned long *pfn)
+{
+	unsigned long vm_start, vm_end, vma_size; /* user's memory parameters */
+	long start, end; /* memory boundaries */
+
+	/*
+	 * Let's move into the ">> PAGE_SHIFT"
+	 * domain to be sure not to lose bits
+	 */
+	vm_start = area->vm_start >> PAGE_SHIFT;
+	vm_end = area->vm_end >> PAGE_SHIFT;
+	vma_size = vma->size >> PAGE_SHIFT;
+
+	/*
+	 * Calculate the memory boundaries by considering the offset
+	 * provided by the user during memory mapping and the offset
+	 * provided for the partial mapping.
+	 */
+	start = vm_start;
+	start -= obj_offset;
+	start += vma->gtt_view.partial.offset;
+	end = start + vma_size;
+
+	start = max_t(long, start, vm_start);
+	end = min_t(long, end, vm_end);
+
+	/* Let's move back into the "<< PAGE_SHIFT" domain */
+	*start_vaddr = (unsigned long)start << PAGE_SHIFT;
+	*end_vaddr = (unsigned long)end << PAGE_SHIFT;
+
+	*pfn = (gmadr_start + i915_ggtt_offset(vma)) >> PAGE_SHIFT;
+	*pfn += (*start_vaddr - area->vm_start) >> PAGE_SHIFT;
+	*pfn += obj_offset - vma->gtt_view.partial.offset;
 }
 
 static vm_fault_t vm_fault_gtt(struct vm_fault *vmf)
@@ -337,14 +380,18 @@ static vm_fault_t vm_fault_gtt(struct vm_fault *vmf)
 	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	bool write = area->vm_flags & VM_WRITE;
 	struct i915_gem_ww_ctx ww;
+	unsigned long obj_offset;
+	unsigned long start, end; /* memory boundaries */
 	intel_wakeref_t wakeref;
 	struct i915_vma *vma;
 	pgoff_t page_offset;
+	unsigned long pfn;
 	int srcu;
 	int ret;
 
-	/* We don't use vmf->pgoff since that has the fake offset */
+	obj_offset = area->vm_pgoff - drm_vma_node_start(&mmo->vma_node);
 	page_offset = (vmf->address - area->vm_start) >> PAGE_SHIFT;
+	page_offset += obj_offset;
 
 	trace_i915_gem_object_fault(obj, page_offset, true, write);
 
@@ -437,12 +484,16 @@ retry:
 	if (ret)
 		goto err_unpin;
 
+	/*
+	 * Dump all the necessary parameters in this function to perform the
+	 * arithmetic calculation for the virtual address start and end and
+	 * the PFN (Page Frame Number).
+	 */
+	set_address_limits(area, vma, obj_offset, ggtt->gmadr.start,
+			   &start, &end, &pfn);
+
 	/* Finally, remap it using the new GTT offset */
-	ret = remap_io_mapping(area,
-			       area->vm_start + (vma->gtt_view.partial.offset << PAGE_SHIFT),
-			       (ggtt->gmadr.start + i915_ggtt_offset(vma)) >> PAGE_SHIFT,
-			       min_t(u64, vma->size, area->vm_end - area->vm_start),
-			       &ggtt->iomap);
+	ret = remap_io_mapping(area, start, pfn, end - start, &ggtt->iomap);
 	if (ret)
 		goto err_fence;
 
@@ -550,10 +601,10 @@ static int i915_error_to_vmf_fault(int err)
 	case -EFAULT: /* purged object */
 	case -ENODEV: /* bad object, how did you get here! */
 	case -ENXIO: /* unable to access backing store (on device) */
-		return VM_PAGER_ERROR;
+		return EACCES;
 
 	case -ENOMEM: /* our allocation failure */
-		return VM_PAGER_ERROR;
+		return EACCES; /* XXX */
 
 	case 0:
 	case -EAGAIN:
@@ -566,7 +617,7 @@ static int i915_error_to_vmf_fault(int err)
 		 * EBUSY is ok: this just means that another thread
 		 * already did the job.
 		 */
-		return VM_PAGER_OK;
+		return 0;
 	}
 }
 
@@ -588,11 +639,11 @@ vm_fault_cpu(struct i915_mmap_offset *mmo, struct uvm_faultinfo *ufi,
 	/* Sanity check that we allow writing into this object */
 	if (unlikely(i915_gem_object_is_readonly(obj) && write)) {
 		uvmfault_unlockall(ufi, NULL, &obj->base.uobj);
-		return VM_PAGER_BAD;
+		return EACCES;
 	}
 
 	if (i915_gem_object_lock_interruptible(obj, NULL))
-		return VM_PAGER_ERROR;
+		return EACCES;
 
 	err = i915_gem_object_pin_pages(obj);
 	if (err)
@@ -655,6 +706,41 @@ remap_io_mapping(pmap_t pm, vm_prot_t mapprot,
 	return 0;
 }
 
+static void set_address_limits(struct vm_map_entry *entry,
+			       struct i915_vma *vma,
+			       unsigned long obj_offset,
+			       unsigned long *start_vaddr,
+			       unsigned long *end_vaddr)
+{
+	unsigned long vm_start, vm_end, vma_size; /* user's memory parameters */
+	long start, end; /* memory boundaries */
+
+	/*
+	 * Let's move into the ">> PAGE_SHIFT"
+	 * domain to be sure not to lose bits
+	 */
+	vm_start = entry->start >> PAGE_SHIFT;
+	vm_end = entry->end >> PAGE_SHIFT;
+	vma_size = vma->size >> PAGE_SHIFT;
+
+	/*
+	 * Calculate the memory boundaries by considering the offset
+	 * provided by the user during memory mapping and the offset
+	 * provided for the partial mapping.
+	 */
+	start = vm_start;
+	start -= obj_offset;
+	start += vma->gtt_view.partial.offset;
+	end = start + vma_size;
+
+	start = max_t(long, start, vm_start);
+	end = min_t(long, end, vm_end);
+
+	/* Let's move back into the "<< PAGE_SHIFT" domain */
+	*start_vaddr = (unsigned long)start << PAGE_SHIFT;
+	*end_vaddr = (unsigned long)end << PAGE_SHIFT;
+}
+
 static int
 vm_fault_gtt(struct i915_mmap_offset *mmo, struct uvm_faultinfo *ufi,
     vaddr_t vaddr, vm_prot_t access_type)
@@ -668,14 +754,18 @@ vm_fault_gtt(struct i915_mmap_offset *mmo, struct uvm_faultinfo *ufi,
 	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	int write = !!(access_type & PROT_WRITE);
 	struct i915_gem_ww_ctx ww;
+	unsigned long obj_offset;
+	unsigned long start, end; /* memory boundaries */
 	intel_wakeref_t wakeref;
 	struct i915_vma *vma;
 	pgoff_t page_offset;
+	unsigned long pfn;
 	int srcu;
 	int ret;
 
-	/* We don't use vmf->pgoff since that has the fake offset */
+	obj_offset = (entry->offset >> PAGE_SHIFT) - drm_vma_node_start(&mmo->vma_node);
 	page_offset = (vaddr - entry->start) >> PAGE_SHIFT;
+	page_offset += obj_offset;
 
 	trace_i915_gem_object_fault(obj, page_offset, true, write);
 
@@ -768,11 +858,15 @@ retry:
 	if (ret)
 		goto err_unpin;
 
+	set_address_limits(entry, vma, obj_offset, &start, &end);
+
+	pfn = (ggtt->gmadr.start + i915_ggtt_offset(vma)) >> PAGE_SHIFT;
+	pfn += (start - entry->start) >> PAGE_SHIFT;
+	pfn += obj_offset - vma->gtt_view.partial.offset;
+
 	/* Finally, remap it using the new GTT offset */
 	ret = remap_io_mapping(ufi->orig_map->pmap, entry->protection,
-			       entry->start + (vma->gtt_view.partial.offset << PAGE_SHIFT),
-			       (ggtt->gmadr.start + i915_ggtt_offset(vma)) >> PAGE_SHIFT,
-			       min_t(u64, vma->size, entry->end - entry->start));
+			       start, pfn, end - start);
 	if (ret)
 		goto err_fence;
 
@@ -837,7 +931,7 @@ i915_gem_fault(struct drm_gem_object *gem_obj, struct uvm_faultinfo *ufi,
 	drm_vma_offset_unlock_lookup(dev->vma_offset_manager);
 	if (!mmo) {
 		uvmfault_unlockall(ufi, NULL, &gem_obj->uobj);
-		return VM_PAGER_BAD;
+		return EACCES;
 	}
 
 	KASSERT(gem_obj == &mmo->obj->base);
@@ -1269,11 +1363,7 @@ static struct file *mmap_singleton(struct drm_i915_private *i915)
 {
 	struct file *file;
 
-	rcu_read_lock();
-	file = READ_ONCE(i915->gem.mmap_singleton);
-	if (file && !get_file_rcu(file))
-		file = NULL;
-	rcu_read_unlock();
+	file = get_file_active(&i915->gem.mmap_singleton);
 	if (file)
 		return file;
 
@@ -1387,9 +1477,9 @@ int i915_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	rcu_read_lock();
 	drm_vma_offset_lock_lookup(dev->vma_offset_manager);
-	node = drm_vma_offset_exact_lookup_locked(dev->vma_offset_manager,
-						  vma->vm_pgoff,
-						  vma_pages(vma));
+	node = drm_vma_offset_lookup_locked(dev->vma_offset_manager,
+					    vma->vm_pgoff,
+					    vma_pages(vma));
 	if (node && drm_vma_node_is_allowed(node, priv)) {
 		/*
 		 * Skip 0-refcnted objects as it is in the process of being
@@ -1507,6 +1597,8 @@ int i915_gem_fb_mmap(struct drm_i915_gem_object *obj, struct vm_area_struct *vma
 		mmo = mmap_offset_attach(obj, mmap_type, NULL);
 		if (IS_ERR(mmo))
 			return PTR_ERR(mmo);
+
+		vma->vm_pgoff += drm_vma_node_start(&mmo->vma_node);
 	}
 
 	/*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.105 2024/06/09 21:15:29 jca Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.107 2024/10/23 18:45:34 miod Exp $	*/
 
 /*
  * Copyright (c) 2000-2004 Michael Shalayeff
@@ -100,7 +100,7 @@ struct cpu_info {
 	volatile int	ci_cpl;
 	volatile u_long	ci_mask;		/* Hardware interrupt mask. */
 	volatile u_long	ci_ipending;
-	volatile int	ci_in_intr;
+	volatile int	ci_idepth;
 	int		ci_want_resched;
 
 	volatile u_long	ci_ipi;			/* IPIs pending. */
@@ -229,7 +229,6 @@ extern int cpu_hvers;
 #define	CLKF_PC(framep)		((framep)->tf_iioq_head)
 #define	CLKF_INTR(framep)	((framep)->tf_flags & TFF_INTR)
 #define	CLKF_USERMODE(framep)	((framep)->tf_flags & T_USER)
-#define	CLKF_SYSCALL(framep)	((framep)->tf_flags & TFF_SYS)
 
 #define	need_proftick(p)	setsoftast(p)
 #define	PROC_PC(p)		((p)->p_md.md_regs->tf_iioq_head & ~HPPA_PC_PRIV_MASK)

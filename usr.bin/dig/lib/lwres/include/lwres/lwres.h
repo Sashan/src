@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: lwres.h,v 1.3 2020/02/12 13:05:04 jsg Exp $ */
+/* $Id: lwres.h,v 1.6 2024/08/14 17:38:57 florian Exp $ */
 
 #ifndef LWRES_LWRES_H
 #define LWRES_LWRES_H 1
@@ -101,34 +101,20 @@ struct lwres_addr {
  */
 
 #define LWRES_CONFMAXNAMESERVERS 3	/*%< max 3 "nameserver" entries */
-#define LWRES_CONFMAXLWSERVERS 1	/*%< max 1 "lwserver" entry */
 #define LWRES_CONFMAXSEARCH 8		/*%< max 8 domains in "search" entry */
 #define LWRES_CONFMAXLINELEN 256	/*%< max size of a line */
-#define LWRES_CONFMAXSORTLIST 10	/*%< max 10 */
 
 /*% lwres_conf_t */
 typedef struct {
 	lwres_addr_t    nameservers[LWRES_CONFMAXNAMESERVERS];
 	uint8_t	nsnext;		/*%< index for next free slot */
 
-	lwres_addr_t	lwservers[LWRES_CONFMAXLWSERVERS];
-	uint8_t	lwnext;		/*%< index for next free slot */
-
 	char	       *domainname;
 
 	char 	       *search[LWRES_CONFMAXSEARCH];
 	uint8_t	searchnxt;	/*%< index for next free slot */
 
-	struct {
-		lwres_addr_t addr;
-		/*% mask has a non-zero 'family' and 'length' if set */
-		lwres_addr_t mask;
-	} sortlist[LWRES_CONFMAXSORTLIST];
-	uint8_t	sortlistnxt;
-
-	uint8_t	resdebug;      /*%< non-zero if 'options debug' set */
 	uint8_t	ndots;	       /*%< set to n in 'options ndots:n' */
-	uint8_t	no_tld_query;  /*%< non-zero if 'options no_tld_query' */
 	int	flags;
 } lwres_conf_t;
 

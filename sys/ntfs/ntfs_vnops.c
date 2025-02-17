@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntfs_vnops.c,v 1.49 2024/05/13 11:17:40 semarie Exp $	*/
+/*	$OpenBSD: ntfs_vnops.c,v 1.51 2024/10/18 05:52:32 miod Exp $	*/
 /*	$NetBSD: ntfs_vnops.c,v 1.6 2003/04/10 21:57:26 jdolecek Exp $	*/
 
 /*
@@ -234,11 +234,13 @@ ntfs_reclaim(void *v)
 int
 ntfs_print(void *v)
 {
+#if defined(DEBUG) || defined(DIAGNOSTIC) || defined(VFSLCKDEBUG)
 	struct vop_print_args *ap = v;
 	struct ntnode *ip = VTONT(ap->a_vp);
 
 	printf("tag VT_NTFS, ino %u, flag %#x, usecount %d, nlink %ld\n",
 	    ip->i_number, ip->i_flag, ip->i_usecount, ip->i_nlink);
+#endif
 
 	return (0);
 }
@@ -489,6 +491,10 @@ ntfs_readdir(void *v)
 			    "flag: %u, ",
 			    num, cde.d_name, iep->ie_fnametype, iep->ie_flag);
 			cde.d_namlen = fname - (char *) cde.d_name;
+			if (memchr(cde.d_name, '/', cde.d_namlen) != NULL) {
+				error = EINVAL;
+				goto out;
+			}
 			cde.d_fileno = iep->ie_number;
 			cde.d_type = (iep->ie_fflag & NTFS_FFLAG_DIR) ? DT_DIR : DT_REG;
 			cde.d_reclen = sizeof(struct dirent);

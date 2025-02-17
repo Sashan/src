@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifq.h,v 1.41 2023/11/10 15:51:24 bluhm Exp $ */
+/*	$OpenBSD: ifq.h,v 1.43 2025/02/03 08:58:52 mvs Exp $ */
 
 /*
  * Copyright (c) 2015 David Gwynne <dlg@openbsd.org>
@@ -444,6 +444,7 @@ void		 ifq_q_leave(struct ifqueue *, void *);
 void		 ifq_serialize(struct ifqueue *, struct task *);
 void		 ifq_barrier(struct ifqueue *);
 void		 ifq_set_oactive(struct ifqueue *);
+void		 ifq_deq_set_oactive(struct ifqueue *);
 
 int		 ifq_deq_sleep(struct ifqueue *, struct mbuf **, int, int,
 		     const char *, volatile unsigned int *,
@@ -487,11 +488,18 @@ ifq_idx(struct ifqueue *ifq, unsigned int nifqs, const struct mbuf *m)
 void		 ifiq_init(struct ifiqueue *, struct ifnet *, unsigned int);
 void		 ifiq_destroy(struct ifiqueue *);
 int		 ifiq_input(struct ifiqueue *, struct mbuf_list *);
-int		 ifiq_enqueue(struct ifiqueue *, struct mbuf *);
+int		 ifiq_enqueue_qlim(struct ifiqueue *, struct mbuf *,
+		     unsigned int);
 void		 ifiq_add_data(struct ifiqueue *, struct if_data *);
 
 #define ifiq_len(_ifiq)		READ_ONCE(ml_len(&(_ifiq)->ifiq_ml))
 #define ifiq_empty(_ifiq)	(ifiq_len(_ifiq) == 0)
+
+static inline int
+ifiq_enqueue(struct ifiqueue *ifiq, struct mbuf *m)
+{
+	return ifiq_enqueue_qlim(ifiq, m, 0);
+}
 
 #endif /* _KERNEL */
 

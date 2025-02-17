@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.85 2024/04/23 10:27:46 tb Exp $ */
+/*	$OpenBSD: http.c,v 1.92 2024/11/21 13:32:27 claudio Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -163,7 +163,7 @@ static struct http_conn_list	idle = LIST_HEAD_INITIALIZER(idle);
 static struct http_req_queue	queue = TAILQ_HEAD_INITIALIZER(queue);
 static unsigned int		http_conn_count;
 
-static struct msgbuf msgq;
+static struct msgbuf *msgq;
 static struct sockaddr_storage http_bindaddr;
 static struct tls_config *tls_config;
 static uint8_t *tls_ca_mem;
@@ -415,7 +415,7 @@ proxy_parse_uri(char *uri)
 	if (strncasecmp(uri, HTTP_PROTO, HTTP_PROTO_LEN) != 0)
 		errx(1, "%s: http_proxy not using http schema", http_info(uri));
 
-	host = uri + 7;
+	host = uri + HTTP_PROTO_LEN;
 	if ((fullhost = strndup(host, strcspn(host, "/"))) == NULL)
 		err(1, NULL);
 
@@ -483,7 +483,7 @@ http_parse_uri(char *uri, char **ohost, char **oport, char **opath)
 		warnx("%s: not using https schema", http_info(uri));
 		return -1;
 	}
-	host = uri + 8;
+	host = uri + HTTPS_PROTO_LEN;
 	if ((path = strchr(host, '/')) == NULL) {
 		warnx("%s: missing https path", http_info(uri));
 		return -1;
@@ -625,7 +625,7 @@ http_req_done(unsigned int id, enum http_result res, const char *last_modified)
 	io_simple_buffer(b, &id, sizeof(id));
 	io_simple_buffer(b, &res, sizeof(res));
 	io_str_buffer(b, last_modified);
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -641,7 +641,7 @@ http_req_fail(unsigned int id)
 	io_simple_buffer(b, &id, sizeof(id));
 	io_simple_buffer(b, &res, sizeof(res));
 	io_str_buffer(b, NULL);
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -709,7 +709,7 @@ http_inflate_new(struct http_connection *conn)
 	return 0;
 
  fail:
-	warnx("%s: decompression initalisation failed", conn_info(conn));
+	warnx("%s: decompression initialisation failed", conn_info(conn));
 	if (zctx != NULL)
 		free(zctx->zbuf);
 	free(zctx);
@@ -823,7 +823,7 @@ http_inflate_advance(struct http_connection *conn)
 
 /*
  * Create a new HTTP connection which will be used for the HTTP request req.
- * On errors a req faulure is issued and both connection and request are freed.
+ * On errors a req failure is issued and both connection and request are freed.
  */
 static void
 http_new(struct http_request *req)
@@ -1070,7 +1070,7 @@ http_connect(struct http_connection *conn)
 }
 
 /*
- * Called once an asynchronus connect request finished.
+ * Called once an asynchronous connect request finished.
  */
 static enum res
 http_finish_connect(struct http_connection *conn)
@@ -2044,7 +2044,7 @@ proc_http(char *bind_addr, int fd)
 	struct pollfd pfds[NPFDS];
 	struct http_connection *conn, *nc;
 	struct http_request *req, *nr;
-	struct ibuf *b, *inbuf = NULL;
+	struct ibuf *b;
 
 	if (pledge("stdio rpath inet dns recvfd", NULL) == -1)
 		err(1, "pledge");
@@ -2066,8 +2066,9 @@ proc_http(char *bind_addr, int fd)
 	if (pledge("stdio inet dns recvfd", NULL) == -1)
 		err(1, "pledge");
 
-	msgbuf_init(&msgq);
-	msgq.fd = fd;
+	if ((msgq = msgbuf_new_reader(sizeof(size_t), io_parse_hdr, NULL)) ==
+	    NULL)
+		err(1, NULL);
 
 	for (;;) {
 		time_t now;
@@ -2077,7 +2078,7 @@ proc_http(char *bind_addr, int fd)
 		memset(&pfds, 0, sizeof(pfds));
 		pfds[0].fd = fd;
 		pfds[0].events = POLLIN;
-		if (msgq.queued)
+		if (msgbuf_queuelen(msgq) > 0)
 			pfds[0].events |= POLLOUT;
 
 		i = 1;
@@ -2138,16 +2139,21 @@ proc_http(char *bind_addr, int fd)
 		if (pfds[0].revents & POLLHUP)
 			break;
 		if (pfds[0].revents & POLLOUT) {
-			switch (msgbuf_write(&msgq)) {
-			case 0:
-				errx(1, "write: connection closed");
-			case -1:
-				err(1, "write");
+			if (msgbuf_write(fd, msgq) == -1) {
+				if (errno == EPIPE)
+					errx(1, "write: connection closed");
+				else
+					err(1, "write");
 			}
 		}
 		if (pfds[0].revents & POLLIN) {
-			b = io_buf_recvfd(fd, &inbuf);
-			if (b != NULL) {
+			switch (msgbuf_read(fd, msgq)) {
+			case -1:
+				err(1, "msgbuf_read");
+			case 0:
+				errx(1, "msgbuf_read: connection closed");
+			}
+			while ((b = io_buf_get(msgq)) != NULL) {
 				unsigned int id;
 				char *uri;
 				char *mod;

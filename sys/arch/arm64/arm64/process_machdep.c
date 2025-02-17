@@ -1,4 +1,4 @@
-/* $OpenBSD: process_machdep.c,v 1.8 2023/06/10 19:30:48 kettenis Exp $ */
+/* $OpenBSD: process_machdep.c,v 1.10 2025/02/07 13:37:11 kettenis Exp $ */
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
  *
@@ -48,6 +48,7 @@
 #include <machine/fpu.h>
 #include <machine/pcb.h>
 #include <machine/reg.h>
+#include <machine/vmparam.h>
 
 #include <arm64/armreg.h>
 
@@ -97,7 +98,7 @@ process_write_regs(struct proc *p, struct reg *regs)
 }
 
 int
-process_write_fpregs(struct proc *p,  struct fpreg *regs)
+process_write_fpregs(struct proc *p, struct fpreg *regs)
 {
 	memcpy(&p->p_addr->u_pcb.pcb_fpstate, regs,
 	    sizeof(p->p_addr->u_pcb.pcb_fpstate));

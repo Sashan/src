@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.12 2024/06/15 08:39:47 tb Exp $
+#	$OpenBSD: Makefile,v 1.14 2024/08/31 11:14:58 tb Exp $
 
 OPENSSL_RUBY_TESTS =	/usr/local/share/openssl-ruby-tests
 .if exists(/usr/local/bin/ruby32)
