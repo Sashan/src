@@ -131,7 +131,7 @@ kelf_open(struct bt_procmap_entry *pe, struct syms *syms)
 		symtab_size += syms->nsymb;
 	}
 
-	for (i = syms->nsymb; i < symtab_size; i++) {
+	for (i = 0; i < symtab_size; i++) {
 		if (gelf_getsym(data, i, &sym) == NULL)
 			continue;
 		if (GELF_ST_TYPE(sym.st_info) != STT_FUNC)
