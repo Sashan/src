@@ -813,6 +813,7 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 	void *nullp = NULL;
 	long argc = arginfo->ps_nargvstr;
 	int envc = arginfo->ps_nenvstr;
+	struct nameidata *ndp = pack->ep_ndp;
 
 	if (copyout(&argc, cpp++, sizeof(argc)))
 		return (0);
@@ -830,6 +831,15 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 
 	if (copyout(&nullp, cpp++, sizeof(nullp)))
 		return (0);
+
+	/*
+	 * We copy full path to executable to argc+1 position so ld.so
+	 * can reach for it.
+	 */
+	KASSERT(ndp->ni_cnd.cn_flags & SAVENAME);
+	if (copyoutstr(ndp->ni_cnd.cn_pnbuf, cpp++, ARG_MAX, &len))
+		return (0);
+	dp += len;
 
 	arginfo->ps_envstr = cpp; /* remember location of envp for later */
 
