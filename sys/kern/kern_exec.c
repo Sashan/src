@@ -255,6 +255,7 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	int error;
 	struct exec_package pack;
 	struct nameidata nid;
+	struct nameidata *ndp;
 	struct vattr attr;
 	struct ucred *cred = p->p_ucred;
 	char *argp;
@@ -422,8 +423,10 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	}
 
 	/* Now check if args & environ fit into new stack */
-	len = ((argc + envc + 2 + ELF_AUX_WORDS) * sizeof(char *) +
+	len = ((argc + envc + 2 + ELF_AUX_WORDS + 1) * sizeof(char *) +
 	    sizeof(long) + dp + sgap + sizeof(struct ps_strings)) - argp;
+	ndp = pack.ep_ndp;
+	len += ndp->ni_pathlen;
 
 	len = (len + _STACKALIGNBYTES) &~ _STACKALIGNBYTES;
 
@@ -818,7 +821,7 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 	if (copyout(&argc, cpp++, sizeof(argc)))
 		return (0);
 
-	dp = (char *) (cpp + argc + envc + 2 + ELF_AUX_WORDS);
+	dp = (char *) (cpp + argc + envc + 2 + ELF_AUX_WORDS + 1);
 	sp = argp;
 
 	/* XXX don't copy them out, remap them! */
@@ -833,13 +836,17 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 		return (0);
 
 	/*
-	 * We copy full path to executable to argc+1 position so ld.so
-	 * can reach for it.
+	 * We copy path to executable as resolved by namei() to argc+1 position
+	 * so ld.so can reach for it. Typically ld.so should be taking care of
+	 * a case when executable to run is specified as ./some_exec_name
 	 */
 	KASSERT(ndp->ni_cnd.cn_flags & SAVENAME);
-	if (copyoutstr(ndp->ni_cnd.cn_pnbuf, cpp++, ARG_MAX, &len))
+	if (copyout(&dp, cpp++, sizeof(dp)))
+		return (0);
+	if (copyoutstr(ndp->ni_cnd.cn_pnbuf, dp, ARG_MAX, &len))
 		return (0);
 	dp += len;
+	sp += len;
 
 	arginfo->ps_envstr = cpp; /* remember location of envp for later */
 
