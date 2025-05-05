@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/exec.h>
+#include <sys/shlibinfo.h>
 #ifdef __i386__
 # include <machine/vmparam.h>
 #endif
@@ -100,6 +101,7 @@ const struct dl_cb_0 callbacks_0 = {
 	.dl_iterate_phdr	= &dl_iterate_phdr,
 };
 
+struct shlib_info _dl_shlib_info;
 
 /*
  * Run dtors for a single object.
@@ -502,6 +504,115 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
+struct shlib_info_entry *
+_dl_find_shlibinfo(struct shlib_info_entry *sie, const char *load_name,
+    unsigned int sz)
+{
+	unsigned int i;
+
+	if (sie == NULL)
+		return NULL;
+
+	for (i = 0; i < sz; i++) {
+		if (_dl_strcmp(sie[i].sie_path, load_name) == 0)
+			return &sie[i];
+	}
+
+	return NULL;
+}
+
+struct shlib_info_entry *
+_dl_add_sym_entry(struct shlib_info_entry *sie, const char *load_name,
+    struct load_list *ll, unsigned int *sie_sz)
+{
+	struct shlib_info_entry *new_sie;
+
+	new_sie = _dl_find_shlibinfo(sie, load_name, *sie_sz);
+	if (new_sie != NULL) {
+		/*
+		 * This branch just updates the existing entry we keep
+		 * for library.
+		 * According to procmap(1) the shared libraries seem to be
+		 * loaded to several sections which look as follows:
+		 * 2fbd6a4e000-2fbd6a85fff     224k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6a86000-2fbd6b3cfff     732k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3d000-2fbd6b3dfff       4k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3e000-2fbd6b43fff      24k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b44000-2fbd6b45fff       8k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b46000-2fbd6b46fff       4k ... - /usr/lib/libc.so.100.4
+		 * As you can see ranges above create a continuous region
+		 * from 2fbd6a4e000 to 2fbd6b46fff. The symbol table entry in
+		 * elf file is offset to the start of the region (the lowest
+		 * address).
+		 */
+		if (new_sie->sie_start > ll->start)
+			new_sie->sie_start = ll->start;
+		else
+			new_sie->sie_end += ll->size;
+	} else {
+		new_sie = _dl_realloc(sie,
+		    (*sie_sz + 1) * sizeof (struct shlib_info_entry));
+		if (new_sie == NULL) {
+			_dl_free(sie);
+			*sie_sz = 0;
+			return NULL;
+		}
+		sie = &new_sie[*sie_sz];
+		sie->sie_start = ll->start;
+		sie->sie_end = ll->start + ll->size;
+		_dl_strlcpy(sie->sie_path, load_name, PATH_MAX);
+		*sie_sz += 1;
+		sie = new_sie;
+	}
+
+	return sie;
+}
+
+void
+_dl_attach_linkmap(elf_object_t *object, const char *exec_path)
+{
+	struct load_list *llist;
+	struct shlib_info_entry *sie = NULL;
+	unsigned int sie_count = 0;
+	const char *load_name;
+	char path[PATH_MAX];
+
+	while (object != NULL) {
+		for (llist = object->load_list; llist != NULL;
+		    llist = llist->next) {
+			/*
+			 * load_name is abs. path for shared libs for
+			 * executable the load_name is copy command
+			 * line. We replace that with marker.
+			 */
+			load_name = object->load_name;
+			if (*load_name != '/') {
+				if (_dl___realpath(load_name, path) < 0) {
+					_dl_free(sie);
+					return;
+				}
+				load_name = (const char *)path;
+			}
+			sie = _dl_add_sym_entry(sie, load_name, llist,
+			    &sie_count);
+			/*
+			 * just return is fine here, as we should
+			 * not prevent loading when failing to
+			 * create hints for btrace(8).
+			 */
+			if (sie == NULL)
+				return;
+		}
+
+		object = object->next;
+	}
+
+	if (sie != NULL) {
+		_dl_shlib_info.si_count = sie_count;
+		_dl_shlib_info.si_sie = sie;
+	}
+}
+
 /*
  * This is the dynamic loader entrypoint. When entering here, depending
  * on architecture type, the stack and registers are set up according
@@ -527,6 +638,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	Elf_Addr relro_addr = 0, relro_size = 0;
 	Elf_Phdr *ptls = NULL;
 	int align;
+	const char *exec_name;
 
 	if (dl_data[AUX_pagesz] != 0)
 		_dl_pagesz = dl_data[AUX_pagesz];
@@ -536,6 +648,11 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	while (_dl_argv[_dl_argc] != NULL)
 		_dl_argc++;
 	_dl_setup_env(argv[0], envp);
+
+	/*
+	 * execve() syscall puts resolved path to executable here.
+	 */
+	exec_name = argv[_dl_argc + 1];
 
 	/*
 	 * Make read-only the GOT and PLT and variables initialized
@@ -745,6 +862,9 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 
 	if (failed != 0)
 		_dl_die("relocation failed");
+
+	_dl_show_objects(NULL);
+	_dl_attach_linkmap(_dl_objects, exec_name);
 
 	if (_dl_traceld)
 		_dl_exit(0);
