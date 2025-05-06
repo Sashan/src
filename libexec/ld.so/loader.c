@@ -639,6 +639,8 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	Elf_Phdr *ptls = NULL;
 	int align;
 	const char *exec_name;
+	const char **w_argv = argv;
+	char **w_envp = envp;
 
 	if (dl_data[AUX_pagesz] != 0)
 		_dl_pagesz = dl_data[AUX_pagesz];
@@ -653,6 +655,13 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	 * execve() syscall puts resolved path to executable here.
 	 */
 	exec_name = argv[_dl_argc + 1];
+
+	while (*w_argv)
+		w_argv++;
+
+	w_argv++;
+	_dl_printf("%s linker hint %p [ %s ]\n", __func__, *w_argv, *w_argv);
+	_dl_printf("%s envp %p [ %s ]\n", __func__, *w_envp, *w_envp);
 
 	/*
 	 * Make read-only the GOT and PLT and variables initialized
