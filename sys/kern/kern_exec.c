@@ -66,8 +66,6 @@
 
 #include <sys/timetc.h>
 
-#include <sys/syslog.h>
-
 struct uvm_object *sigobject;		/* shared sigcode object */
 vaddr_t sigcode_va;
 vsize_t sigcode_sz;
@@ -257,7 +255,6 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	int error;
 	struct exec_package pack;
 	struct nameidata nid;
-	struct nameidata *ndp;
 	struct vattr attr;
 	struct ucred *cred = p->p_ucred;
 	char *argp;
@@ -425,10 +422,8 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	}
 
 	/* Now check if args & environ fit into new stack */
-	len = ((argc + envc + 2 + ELF_AUX_WORDS + 2) * sizeof(char *) +
+	len = ((argc + envc + 2 + ELF_AUX_WORDS) * sizeof(char *) +
 	    sizeof(long) + dp + sgap + sizeof(struct ps_strings)) - argp;
-	ndp = pack.ep_ndp;
-	len += ndp->ni_pathlen;
 
 	len = (len + _STACKALIGNBYTES) &~ _STACKALIGNBYTES;
 
@@ -818,15 +813,13 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 	void *nullp = NULL;
 	long argc = arginfo->ps_nargvstr;
 	int envc = arginfo->ps_nenvstr;
-	struct nameidata *ndp = pack->ep_ndp;
 
 	if (copyout(&argc, cpp++, sizeof(argc)))
 		return (0);
 
-	dp = (char *) (cpp + argc + envc + 2 + ELF_AUX_WORDS + 2);
+	dp = (char *) (cpp + argc + envc + 2 + ELF_AUX_WORDS);
 	sp = argp;
 
-	log(LOG_ERR, "%s dp: %p sp: %p\n", __func__, dp, sp);
 	/* XXX don't copy them out, remap them! */
 	arginfo->ps_argvstr = cpp; /* remember location of argv for later */
 
@@ -835,24 +828,9 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 		    copyoutstr(sp, dp, ARG_MAX, &len))
 			return (0);
 
-	log(LOG_ERR, "%s args done %p\n", __func__, cpp);
 	if (copyout(&nullp, cpp++, sizeof(nullp)))
 		return (0);
 
-	/*
-	 * We copy path to executable as resolved by namei() to argc+1 position
-	 * so ld.so can reach for it. Typically ld.so should be taking care of
-	 * a case when executable to run is specified as ./some_exec_name
-	 */
-	KASSERT(ndp->ni_cnd.cn_flags & SAVENAME);
-	if (copyout(&dp, cpp++, sizeof(dp)))
-		return (0);
-	if (copyoutstr(ndp->ni_cnd.cn_pnbuf, dp, ARG_MAX, &len))
-		return (0);
-	dp += len;
-	log(LOG_ERR, "%s linker hint %p\n", __func__, cpp);
-
-	log(LOG_ERR, "%s envstr %p\n", __func__, cpp);
 	arginfo->ps_envstr = cpp; /* remember location of envp for later */
 
 	for (; --envc >= 0; sp += len, dp += len)
@@ -863,7 +841,6 @@ copyargs(struct exec_package *pack, struct ps_strings *arginfo, void *stack,
 	if (copyout(&nullp, cpp++, sizeof(nullp)))
 		return (0);
 
-	log(LOG_ERR, "%s envstr done %p\n", __func__, cpp);
 	/* if this process needs auxinfo, note where to place it */
 	if (pack->ep_args != NULL)
 		pack->ep_auxinfo = cpp;
