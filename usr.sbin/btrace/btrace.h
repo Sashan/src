@@ -27,6 +27,7 @@ struct dt_evt;
 struct bt_arg;
 struct bt_var;
 struct bt_stmt;
+struct dtioc_getmap;
 
 /* btrace.c */
 const char *		 ba_name(struct bt_arg *);
@@ -37,7 +38,9 @@ unsigned long		 dt_get_offset(pid_t);
 
 /* ksyms.c */
 struct syms;
-struct syms		*kelf_open(const char *);
+struct syms		*kelf_open_kernel(const char *);
+struct syms		*kelf_load_syms(struct dtioc_getsymhint *,
+			    struct syms *, const char *);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym(struct syms *, char *, size_t,
 			    unsigned long, unsigned long);

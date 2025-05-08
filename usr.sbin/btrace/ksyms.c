@@ -19,6 +19,7 @@
 #define _DYN_LOADER	/* needed for AuxInfo */
 
 #include <sys/types.h>
+#include <sys/shlibinfo.h>
 
 #include <err.h>
 #include <fcntl.h>
@@ -28,6 +29,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <limits.h>
+#include <dev/dt/dtvar.h>
 
 #include "btrace.h"
 
@@ -46,7 +50,7 @@ int sym_compare_search(const void *, const void *);
 int sym_compare_sort(const void *, const void *);
 
 struct syms *
-kelf_open(const char *path)
+kelf_open(struct shlib_info_entry *sie, struct syms *syms)
 {
 	char *name;
 	Elf *elf;
@@ -57,16 +61,15 @@ kelf_open(const char *path)
 	size_t i, shstrndx, strtabndx = SIZE_MAX, symtab_size;
 	unsigned long diff;
 	struct sym *tmp;
-	struct syms *syms = NULL;
 	int fd;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(1, "elf_version: %s", elf_errmsg(-1));
 
-	fd = open(path, O_RDONLY);
+	fd = open(sie->sie_path, O_RDONLY);
 	if (fd == -1) {
 		warn("open: %s", path);
-		return NULL;
+		return syms;
 	}
 
 	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
@@ -102,23 +105,36 @@ kelf_open(const char *path)
 		}
 	}
 	if (symtab == NULL) {
-		warnx("%s: %s: section not found", path, ELF_SYMTAB);
+		warnx("%s: %s: section not found", sie->sie_path, ELF_SYMTAB);
 		goto bad;
 	}
 	if (strtabndx == SIZE_MAX) {
-		warnx("%s: %s: section not found", path, ELF_STRTAB);
+		warnx("%s: %s: section not found", sie->sie_path, ELF_STRTAB);
 		goto bad;
 	}
 
 	data = elf_rawdata(symtab, data);
-	if (data == NULL)
+	if (data == NULL) {
+		warnx("%s elf_rwadata() unable to read syms from: %s\n",
+		    __func__, sie->sie_path);
 		goto bad;
+	}
 
-	if ((syms = calloc(1, sizeof(*syms))) == NULL)
-		err(1, NULL);
-	syms->table = calloc(symtab_size, sizeof *syms->table);
-	if (syms->table == NULL)
-		err(1, NULL);
+	if (syms == NULL) {
+		if ((syms = calloc(1, sizeof *syms)) == NULL)
+			err(1, NULL);
+		syms->table = calloc(symtab_size, sizeof *syms->table);
+		if (syms->table == NULL)
+			err(1, NULL);
+	} else {
+		tmp = reallocarray(syms->table, syms->nsymb + symtab_size,
+		    sizeof *syms->table);
+		if (tmp == NULL)
+			err(1, NULL);
+		syms->table = tmp;
+		symtab_size += syms->nsymb;
+	}
+
 	for (i = 0; i < symtab_size; i++) {
 		if (gelf_getsym(data, i, &sym) == NULL)
 			continue;
@@ -130,7 +146,8 @@ kelf_open(const char *path)
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value;
+		syms->table[syms->nsymb].sym_value = sym.st_value +
+		    (intptr_t)sie->sie_start;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
@@ -223,4 +240,73 @@ sym_compare_search(const void *keyp, const void *entryp)
 	if (key->sym_value < entry->sym_value)
 		return -1;
 	return key->sym_value >= entry->sym_value + entry->sym_size;
+}
+
+/*
+ * runtime linker does not know path to executable, we need get path
+ * to executable from '-p' option.
+ */
+static struct syms *
+kelf_open_exec(struct syms *syms, const struct shlib_info_entry *sie)
+{
+	struct syms *syms_new;
+
+	syms_new = kelf_open(sie, syms);
+	if (syms_new != NULL)
+		syms = syms_new;
+
+	return syms;
+}
+
+struct syms *
+kelf_open_kernel(const char *path)
+{
+	struct shlib_info_entry sie;
+	size_t path_len = strlen(path);
+	struct syms *syms;
+
+	sie.sie_start = 0;
+	strlcpy(sie.sie_path, path, sizeof (sie.sie_path));
+	syms = kelf_open(sie, NULL);
+
+	return syms;
+}
+
+struct syms *
+kelf_load_syms(struct dtioc_getsymhint *dtgs, struct syms *syms)
+{
+	struct shlib_info_entry *sie;;
+
+	/*
+	 * There ae no shared libs in statically linked binary. We load
+	 * symbols from exec_path using 0 as a base address.
+	 */
+	if (dtgs == NULL) {
+		memset(&sie, 0, sizeof (struct shlib_info_entry));
+		strlcpy(sie.sie_path, exec_path, sizeof (sie.sie_path));
+		
+		return kelf_open(syms, &sie);
+	}
+
+	sie = (struct shlib_info_entry *)dtgs->dtgs_symhint;
+	do {
+		if (strcmp(&sh->sh_path, "\xff\xff") == 0)
+			syms = kelf_open_exec(syms, sh, exec_path);
+		else
+			syms = kelf_open(sh, syms);
+
+		p = &sh->sh_path;
+		/*
+		 * find next map entry in array. it starts right
+		 * after current. we need to find the end of
+		 * sh_path string and move to next byte.
+		 */
+		while (*p)
+			p++;
+		p++;
+
+		sh = (struct sym_hint *)p;
+	} while (p < end);
+
+	return syms;
 }

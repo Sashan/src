@@ -163,6 +163,7 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
+int	dt_ioctl_get_maphint(struct dt_softc *, struct dtioc_getsymhint *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -300,6 +301,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
+	case DIOCGETSYMHINT:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -325,6 +327,10 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
+		break;
+	case DIOCGETSYMHINT:
+		error = dt_ioctl_get_maphint(sc,
+		    (struct dtioc_getsymhint *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -678,6 +684,37 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
+}
+
+int
+dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getsymhint *dtgs)
+{
+	struct uio uio;
+	struct iovec iov;
+	struct process *pr;
+	struct proc *p = curproc;
+	int e = 0;
+
+	if ((pr = prfind(dtgs->dtgs_pid)) == NULL) {
+		e = ESRCH;
+	} else if (pr->ps_sym_hints_sz <= dtgs->dtgs_symhint_sz) {
+		iov.iov_base = dtgs->dtgs_symhint;
+		iov.iov_len = pr->ps_sym_hints_sz;
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = (off_t)(vaddr_t)pr->ps_sym_hints;
+		uio.uio_resid = pr->ps_sym_hints_sz;
+		uio.uio_segflg = UIO_USERSPACE;
+		uio.uio_procp = p;
+		uio.uio_rw = UIO_READ;
+		e = process_domem(p, pr, &uio, PT_READ_D);
+	}
+
+	dtgs->dtgs_symhint_sz = pr->ps_sym_hints_sz;
+	if (dtgs->dtgs_symhint_sz == 0)
+		e = ENOTSUP;
+
+	return e;
 }
 
 struct dt_probe *

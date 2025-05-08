@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/queue.h>
+#include <sys/shlibinfo.h>
 
 #include <assert.h>
 #include <err.h>
@@ -111,6 +112,8 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
+struct syms		*dt_load_syms(pid_t, struct syms *, const char *);
+
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */
@@ -125,6 +128,7 @@ struct syms		*kelf, *uelf;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
+int			 is_dynamic_elf = 0;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -142,6 +146,8 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
+	pid_t pid = -1;
+	const char *exec_path = NULL;
 
 	setlocale(LC_ALL, "");
 
@@ -158,7 +164,7 @@ main(int argc, char *argv[])
 			noaction = 1;
 			break;
 		case 'p':
-			uelf = kelf_open(optarg);
+			exec_path = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -174,26 +180,31 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
-	 /* Cannot pledge due to special ioctl()s */
-	if (unveil(__PATH_DEVDT, "r") == -1)
-		err(1, "unveil %s", __PATH_DEVDT);
-	if (unveil(_PATH_KSYMS, "r") == -1)
-		err(1, "unveil %s", _PATH_KSYMS);
-	if (filename != NULL) {
-		if (unveil(filename, "r") == -1)
-			err(1, "unveil %s", filename);
-	}
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-
-	if (filename != NULL) {
-		btscript = read_btfile(filename, &btslen);
-		argc--;
-		argv++;
-	}
+	/*
+	 * Cannot pledge due to special ioctl()s
+	 * Cannot unveil() because we are loading symbols
+	 * from shared objects which location is unknown here.
+	 */
 
 	nargs = argc;
 	vargs = argv;
+
+	if (argv[0] != NULL) {
+		pid = strtonum(argv[0], 0, INT_MAX, NULL);
+		if (errno != 0)
+			pid = -1;
+		if (pid != -1) {
+			fd = open(__PATH_DEVDT, O_RDONLY);
+			if (fd == -1)
+				err(1, "could not open %s", __PATH_DEVDT);
+		}
+	}
+
+	if (unveil(NULL, NULL) == -1)
+		err(1, "unveil");
+
+	if (filename != NULL)
+		btscript = read_btfile(filename, &btslen);
 
 	if (btscript == NULL && !showprobes)
 		usage();
@@ -208,10 +219,14 @@ main(int argc, char *argv[])
 		return error;
 
 	if (showprobes || g_nprobes > 0) {
-		fd = open(__PATH_DEVDT, O_RDONLY);
+		if (fd == -1)
+			fd = open(__PATH_DEVDT, O_RDONLY);
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
+
+		if (pid != -1)
+			uelf = dt_load_syms(pid, uelf, exec_path);
 	}
 
 	if (showprobes) {
@@ -611,7 +626,7 @@ rules_setup(int fd)
 	}
 
 	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS);
+		kelf = kelf_open_kernel(_PATH_KSYMS);
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
@@ -1808,7 +1823,10 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
+		if (is_dynamic_elf)
+			str = builtin_stack(dtev, 0, 0);
+		else
+			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
@@ -2129,4 +2147,40 @@ dt_get_offset(pid_t pid)
 	}
 
 	return aux->dtga_auxbase;
+}
+
+struct syms *
+dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
+{
+	struct dtioc_getsymhint	dtgs;
+
+	dtgs.dtgs_pid = pid;
+	dtgs.dtgs_symhint_sz = 0;
+	dtgs.dtgs_symhint = NULL;
+
+	/* get maphint size */
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
+		warn("DIOCGETSYMHINT, assuming statically linked binary");
+		return kelf_load_syms(NULL, syms, exec_path);
+	}
+
+	dtgs.dtgs_symhint = malloc(dtgs.dtgs_symhint_sz);
+	if (dtgs.dtgs_symhint == NULL) {
+		warn("malloc");
+		return NULL;
+	}
+
+	/* get maphint */
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
+		warn("DIOCGETSYMHINT");
+		free(dtgs.dtgs_symhint);
+		return NULL;
+	}
+
+	is_dynamic_elf = 1;
+	syms = kelf_load_syms(&dtgs, syms, exec_path);
+
+	free(dtgs.dtgs_symhint);
+
+	return syms;
 }
