@@ -273,6 +273,7 @@ struct process {
 
 	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* [m] ITIMER_REAL timeout */
+	void *ps_shlibinfo;		/* [m] via syscall set_shlibinfo() */
 };
 
 #define	ps_session	ps_pgrp->pg_session
