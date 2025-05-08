@@ -35,15 +35,15 @@
 
 #include <sys/syslimits.h>
 
-struct shlib_info_entry {
+struct shlibinfo_entry {
 	void	*sie_start;
 	void	*sie_end;
 	char	 sie_path[PATH_MAX];
 };
 
-struct shlib_info {
+struct shlibinfo {
 	unsigned int		 si_count;
-	struct shlib_info_entry *si_sie;
+	struct shlib_info_entry *si_entries;
 };
 
 #endif
