@@ -521,7 +521,7 @@ _dl_find_shlibinfo(struct shlib_info_entry *sie, const char *load_name,
 	return NULL;
 }
 
-struct shlib_info_entry *
+static struct shlib_info_entry *
 _dl_add_sym_entry(struct shlib_info_entry *sie, const char *load_name,
     struct load_list *ll, unsigned int *sie_sz)
 {
@@ -568,8 +568,8 @@ _dl_add_sym_entry(struct shlib_info_entry *sie, const char *load_name,
 	return sie;
 }
 
-void
-_dl_attach_linkmap(elf_object_t *object, const char *exec_path)
+static void
+_dl_attach_linkmap(elf_object_t *object)
 {
 	struct load_list *llist;
 	struct shlib_info_entry *sie = NULL;
@@ -580,13 +580,13 @@ _dl_attach_linkmap(elf_object_t *object, const char *exec_path)
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
 		    llist = llist->next) {
+			load_name = object->load_name;
 			/*
 			 * load_name is abs. path for shared libs for
-			 * executable the load_name is copy command
-			 * line. We replace that with marker.
+			 * executable the load_name is copy of argv[0] command
+			 * line.
 			 */
-			load_name = object->load_name;
-			if (*load_name != '/') {
+			if (object->obj_type == OBJTYPE_EXE) {
 				if (_dl___realpath(load_name, path) < 0) {
 					_dl_free(sie);
 					return;
@@ -638,9 +638,6 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	Elf_Addr relro_addr = 0, relro_size = 0;
 	Elf_Phdr *ptls = NULL;
 	int align;
-	const char *exec_name;
-	const char **w_argv = argv;
-	char **w_envp = envp;
 
 	if (dl_data[AUX_pagesz] != 0)
 		_dl_pagesz = dl_data[AUX_pagesz];
@@ -650,18 +647,6 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	while (_dl_argv[_dl_argc] != NULL)
 		_dl_argc++;
 	_dl_setup_env(argv[0], envp);
-
-	/*
-	 * execve() syscall puts resolved path to executable here.
-	 */
-	exec_name = argv[_dl_argc + 1];
-
-	while (*w_argv)
-		w_argv++;
-
-	w_argv++;
-	_dl_printf("%s linker hint %p [ %s ]\n", __func__, *w_argv, *w_argv);
-	_dl_printf("%s envp %p [ %s ]\n", __func__, *w_envp, *w_envp);
 
 	/*
 	 * Make read-only the GOT and PLT and variables initialized
@@ -872,8 +857,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	if (failed != 0)
 		_dl_die("relocation failed");
 
-	_dl_show_objects(NULL);
-	_dl_attach_linkmap(_dl_objects, exec_name);
+	_dl_attach_linkmap(_dl_objects);
 
 	if (_dl_traceld)
 		_dl_exit(0);
