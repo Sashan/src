@@ -1,0 +1,89 @@
+.\" $OpenBSD$
+.\"
+.\" Copyright (c) 2025 Alexandr Nedvedicky <sashan@openbsd.org>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate$
+.Dt set_shlibinfo 2
+.Os
+.Sh NAME
+.Nm set_shlibinfo
+.Nd attach symbol hints to process
+.Sh SYNOPSIS
+.In sys/shlibinfo.h
+.Bd -literal
+struct shlibinfo_entry {
+	void	*sie_start;
+	void	*sie_end;
+	char	 sie_path[PATH_MAX];
+};
+
+struct shlibinfo {
+	unsigned int		 si_count;
+	struct shlib_info_entry *si_entries;
+};
+.Ed
+.Pp
+.Ft int
+.Fn set_shlibinfo "const void *shlibinfo"
+.Sh DESCRIPTION
+The
+.Nm
+syscall sets pointer to
+.Vt shlibinfo
+in calling process.
+The information is then used by
+.Xr btrace 8
+to find symbols of traced process when collecting stack traces.
+.Pp
+.Fa shlibinfo
+points to structure which holds pointer to array of
+.Vt shlibinfo_entry
+structures and number of elements in the array.
+.Nm
+is currently intended for use by
+.Xr ld.so 1 .
+The run-time linker constructs the process from shared objects.
+Each shared object is loaded to virtual address in process from
+file system. The
+.Vt shlibinfo_entry
+structure holds that information for each shared object.
+.Vt sie_start
+and
+.Vt sie_end
+members define address range in process virtual memory occupied
+by shared object.
+.Vt sie_path
+is NUL terminated string which holds file system path to shared object (.so).
+Note
+.Sh RETURN VALUES
+.Rv -std
+.Sh ERRORS
+.It Bq Er EPERM
+When dynamic tracing is not allowed (kern.allowdt is 0).
+.El
+.Sh SEE ALSO
+.Xr ld.so 1 ,
+.Xr dt 4
+.Sh STANDARDS
+The
+.Nm
+syscall is specific to the
+.Ox
+dynamic linker and should not be used in portable applications.
+.Sh HISTORY
+The
+.Nm
+syscall appeared in
+.Ox 7.8 .

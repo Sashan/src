@@ -609,7 +609,12 @@ _dl_attach_linkmap(elf_object_t *object)
 
 	if (sie != NULL) {
 		_dl_shlib_info.si_count = sie_count;
-		_dl_shlib_info.si_sie = sie;
+		_dl_shlib_info.si_entries = sie;
+		if (_dl_set_shlibinfo(_dl_shlib_info) == -1) {
+			_dl_free(sie);
+			_dl_shlib_info.si_count = 0;
+			_dl_shlib_info.si_entries = NULL;
+		}
 	}
 }
 

@@ -31,12 +31,7 @@ SRCS+=	malloc.c reallocarray.c tib.c ffs.c
 
 syscall=close exit fstat getdents getentropy getthrid issetugid kbind \
 	mimmutable mmap mprotect munmap open pledge \
-	pinsyscalls read __realpath __set_tcb sysctl thrkill \
-	utrace write
-.ifdef STACK_PROTECTOR
-syscall+=sendsyslog
-CFLAGS+=-DSTACK_PROTECTOR
-.endif
+	utrace write set_shlibinfo
 
 .if (${MACHINE_ARCH} == "i386")
 syscall+=mquery
