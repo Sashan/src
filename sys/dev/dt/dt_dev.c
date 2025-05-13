@@ -25,6 +25,7 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/shlibinfo.h>
 
 #include <machine/intr.h>
 
@@ -687,31 +688,51 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 }
 
 int
-dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getsymhint *dtgs)
+dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getsymhint *dtgs)
 {
 	struct uio uio;
 	struct iovec iov;
 	struct process *pr;
 	struct proc *p = curproc;
 	int e = 0;
+	struct shlibinfo si;
+	size_t sz;
 
 	if ((pr = prfind(dtgs->dtgs_pid)) == NULL) {
 		e = ESRCH;
-	} else if (pr->ps_sym_hints_sz <= dtgs->dtgs_symhint_sz) {
-		iov.iov_base = dtgs->dtgs_symhint;
-		iov.iov_len = pr->ps_sym_hints_sz;
+	}
+
+	iov.iov_base = &si;
+	iov.iov_len = sizeof (struct shlibinfo);;
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = (off_t)(vaddr_t)pr->ps_shlibinfo;
+	uio.uio_resid = sizeof (struct shlibinfo);
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_procp = p;
+	uio.uio_rw = UIO_READ;
+	e = process_domem(p, pr, &uio, PT_READ_D);
+	if (e != 0)
+		return e;
+
+	if (si.si_count != 0 && si.si_count < dtgs->dtgs_shlibinfo_entries_cnt) {
+		entries_sz = si.si_count * sizeof (struct shlibinfo_entry);
+		iov.iov_base = dtgs->dtgs_shlibinfo_entries;;
+		iov.iov_len = entries_sz;
 		uio.uio_iov = &iov;
 		uio.uio_iovcnt = 1;
-		uio.uio_offset = (off_t)(vaddr_t)pr->ps_sym_hints;
-		uio.uio_resid = pr->ps_sym_hints_sz;
+		uio.uio_offset = (off_t)(vaddr_t)si.si_entries;
+		uio.uio_resid = entries_sz;
 		uio.uio_segflg = UIO_USERSPACE;
 		uio.uio_procp = p;
 		uio.uio_rw = UIO_READ;
 		e = process_domem(p, pr, &uio, PT_READ_D);
+		if (e != 0)
+			return e;
 	}
+	dtgs->dtgs_shlibinfo_entries_cnt = si.si_count;
 
-	dtgs->dtgs_symhint_sz = pr->ps_sym_hints_sz;
-	if (dtgs->dtgs_symhint_sz == 0)
+	if (si.si_count == 0)
 		e = ENOTSUP;
 
 	return e;
