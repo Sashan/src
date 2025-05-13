@@ -112,7 +112,7 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
-struct syms		*dt_load_syms(pid_t, struct syms *, const char *);
+struct syms		*dt_load_syms(pid_t, struct syms *);
 
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
@@ -226,7 +226,7 @@ main(int argc, char *argv[])
 		dtfd = fd;
 
 		if (pid != -1)
-			uelf = dt_load_syms(pid, uelf, exec_path);
+			uelf = dt_load_syms(pid, uelf);
 	}
 
 	if (showprobes) {
@@ -2150,37 +2150,39 @@ dt_get_offset(pid_t pid)
 }
 
 struct syms *
-dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
+dt_load_syms(pid_t pid, struct syms *syms)
 {
-	struct dtioc_getsymhint	dtgs;
+	struct dtioc_getshlibinfo	dtgs;
+	size_t sz;
 
 	dtgs.dtgs_pid = pid;
-	dtgs.dtgs_symhint_sz = 0;
-	dtgs.dtgs_symhint = NULL;
+	dtgs.dtgs_shlibinfo_entries_cnt = 0;
+	dtgs.dtgs_shlibinfo_entries = NULL;
 
 	/* get maphint size */
-	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
-		warn("DIOCGETSYMHINT, assuming statically linked binary");
-		return kelf_load_syms(NULL, syms, exec_path);
+	if (ioctl(dtfd, DIOCGETSHLIBINFO, &dtgs)) {
+		warn("DIOCGETSHLIBINFO, assuming statically linked binary");
+		return kelf_load_syms(NULL, syms);
 	}
 
-	dtgs.dtgs_symhint = malloc(dtgs.dtgs_symhint_sz);
-	if (dtgs.dtgs_symhint == NULL) {
+	sz = dtgs.dtgs_shlibinfo_entries_cnt * sizeof (struct shlibinfo_entry);
+	dtgs.dtgs_shlibinfo_entries = malloc(sz);
+	if (dtgs.dtgs_shlibinfo_entries == NULL) {
 		warn("malloc");
 		return NULL;
 	}
 
 	/* get maphint */
-	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
-		warn("DIOCGETSYMHINT");
-		free(dtgs.dtgs_symhint);
+	if (ioctl(dtfd, DIOCGETSHLIBINFO, &dtgs)) {
+		warn("DIOCGETSHLIBINFO");
+		free(dtgs.dtgs_shlibinfo_entries);
 		return NULL;
 	}
 
 	is_dynamic_elf = 1;
-	syms = kelf_load_syms(&dtgs, syms, exec_path);
+	syms = kelf_load_syms(&dtgs, syms);
 
-	free(dtgs.dtgs_symhint);
+	free(dtgs.dtgs_shlibinfo_entries);
 
 	return syms;
 }
