@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/shlibinfo.h>
 
 #include <limits.h>
 #include <dev/dt/dtvar.h>
@@ -50,7 +51,7 @@ int sym_compare_search(const void *, const void *);
 int sym_compare_sort(const void *, const void *);
 
 struct syms *
-kelf_open(struct shlib_info_entry *sie, struct syms *syms)
+kelf_open(struct shlibinfo_entry *sie, struct syms *syms)
 {
 	char *name;
 	Elf *elf;
@@ -68,7 +69,7 @@ kelf_open(struct shlib_info_entry *sie, struct syms *syms)
 
 	fd = open(sie->sie_path, O_RDONLY);
 	if (fd == -1) {
-		warn("open: %s", path);
+		warn("open: %s", sie->sie_path);
 		return syms;
 	}
 
@@ -242,71 +243,26 @@ sym_compare_search(const void *keyp, const void *entryp)
 	return key->sym_value >= entry->sym_value + entry->sym_size;
 }
 
-/*
- * runtime linker does not know path to executable, we need get path
- * to executable from '-p' option.
- */
-static struct syms *
-kelf_open_exec(struct syms *syms, const struct shlib_info_entry *sie)
-{
-	struct syms *syms_new;
-
-	syms_new = kelf_open(sie, syms);
-	if (syms_new != NULL)
-		syms = syms_new;
-
-	return syms;
-}
-
 struct syms *
 kelf_open_kernel(const char *path)
 {
-	struct shlib_info_entry sie;
-	size_t path_len = strlen(path);
+	struct shlibinfo_entry sie;
 	struct syms *syms;
 
 	sie.sie_start = 0;
 	strlcpy(sie.sie_path, path, sizeof (sie.sie_path));
-	syms = kelf_open(sie, NULL);
+	syms = kelf_open(&sie, NULL);
 
 	return syms;
 }
 
 struct syms *
-kelf_load_syms(struct dtioc_getsymhint *dtgs, struct syms *syms)
+kelf_load_syms(struct dtioc_getshlibinfo *dtgs, struct syms *syms)
 {
-	struct shlib_info_entry *sie;;
+	unsigned int i;
 
-	/*
-	 * There ae no shared libs in statically linked binary. We load
-	 * symbols from exec_path using 0 as a base address.
-	 */
-	if (dtgs == NULL) {
-		memset(&sie, 0, sizeof (struct shlib_info_entry));
-		strlcpy(sie.sie_path, exec_path, sizeof (sie.sie_path));
-		
-		return kelf_open(syms, &sie);
-	}
-
-	sie = (struct shlib_info_entry *)dtgs->dtgs_symhint;
-	do {
-		if (strcmp(&sh->sh_path, "\xff\xff") == 0)
-			syms = kelf_open_exec(syms, sh, exec_path);
-		else
-			syms = kelf_open(sh, syms);
-
-		p = &sh->sh_path;
-		/*
-		 * find next map entry in array. it starts right
-		 * after current. we need to find the end of
-		 * sh_path string and move to next byte.
-		 */
-		while (*p)
-			p++;
-		p++;
-
-		sh = (struct sym_hint *)p;
-	} while (p < end);
+	for (i = 0; i < dtgs->dtgs_shlibinfo_entries_cnt; i++)
+		syms = kelf_open(&dtgs->dtgs_shlibinfo_entries[i], syms);
 
 	return syms;
 }
