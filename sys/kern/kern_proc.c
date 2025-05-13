@@ -42,6 +42,8 @@
 #include <sys/signalvar.h>
 #include <sys/pool.h>
 #include <sys/vnode.h>
+#include <sys/socket.h>
+#include <sys/mount.h>
 #include <sys/syscallargs.h>
 
 /*
@@ -685,7 +687,7 @@ pgrpdump(void)
 int
 sys_set_shlibinfo(struct proc *p, void *v, register_t *retval)
 {
-	struct sys_set_symhint_args /* {
+	struct sys_set_shlibinfo_args /* {
 		syscallarg(const void *) shlibinfo;
 	} */ *uap = v;
 	extern int allowdt;

@@ -164,7 +164,7 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
-int	dt_ioctl_get_maphint(struct dt_softc *, struct dtioc_getsymhint *);
+int	dt_ioctl_get_shlibinfo(struct dt_softc *, struct dtioc_getshlibinfo *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -302,7 +302,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
-	case DIOCGETSYMHINT:
+	case DIOCGETSHLIBINFO:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -329,9 +329,9 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
 		break;
-	case DIOCGETSYMHINT:
-		error = dt_ioctl_get_maphint(sc,
-		    (struct dtioc_getsymhint *)addr);
+	case DIOCGETSHLIBINFO:
+		error = dt_ioctl_get_shlibinfo(sc,
+		    (struct dtioc_getshlibinfo *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -688,7 +688,7 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 }
 
 int
-dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getsymhint *dtgs)
+dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getshlibinfo *dtgs)
 {
 	struct uio uio;
 	struct iovec iov;
@@ -696,7 +696,7 @@ dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getsymhint *dtgs)
 	struct proc *p = curproc;
 	int e = 0;
 	struct shlibinfo si;
-	size_t sz;
+	size_t entries_sz;
 
 	if ((pr = prfind(dtgs->dtgs_pid)) == NULL) {
 		e = ESRCH;
