@@ -458,7 +458,7 @@
 263	STD NOLOCK	{ int sys_pipe(int *fdp); }
 264	STD		{ int sys_fhopen(const fhandle_t *fhp, int flags); }
 265	UNIMPL
-266	STD		{ int sys_set_shlibinfo(const void *symhints); }
+266	STD		{ int sys_set_shlibinfo(const void *shlibinfo); }
 267	OBSOL		pad_preadv
 268	OBSOL		pad_pwritev
 269	STD NOLOCK	{ int sys_kqueue(void); }
