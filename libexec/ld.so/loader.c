@@ -101,7 +101,7 @@ const struct dl_cb_0 callbacks_0 = {
 	.dl_iterate_phdr	= &dl_iterate_phdr,
 };
 
-struct shlib_info _dl_shlib_info;
+struct shlibinfo _dl_shlibinfo;
 
 /*
  * Run dtors for a single object.
@@ -504,8 +504,8 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
-struct shlib_info_entry *
-_dl_find_shlibinfo(struct shlib_info_entry *sie, const char *load_name,
+struct shlibinfo_entry *
+_dl_find_shlibinfo(struct shlibinfo_entry *sie, const char *load_name,
     unsigned int sz)
 {
 	unsigned int i;
@@ -521,11 +521,11 @@ _dl_find_shlibinfo(struct shlib_info_entry *sie, const char *load_name,
 	return NULL;
 }
 
-static struct shlib_info_entry *
-_dl_add_sym_entry(struct shlib_info_entry *sie, const char *load_name,
+static struct shlibinfo_entry *
+_dl_add_sym_entry(struct shlibinfo_entry *sie, const char *load_name,
     struct load_list *ll, unsigned int *sie_sz)
 {
-	struct shlib_info_entry *new_sie;
+	struct shlibinfo_entry *new_sie;
 
 	new_sie = _dl_find_shlibinfo(sie, load_name, *sie_sz);
 	if (new_sie != NULL) {
@@ -551,7 +551,7 @@ _dl_add_sym_entry(struct shlib_info_entry *sie, const char *load_name,
 			new_sie->sie_end += ll->size;
 	} else {
 		new_sie = _dl_realloc(sie,
-		    (*sie_sz + 1) * sizeof (struct shlib_info_entry));
+		    (*sie_sz + 1) * sizeof (struct shlibinfo_entry));
 		if (new_sie == NULL) {
 			_dl_free(sie);
 			*sie_sz = 0;
@@ -572,7 +572,7 @@ static void
 _dl_attach_linkmap(elf_object_t *object)
 {
 	struct load_list *llist;
-	struct shlib_info_entry *sie = NULL;
+	struct shlibinfo_entry *sie = NULL;
 	unsigned int sie_count = 0;
 	const char *load_name;
 	char path[PATH_MAX];
@@ -608,12 +608,12 @@ _dl_attach_linkmap(elf_object_t *object)
 	}
 
 	if (sie != NULL) {
-		_dl_shlib_info.si_count = sie_count;
-		_dl_shlib_info.si_entries = sie;
-		if (_dl_set_shlibinfo(_dl_shlib_info) == -1) {
+		_dl_shlibinfo.si_count = sie_count;
+		_dl_shlibinfo.si_entries = sie;
+		if (_dl_set_shlibinfo(&_dl_shlibinfo) == -1) {
 			_dl_free(sie);
-			_dl_shlib_info.si_count = 0;
-			_dl_shlib_info.si_entries = NULL;
+			_dl_shlibinfo.si_count = 0;
+			_dl_shlibinfo.si_entries = NULL;
 		}
 	}
 }
