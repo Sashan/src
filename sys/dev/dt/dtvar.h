@@ -126,10 +126,12 @@ struct dtioc_getaux {
 	unsigned long		 dtga_auxbase;	/* AUX_base value */
 };
 
-struct dtioc_getsymhint {
+struct dtioc_getshlibinfo {
 	pid_t			 dtgs_pid;	/* process to inspect */
-	size_t			 dtgs_symhint_sz; /* size of dtgm_map buffer */
-	void			*dtgs_symhint; /* buffer where to put mapping */
+	unsigned int		 dtgs_shlibinfo_entries_cnt;
+						/* size of dtgm_map buffer */
+	void			*dtgs_shlibinfo_entries;
+ 					/* buffer where to put mapping */
 };
 
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
@@ -139,7 +141,7 @@ struct dtioc_getsymhint {
 #define DTIOCPRBDISABLE	 _IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
 #define DTIOCGETAUXBASE	 _IOWR('D', 7, struct dtioc_getaux)
-#define DIOCGETSYMHINT	 _IOWR('D', 8, struct dtioc_getsymhint)
+#define DIOCGETSHLIBINFO _IOWR('D', 8, struct dtioc_getshlibinfo)
 
 #ifdef _KERNEL
 
