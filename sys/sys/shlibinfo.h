@@ -43,7 +43,7 @@ struct shlibinfo_entry {
 
 struct shlibinfo {
 	unsigned int		 si_count;
-	struct shlib_info_entry *si_entries;
+	struct shlibinfo_entry	*si_entries;
 };
 
 #endif
