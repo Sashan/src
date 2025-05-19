@@ -700,6 +700,7 @@ dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getshlibinfo *dtgs)
 
 	if ((pr = prfind(dtgs->dtgs_pid)) == NULL) {
 		e = ESRCH;
+		return e;
 	}
 
 	iov.iov_base = &si;
