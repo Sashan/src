@@ -257,12 +257,12 @@ kelf_open_kernel(const char *path)
 }
 
 struct syms *
-kelf_load_syms(struct dtioc_getshlibinfo *dtgs, struct syms *syms)
+kelf_load_syms(struct shlibinfo_entry *sie, struct syms *syms)
 {
-	unsigned int i;
-
-	for (i = 0; i < dtgs->dtgs_shlibinfo_entries_cnt; i++)
-		syms = kelf_open(&dtgs->dtgs_shlibinfo_entries[i], syms);
+	while (sie->sie_path[0]) {
+		syms = kelf_open(sie, syms);
+		sie++;
+	}
 
 	return syms;
 }

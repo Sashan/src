@@ -22,6 +22,7 @@
 #include <sys/ioccom.h>
 #include <sys/stacktrace.h>
 #include <sys/time.h>
+#include <sys/shlibinfo.h>
 
 /*
  * Length of provider/probe/function names, including NUL.
@@ -128,10 +129,15 @@ struct dtioc_getaux {
 
 struct dtioc_getshlibinfo {
 	pid_t			 dtgs_pid;	/* process to inspect */
-	unsigned int		 dtgs_shlibinfo_entries_cnt;
-						/* size of dtgm_map buffer */
-	void			*dtgs_shlibinfo_entries;
- 					/* buffer where to put mapping */
+	struct shlibinfo	*dtgs_shlibinfo;/* where to store shlibinfo */
+};
+
+struct dtioc_getshlibinfo_map {
+	pid_t			 dtgsm_pid;	/* process to inspect */
+	struct shlibinfo	 dtgsm_si;
+				/* shlibinfo as returened by DIOCGETSHLIBINFO */
+	struct shlibinfo_entry	*dtgsm_sie;
+				/* where to store shlib entries */
 };
 
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
@@ -142,6 +148,7 @@ struct dtioc_getshlibinfo {
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
 #define DTIOCGETAUXBASE	 _IOWR('D', 7, struct dtioc_getaux)
 #define DIOCGETSHLIBINFO _IOWR('D', 8, struct dtioc_getshlibinfo)
+#define DIOCGETSHLIBINFOMAP _IOWR('D', 9, struct dtioc_getshlibinfo_map)
 
 #ifdef _KERNEL
 

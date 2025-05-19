@@ -165,6 +165,8 @@ int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
 int	dt_ioctl_get_shlibinfo(struct dt_softc *, struct dtioc_getshlibinfo *);
+int	dt_ioctl_get_shlibinfo_map(struct dt_softc *,
+    struct dtioc_getshlibinfo_map *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -303,6 +305,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
 	case DIOCGETSHLIBINFO:
+	case DIOCGETSHLIBINFOMAP:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -332,6 +335,10 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DIOCGETSHLIBINFO:
 		error = dt_ioctl_get_shlibinfo(sc,
 		    (struct dtioc_getshlibinfo *)addr);
+		break;
+	case DIOCGETSHLIBINFOMAP:
+		error = dt_ioctl_get_shlibinfo_map(sc,
+		    (struct dtioc_getshlibinfo_map *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -694,17 +701,16 @@ dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getshlibinfo *dtgs)
 	struct iovec iov;
 	struct process *pr;
 	struct proc *p = curproc;
-	int e = 0;
-	struct shlibinfo si;
-	size_t entries_sz;
+	int e;
 
-	if ((pr = prfind(dtgs->dtgs_pid)) == NULL) {
-		e = ESRCH;
-		return e;
-	}
+	if ((pr = prfind(dtgs->dtgs_pid)) == NULL)
+		return ESRCH;
 
-	iov.iov_base = &si;
-	iov.iov_len = sizeof (struct shlibinfo);;
+	if (pr->ps_shlibinfo == NULL)
+		return ENOTSUP;
+
+	iov.iov_base = dtgs->dtgs_shlibinfo;
+	iov.iov_len = sizeof (struct shlibinfo);
 	uio.uio_iov = &iov;
 	uio.uio_iovcnt = 1;
 	uio.uio_offset = (off_t)(vaddr_t)pr->ps_shlibinfo;
@@ -713,28 +719,35 @@ dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getshlibinfo *dtgs)
 	uio.uio_procp = p;
 	uio.uio_rw = UIO_READ;
 	e = process_domem(p, pr, &uio, PT_READ_D);
-	if (e != 0)
-		return e;
 
-	if (si.si_count != 0 && si.si_count < dtgs->dtgs_shlibinfo_entries_cnt) {
-		entries_sz = si.si_count * sizeof (struct shlibinfo_entry);
-		iov.iov_base = dtgs->dtgs_shlibinfo_entries;;
-		iov.iov_len = entries_sz;
-		uio.uio_iov = &iov;
-		uio.uio_iovcnt = 1;
-		uio.uio_offset = (off_t)(vaddr_t)si.si_entries;
-		uio.uio_resid = entries_sz;
-		uio.uio_segflg = UIO_USERSPACE;
-		uio.uio_procp = p;
-		uio.uio_rw = UIO_READ;
-		e = process_domem(p, pr, &uio, PT_READ_D);
-		if (e != 0)
-			return e;
-	}
-	dtgs->dtgs_shlibinfo_entries_cnt = si.si_count;
+	return e;
+}
 
-	if (si.si_count == 0)
-		e = ENOTSUP;
+int
+dt_ioctl_get_shlibinfo_map(struct dt_softc *sc,
+    struct dtioc_getshlibinfo_map *dtgsm)
+{
+	struct uio uio;
+	struct iovec iov;
+	struct process *pr;
+	struct proc *p = curproc;
+	int e;
+
+	if ((pr = prfind(dtgsm->dtgsm_pid)) == NULL)
+		return ESRCH;
+
+	iov.iov_base = dtgsm->dtgsm_sie;
+	iov.iov_len =
+	    sizeof (struct shlibinfo_entry) * dtgsm->dtgsm_si.si_count;
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = (off_t)(vaddr_t)dtgsm->dtgsm_si.si_entries;
+	uio.uio_resid =
+	    sizeof (struct shlibinfo_entry) * dtgsm->dtgsm_si.si_count;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_procp = p;
+	uio.uio_rw = UIO_READ;
+	e = process_domem(p, pr, &uio, PT_READ_D);
 
 	return e;
 }

@@ -185,26 +185,14 @@ main(int argc, char *argv[])
 	 * Cannot unveil() because we are loading symbols
 	 * from shared objects which location is unknown here.
 	 */
+	if (filename != NULL) {
+		btscript = read_btfile(filename, &btslen);
+		argc--;
+		argv++;
+	}
 
 	nargs = argc;
 	vargs = argv;
-
-	if (argv[0] != NULL) {
-		pid = strtonum(argv[0], 0, INT_MAX, NULL);
-		if (errno != 0)
-			pid = -1;
-		if (pid != -1) {
-			fd = open(__PATH_DEVDT, O_RDONLY);
-			if (fd == -1)
-				err(1, "could not open %s", __PATH_DEVDT);
-		}
-	}
-
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-
-	if (filename != NULL)
-		btscript = read_btfile(filename, &btslen);
 
 	if (btscript == NULL && !showprobes)
 		usage();
@@ -225,8 +213,11 @@ main(int argc, char *argv[])
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
 
-		if (pid != -1)
-			uelf = dt_load_syms(pid, uelf);
+		if (argv[0] != 0) {
+			pid = strtonum(argv[0], 0, INT_MAX, NULL);
+			if (errno == 0)
+				uelf = dt_load_syms(pid, uelf);
+		}
 	}
 
 	if (showprobes) {
@@ -2152,37 +2143,63 @@ dt_get_offset(pid_t pid)
 struct syms *
 dt_load_syms(pid_t pid, struct syms *syms)
 {
-	struct dtioc_getshlibinfo	dtgs;
-	size_t sz;
+	struct dtioc_getshlibinfo	 dtgs;
+	struct shlibinfo		 si;
+	struct shlibinfo_entry		*sie;
+	struct dtioc_getshlibinfo_map	 dtgsm;
 
 	dtgs.dtgs_pid = pid;
-	dtgs.dtgs_shlibinfo_entries_cnt = 0;
-	dtgs.dtgs_shlibinfo_entries = NULL;
-
+	dtgs.dtgs_shlibinfo = &si;
 	/* get maphint size */
 	if (ioctl(dtfd, DIOCGETSHLIBINFO, &dtgs)) {
-		warn("DIOCGETSHLIBINFO, assuming statically linked binary");
-		return kelf_load_syms(NULL, syms);
+		/*
+		 * no process is found for pid, we may exit right here.
+		 * we leave it up to caller who should discover there
+		 * is no process running for desired pid.
+		 */
+		if (errno == ESRCH)
+			return NULL;
+
+		switch (errno) {
+		case ENOTSUP:
+			warn("assuming statically linked binary");
+			/*
+			 * TODO: construct fake dtgs for executable (passed via
+			 * -p).
+			 */
+			syms = kelf_load_syms(NULL, syms);
+			break;
+		case ESRCH:
+			warn("no process for %d", pid);
+			syms = NULL;
+			break;
+		default:
+			warn("unknown error");
+			syms = NULL; 
+		}
+		return syms;
 	}
 
-	sz = dtgs.dtgs_shlibinfo_entries_cnt * sizeof (struct shlibinfo_entry);
-	dtgs.dtgs_shlibinfo_entries = malloc(sz);
-	if (dtgs.dtgs_shlibinfo_entries == NULL) {
+	/* make space for terminator */
+	sie = calloc(si.si_count + 1, sizeof (struct shlibinfo_entry));
+	if (sie == NULL) {
 		warn("malloc");
 		return NULL;
 	}
 
-	/* get maphint */
-	if (ioctl(dtfd, DIOCGETSHLIBINFO, &dtgs)) {
-		warn("DIOCGETSHLIBINFO");
-		free(dtgs.dtgs_shlibinfo_entries);
+	dtgsm.dtgsm_pid = pid;
+	dtgsm.dtgsm_si = si;
+	dtgsm.dtgsm_sie = sie;
+	if (ioctl(dtfd, DIOCGETSHLIBINFOMAP, &dtgsm)) {
+		warn("DIOCGETSHLIBINFOMAP");
+		free(sie);
 		return NULL;
 	}
 
 	is_dynamic_elf = 1;
-	syms = kelf_load_syms(&dtgs, syms);
+	syms = kelf_load_syms(sie, syms);
 
-	free(dtgs.dtgs_shlibinfo_entries);
+	free(sie);
 
 	return syms;
 }

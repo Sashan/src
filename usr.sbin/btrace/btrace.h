@@ -41,7 +41,7 @@ unsigned long		 dt_get_offset(pid_t);
 /* ksyms.c */
 struct syms;
 struct syms		*kelf_open_kernel(const char *);
-struct syms		*kelf_load_syms(struct dtioc_getshlibinfo *,
+struct syms		*kelf_load_syms(struct shlibinfo_entry *,
 			    struct syms *);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym(struct syms *, char *, size_t,
