@@ -101,7 +101,12 @@ const struct dl_cb_0 callbacks_0 = {
 	.dl_iterate_phdr	= &dl_iterate_phdr,
 };
 
-struct shlibinfo _dl_shlibinfo;
+struct _dl_shlibinfo {
+	struct shlibinfo	dsi_si;
+	unsigned int		dsi_max_slots;
+};
+
+struct _dl_shlibinfo _dl_shlibinfo;
 
 /*
  * Run dtors for a single object.
@@ -504,16 +509,52 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
-struct shlibinfo_entry *
-_dl_find_shlibinfo(struct shlibinfo_entry *sie, const char *load_name,
-    unsigned int sz)
+static struct shlibinfo_entry *
+_dl_shlib_bloat_slots_sie(struct _dl_shlibinfo *dsi)
+{
+	unsigned int cur_slots = dsi->dsi_max_slots;
+	struct shlibinfo_entry *rv;
+	size_t sz;
+
+	cur_slots = cur_slots << 1;
+	if (cur_slots == 0)
+		cur_slots = 8;
+
+	sz = cur_slots * sizeof (struct shlibinfo_entry);
+	rv = _dl_realloc(dsi->dsi_si.si_entries, sz);
+	if (rv != NULL) {
+		dsi->dsi_si.si_entries = rv;
+		dsi->dsi_max_slots = cur_slots;
+	}
+
+	return rv;
+}
+
+static struct shlibinfo_entry *
+_dl_shlib_get_sie(struct _dl_shlibinfo *dsi)
+{
+	struct shlibinfo_entry *sie;
+
+	if (dsi->dsi_si.si_count == dsi->dsi_max_slots)
+		return _dl_shlib_bloat_slots_sie(dsi);
+
+	sie = &dsi->dsi_si.si_entries[dsi->dsi_si.si_count];
+	dsi->dsi_si.si_count++;
+
+	return sie;
+}
+
+static struct shlibinfo_entry *
+_dl_find_shlibinfo(struct _dl_shlibinfo *tsi, const char *load_name)
 {
 	unsigned int i;
+	struct shlibinfo_entry *sie;
 
-	if (sie == NULL)
+	if (tsi->dsi_si.si_entries == NULL)
 		return NULL;
 
-	for (i = 0; i < sz; i++) {
+	sie = tsi->dsi_si.si_entries;
+	for (i = 0; i < tsi->dsi_si.si_count; i++) {
 		if (_dl_strcmp(sie[i].sie_path, load_name) == 0)
 			return &sie[i];
 	}
@@ -522,13 +563,13 @@ _dl_find_shlibinfo(struct shlibinfo_entry *sie, const char *load_name,
 }
 
 static struct shlibinfo_entry *
-_dl_add_sym_entry(struct shlibinfo_entry *sie, const char *load_name,
-    struct load_list *ll, unsigned int *sie_sz)
+_dl_add_sym_entry(struct _dl_shlibinfo *tsi, const char *load_name,
+    struct load_list *ll)
 {
-	struct shlibinfo_entry *new_sie;
+	struct shlibinfo_entry *sie;
 
-	new_sie = _dl_find_shlibinfo(sie, load_name, *sie_sz);
-	if (new_sie != NULL) {
+	sie = _dl_find_shlibinfo(tsi, load_name);
+	if (sie != NULL) {
 		/*
 		 * This branch just updates the existing entry we keep
 		 * for library.
@@ -545,24 +586,17 @@ _dl_add_sym_entry(struct shlibinfo_entry *sie, const char *load_name,
 		 * elf file is offset to the start of the region (the lowest
 		 * address).
 		 */
-		if (new_sie->sie_start > ll->start)
-			new_sie->sie_start = ll->start;
+		if (sie->sie_start > ll->start)
+			sie->sie_start = ll->start;
 		else
-			new_sie->sie_end += ll->size;
+			sie->sie_end += ll->size;
 	} else {
-		new_sie = _dl_realloc(sie,
-		    (*sie_sz + 1) * sizeof (struct shlibinfo_entry));
-		if (new_sie == NULL) {
-			_dl_free(sie);
-			*sie_sz = 0;
-			return NULL;
+		sie = _dl_shlib_get_sie(tsi);
+		if (sie != NULL) {
+			sie->sie_start = ll->start;
+			sie->sie_end = ll->start + ll->size;
+			_dl_strlcpy(sie->sie_path, load_name, PATH_MAX);
 		}
-		sie = &new_sie[*sie_sz];
-		sie->sie_start = ll->start;
-		sie->sie_end = ll->start + ll->size;
-		_dl_strlcpy(sie->sie_path, load_name, PATH_MAX);
-		*sie_sz += 1;
-		sie = new_sie;
 	}
 
 	return sie;
@@ -571,15 +605,31 @@ _dl_add_sym_entry(struct shlibinfo_entry *sie, const char *load_name,
 static void
 _dl_attach_linkmap(elf_object_t *object)
 {
+	struct _dl_shlibinfo tdsi;
 	struct load_list *llist;
 	struct shlibinfo_entry *sie = NULL;
-	unsigned int sie_count = 0;
 	const char *load_name;
 	char path[PATH_MAX];
+
+	_dl_memset(&tdsi, 0, sizeof (_dl_shlibinfo));
 
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
 		    llist = llist->next) {
+#if 0
+/* this breaks because, we need to determine .text section
+ * offset from the start of particular .so library.
+ * I think it's fine to leave the code as-is.
+ * We just adjust address range which covers alls
+ * sections in .so module. It does not cost a resource
+ */
+			/*
+			 * only text segments (executable) do matter.
+			 */
+			if ((llist->prot & PROT_EXEC) == 0)
+				continue;
+#endif
+
 			load_name = object->load_name;
 			/*
 			 * load_name is abs. path for shared libs for
@@ -593,28 +643,25 @@ _dl_attach_linkmap(elf_object_t *object)
 				}
 				load_name = (const char *)path;
 			}
-			sie = _dl_add_sym_entry(sie, load_name, llist,
-			    &sie_count);
-			/*
-			 * just return is fine here, as we should
-			 * not prevent loading when failing to
-			 * create hints for btrace(8).
-			 */
-			if (sie == NULL)
+			sie = _dl_add_sym_entry(&tdsi, load_name, llist);
+			if (sie == NULL) {
+				/*
+				 * just return is fine here, as we should
+				 * not prevent loading when failing to
+				 * create hints for btrace(8).
+				 */
+				_dl_free(tdsi.dsi_si.si_entries);
 				return;
+			}
 		}
 
 		object = object->next;
 	}
 
 	if (sie != NULL) {
-		_dl_shlibinfo.si_count = sie_count;
-		_dl_shlibinfo.si_entries = sie;
-		if (_dl_set_shlibinfo(&_dl_shlibinfo) == -1) {
-			_dl_free(sie);
-			_dl_shlibinfo.si_count = 0;
-			_dl_shlibinfo.si_entries = NULL;
-		}
+		_dl_shlibinfo = tdsi;
+		if (_dl_set_shlibinfo(&_dl_shlibinfo.dsi_si) == -1)
+			_dl_free(tdsi.dsi_si.si_entries);
 	}
 }
 
