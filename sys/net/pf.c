@@ -258,7 +258,9 @@ void			 pf_state_key_link_inpcb(struct pf_state_key *,
 void			 pf_state_key_unlink_inpcb(struct pf_state_key *);
 void			 pf_pktenqueue_delayed(void *);
 int32_t			 pf_state_expires(const struct pf_state *, uint8_t);
-int			 pf_get_bootp_status(const struct pf_pdesc *);
+int			 pf_get_bootp_status(sa_family_t, uint8_t,
+			    const struct pf_addr *, const struct pf_addr *,
+			    uint16_t, uint16_t);
 
 #if NPFLOG > 0
 void			 pf_log_matches(struct pf_pdesc *, struct pf_rule *,
@@ -962,7 +964,8 @@ pf_state_key_setup(struct pf_pdesc *pd, struct pf_state_key **skw,
 	sk1->rdomain = pd->rdomain;
 	sk1->hash = pf_pkt_hash(sk1->af, sk1->proto,
 	    &sk1->addr[0], &sk1->addr[1], sk1->port[0], sk1->port[1]);
-	sk1->bootp = pf_get_bootp_status(pd);
+	sk1->bootp = pf_get_bootp_status(sk1->af, sk1->proto, &sk1->addr[0],
+	    &sk1->addr[1], sk1->port[0], sk1->port[1]);
 	if (rtableid >= 0)
 		wrdom = rtable_l2(rtableid);
 
@@ -1137,18 +1140,20 @@ pf_compare_state_keys(struct pf_state_key *a, struct pf_state_key *b,
 }
 
 int
-pf_get_bootp_status(const struct pf_pdesc *pd)
+pf_get_bootp_status(sa_family_t af, uint8_t proto,
+    const struct pf_addr *src, const struct pf_addr *dst,
+    uint16_t sport, uint16_t dport)
 {
 	int	status = PF_BOOTP_NONE;
 
-	if (pd->af == AF_INET && pd->proto == IPPROTO_UDP) {
-		if (pd->src->addr32[0] == INADDR_ANY &&
-		    pd->dst->addr32[0] == INADDR_BROADCAST &&
-		    *pd->sport == htons(68) && *pd->dport == htons(67))
+	if (af == AF_INET && proto == IPPROTO_UDP) {
+		if (src->addr32[0] == INADDR_ANY &&
+		    dst->addr32[0] == INADDR_BROADCAST &&
+		    sport == htons(68) && dport == htons(67))
 			status = PF_BOOTP_REQUEST;
-		else if (pd->src->addr32[0] != INADDR_ANY &&
-		    pd->dst->addr32[0] == INADDR_BROADCAST &&
-		    *pd->sport == htons(67) && *pd->dport == htons(68))
+		else if (src->addr32[0] != INADDR_ANY &&
+		    dst->addr32[0] == INADDR_BROADCAST &&
+		    sport == htons(67) && dport == htons(68))
 			status = PF_BOOTP_REPLY;
 	}
 
@@ -7333,11 +7338,8 @@ pf_pkt_hash(sa_family_t af, uint8_t proto,
 	 * request is: 0.0.0.0:68 -> 255.255.255.255:67
 	 * reply is: a.b.c.d:67 -> 255.255.255.255:68
 	 */
-	if (af == AF_INET && proto == IPPROTO_UDP &&
-	    ((src->addr32[0] == INADDR_ANY && dst->addr32[0] == INADDR_BROADCAST &&
-	    sport == htons(68) && dport == htons(67)) ||
-	    (src->addr32[0] != INADDR_ANY && dst->addr32[0] == INADDR_BROADCAST &&
-	    sport == htons(67) && dport == htons(68)))) {
+	if (pf_get_bootp_status(af, proto, src, dst, sport, dport) !=
+	    PF_BOOTP_NONE) {
 		hash = 0;
 	} else {
 		hash = src->addr32[0] ^ dst->addr32[0];
@@ -7830,7 +7832,8 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 		key.port[pd.sidx] = pd.osport;
 		key.port[pd.didx] = pd.odport;
 		key.hash = pd.hash;
-		key.bootp = pf_get_bootp_status(&pd);
+		key.bootp = pf_get_bootp_status(pd.af, pd.proto, pd.src,
+		    pd.dst, *pd.sport, *pd.dport);
 
 		PF_STATE_ENTER_READ();
 		action = pf_find_state(&pd, &key, &st);
