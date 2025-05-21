@@ -698,6 +698,12 @@ struct pf_state_peer {
 
 TAILQ_HEAD(pf_state_queue, pf_state);
 
+enum {
+	PF_BOOTP_NONE,
+	PF_BOOTP_REQUEST,
+	PF_BOOTP_REPLY
+};
+
 /* keep synced with struct pf_state_key, used in RB_FIND */
 struct pf_state_key_cmp {
 	struct pf_addr	 addr[2];
@@ -706,6 +712,7 @@ struct pf_state_key_cmp {
 	u_int16_t	 hash;
 	sa_family_t	 af;
 	u_int8_t	 proto;
+	u_int8_t	 bootp;
 };
 
 /* keep synced with struct pf_state, used in RB_FIND */

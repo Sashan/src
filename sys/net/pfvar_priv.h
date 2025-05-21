@@ -71,6 +71,7 @@ struct pf_state_key {
 	u_int16_t	 hash;
 	sa_family_t	 af;
 	u_int8_t	 proto;
+	u_int8_t	 bootp;
 
 	RBT_ENTRY(pf_state_key)	 sk_entry;
 	struct pf_statelisthead	 sk_states;

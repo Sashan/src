@@ -258,6 +258,7 @@ void			 pf_state_key_link_inpcb(struct pf_state_key *,
 void			 pf_state_key_unlink_inpcb(struct pf_state_key *);
 void			 pf_pktenqueue_delayed(void *);
 int32_t			 pf_state_expires(const struct pf_state *, uint8_t);
+int			 pf_get_bootp_status(const struct pf_pdesc *);
 
 #if NPFLOG > 0
 void			 pf_log_matches(struct pf_pdesc *, struct pf_rule *,
@@ -702,6 +703,15 @@ pf_state_compare_key(const struct pf_state_key *a,
 		return (diff);
 	if ((diff = a->af - b->af) != 0)
 		return (diff);
+	if ((diff = a->rdomain - b->rdomain) != 0)
+		return (diff);
+
+	/*
+	 * short circuit to match bootp/dhcp request with reply
+	 */
+	if (a->bootp != PF_BOOTP_NONE && b->bootp != PF_BOOTP_NONE)
+		return 0;
+
 	if ((diff = pf_addr_compare(&a->addr[0], &b->addr[0], a->af)) != 0)
 		return (diff);
 	if ((diff = pf_addr_compare(&a->addr[1], &b->addr[1], a->af)) != 0)
@@ -709,8 +719,6 @@ pf_state_compare_key(const struct pf_state_key *a,
 	if ((diff = a->port[0] - b->port[0]) != 0)
 		return (diff);
 	if ((diff = a->port[1] - b->port[1]) != 0)
-		return (diff);
-	if ((diff = a->rdomain - b->rdomain) != 0)
 		return (diff);
 	return (0);
 }
@@ -954,13 +962,18 @@ pf_state_key_setup(struct pf_pdesc *pd, struct pf_state_key **skw,
 	sk1->rdomain = pd->rdomain;
 	sk1->hash = pf_pkt_hash(sk1->af, sk1->proto,
 	    &sk1->addr[0], &sk1->addr[1], sk1->port[0], sk1->port[1]);
+	sk1->bootp = pf_get_bootp_status(pd);
 	if (rtableid >= 0)
 		wrdom = rtable_l2(rtableid);
 
-	if (PF_ANEQ(&pd->nsaddr, pd->src, pd->af) ||
+	/*
+	 * suppress NAT for dhcp/bootp.
+	 */
+	if (sk1->bootp == PF_BOOTP_NONE &&
+	    (PF_ANEQ(&pd->nsaddr, pd->src, pd->af) ||
 	    PF_ANEQ(&pd->ndaddr, pd->dst, pd->af) ||
 	    pd->nsport != pd->osport || pd->ndport != pd->odport ||
-	    wrdom != pd->rdomain || afto) {	/* NAT/NAT64 */
+	    wrdom != pd->rdomain || afto)) {	/* NAT/NAT64 */
 		if ((sk2 = pf_alloc_state_key(PR_NOWAIT | PR_ZERO)) == NULL) {
 			pf_state_key_unref(sk1);
 			return (ENOMEM);
@@ -1121,6 +1134,25 @@ pf_compare_state_keys(struct pf_state_key *a, struct pf_state_key *b,
 		}
 		return (-1);
 	}
+}
+
+int
+pf_get_bootp_status(const struct pf_pdesc *pd)
+{
+	int	status = PF_BOOTP_NONE;
+
+	if (pd->af == AF_INET && pd->proto == IPPROTO_UDP) {
+		if (pd->src->addr32[0] == INADDR_ANY &&
+		    pd->dst->addr32[0] == INADDR_BROADCAST &&
+		    *pd->sport == htons(68) && *pd->dport == htons(67))
+			status = PF_BOOTP_REQUEST;
+		else if (pd->src->addr32[0] != INADDR_ANY &&
+		    pd->dst->addr32[0] == INADDR_BROADCAST &&
+		    *pd->sport == htons(67) && *pd->dport == htons(68))
+			status = PF_BOOTP_REPLY;
+	}
+
+	return (status);
 }
 
 int
@@ -7295,14 +7327,28 @@ pf_pkt_hash(sa_family_t af, uint8_t proto,
 {
 	uint32_t hash;
 
-	hash = src->addr32[0] ^ dst->addr32[0];
+	/*
+	 * don't calculate hash for IPv4 bootp/dhcp as those protocols
+	 * use different IP addresses in requests and replies.
+	 * request is: 0.0.0.0:68 -> 255.255.255.255:67
+	 * reply is: a.b.c.d:67 -> 255.255.255.255:68
+	 */
+	if (af == AF_INET && proto == IPPROTO_UDP &&
+	    ((src->addr32[0] == INADDR_ANY && dst->addr32[0] == INADDR_BROADCAST &&
+	    sport == htons(68) && dport == htons(67)) ||
+	    (src->addr32[0] != INADDR_ANY && dst->addr32[0] == INADDR_BROADCAST &&
+	    sport == htons(67) && dport == htons(68)))) {
+		hash = 0;
+	} else {
+		hash = src->addr32[0] ^ dst->addr32[0];
 #ifdef INET6
-	if (af == AF_INET6) {
-		hash ^= src->addr32[1] ^ dst->addr32[1];
-		hash ^= src->addr32[2] ^ dst->addr32[2];
-		hash ^= src->addr32[3] ^ dst->addr32[3];
-	}
+		if (af == AF_INET6) {
+			hash ^= src->addr32[1] ^ dst->addr32[1];
+			hash ^= src->addr32[2] ^ dst->addr32[2];
+			hash ^= src->addr32[3] ^ dst->addr32[3];
+		}
 #endif
+	}
 
 	switch (proto) {
 	case IPPROTO_TCP:
@@ -7784,6 +7830,7 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 		key.port[pd.sidx] = pd.osport;
 		key.port[pd.didx] = pd.odport;
 		key.hash = pd.hash;
+		key.bootp = pf_get_bootp_status(&pd);
 
 		PF_STATE_ENTER_READ();
 		action = pf_find_state(&pd, &key, &st);
