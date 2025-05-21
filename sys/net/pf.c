@@ -963,9 +963,11 @@ pf_state_key_setup(struct pf_pdesc *pd, struct pf_state_key **skw,
 	sk1->af = pd->af;
 	sk1->rdomain = pd->rdomain;
 	sk1->hash = pf_pkt_hash(sk1->af, sk1->proto,
-	    &sk1->addr[0], &sk1->addr[1], sk1->port[0], sk1->port[1]);
-	sk1->bootp = pf_get_bootp_status(sk1->af, sk1->proto, &sk1->addr[0],
-	    &sk1->addr[1], sk1->port[0], sk1->port[1]);
+	    &sk1->addr[pd->sidx], &sk1->addr[pd->didx],
+	    sk1->port[pd->sidx], sk1->port[pd->didx]);
+	sk1->bootp = pf_get_bootp_status(sk1->af, sk1->proto,
+	    &sk1->addr[pd->sidx], &sk1->addr[pd->didx],
+	    sk1->port[pd->sidx], sk1->port[pd->didx]);
 	if (rtableid >= 0)
 		wrdom = rtable_l2(rtableid);
 
