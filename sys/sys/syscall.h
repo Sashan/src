@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscall.h,v 1.282 2025/02/17 13:10:56 mpi Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call numbers.
@@ -590,6 +590,9 @@
 
 /* syscall: "fhopen" ret: "int" args: "const fhandle_t *" "int" */
 #define	SYS_fhopen	264
+
+/* syscall: "set_shlibinfo" ret: "int" args: "const void *" */
+#define	SYS_set_shlibinfo	266
 
 				/* 267 is obsolete pad_preadv */
 				/* 268 is obsolete pad_pwritev */
