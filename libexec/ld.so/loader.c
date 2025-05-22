@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/exec.h>
+#include <sys/shlibinfo.h>
 #ifdef __i386__
 # include <machine/vmparam.h>
 #endif
@@ -100,6 +101,12 @@ const struct dl_cb_0 callbacks_0 = {
 	.dl_iterate_phdr	= &dl_iterate_phdr,
 };
 
+struct _dl_shlibinfo {
+	struct shlibinfo	dsi_si;
+	unsigned int		dsi_max_slots;
+};
+
+struct _dl_shlibinfo _dl_shlibinfo;
 
 /*
  * Run dtors for a single object.
@@ -502,6 +509,148 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
+static struct shlibinfo_entry *
+_dl_shlib_bloat_slots_sie(struct _dl_shlibinfo *dsi)
+{
+	unsigned int cur_slots = dsi->dsi_max_slots;
+	struct shlibinfo_entry *rv;
+	size_t sz;
+
+	cur_slots = cur_slots << 1;
+	if (cur_slots == 0)
+		cur_slots = 8;
+
+	sz = cur_slots * sizeof (struct shlibinfo_entry);
+	rv = _dl_realloc(dsi->dsi_si.si_entries, sz);
+	if (rv != NULL) {
+		dsi->dsi_si.si_entries = rv;
+		dsi->dsi_max_slots = cur_slots;
+	}
+
+	return rv;
+}
+
+static struct shlibinfo_entry *
+_dl_shlib_get_sie(struct _dl_shlibinfo *dsi)
+{
+	struct shlibinfo_entry *sie;
+
+	if (dsi->dsi_si.si_count == dsi->dsi_max_slots)
+		return _dl_shlib_bloat_slots_sie(dsi);
+
+	sie = &dsi->dsi_si.si_entries[dsi->dsi_si.si_count];
+	dsi->dsi_si.si_count++;
+
+	return sie;
+}
+
+static struct shlibinfo_entry *
+_dl_find_shlibinfo(struct _dl_shlibinfo *tsi, const char *load_name)
+{
+	unsigned int i;
+	struct shlibinfo_entry *sie;
+
+	if (tsi->dsi_si.si_entries == NULL)
+		return NULL;
+
+	sie = tsi->dsi_si.si_entries;
+	for (i = 0; i < tsi->dsi_si.si_count; i++) {
+		if (_dl_strcmp(sie[i].sie_path, load_name) == 0)
+			return &sie[i];
+	}
+
+	return NULL;
+}
+
+static struct shlibinfo_entry *
+_dl_add_sym_entry(struct _dl_shlibinfo *tsi, const char *load_name,
+    struct load_list *ll)
+{
+	struct shlibinfo_entry *sie;
+
+	sie = _dl_find_shlibinfo(tsi, load_name);
+	if (sie != NULL) {
+		/*
+		 * This branch just updates the existing entry we keep
+		 * for library.
+		 * According to procmap(1) the shared libraries seem to be
+		 * loaded to several sections which look as follows:
+		 * 2fbd6a4e000-2fbd6a85fff     224k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6a86000-2fbd6b3cfff     732k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3d000-2fbd6b3dfff       4k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3e000-2fbd6b43fff      24k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b44000-2fbd6b45fff       8k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b46000-2fbd6b46fff       4k ... - /usr/lib/libc.so.100.4
+		 * As you can see ranges above create a continuous region
+		 * from 2fbd6a4e000 to 2fbd6b46fff. The symbol table entry in
+		 * elf file is offset to the start of the region (the lowest
+		 * address).
+		 */
+		if (sie->sie_start > ll->start)
+			sie->sie_start = ll->start;
+		else
+			sie->sie_end += ll->size;
+	} else {
+		sie = _dl_shlib_get_sie(tsi);
+		if (sie != NULL) {
+			sie->sie_start = ll->start;
+			sie->sie_end = ll->start + ll->size;
+			_dl_strlcpy(sie->sie_path, load_name, PATH_MAX);
+		}
+	}
+
+	return sie;
+}
+
+static void
+_dl_attach_linkmap(elf_object_t *object)
+{
+	struct _dl_shlibinfo tdsi;
+	struct load_list *llist;
+	struct shlibinfo_entry *sie = NULL;
+	const char *load_name;
+	char path[PATH_MAX];
+
+	_dl_memset(&tdsi, 0, sizeof (_dl_shlibinfo));
+
+	while (object != NULL) {
+		for (llist = object->load_list; llist != NULL;
+		    llist = llist->next) {
+			load_name = object->load_name;
+			/*
+			 * load_name is abs. path for shared libs for
+			 * executable the load_name is copy of argv[0] command
+			 * line.
+			 */
+			if (object->obj_type == OBJTYPE_EXE) {
+				if (_dl___realpath(load_name, path) < 0) {
+					_dl_free(sie);
+					return;
+				}
+				load_name = (const char *)path;
+			}
+			sie = _dl_add_sym_entry(&tdsi, load_name, llist);
+			if (sie == NULL) {
+				/*
+				 * just return is fine here, as we should
+				 * not prevent loading when failing to
+				 * create hints for btrace(8).
+				 */
+				_dl_free(tdsi.dsi_si.si_entries);
+				return;
+			}
+		}
+
+		object = object->next;
+	}
+
+	if (sie != NULL) {
+		_dl_shlibinfo = tdsi;
+		if (_dl_set_shlibinfo(&_dl_shlibinfo.dsi_si) == -1)
+			_dl_free(tdsi.dsi_si.si_entries);
+	}
+}
+
 /*
  * This is the dynamic loader entrypoint. When entering here, depending
  * on architecture type, the stack and registers are set up according
@@ -745,6 +894,8 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 
 	if (failed != 0)
 		_dl_die("relocation failed");
+
+	_dl_attach_linkmap(_dl_objects);
 
 	if (_dl_traceld)
 		_dl_exit(0);
