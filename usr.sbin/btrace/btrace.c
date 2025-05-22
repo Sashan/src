@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/queue.h>
+#include <sys/shlibinfo.h>
 
 #include <assert.h>
 #include <err.h>
@@ -111,6 +112,8 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
+struct syms		*dt_load_syms(pid_t, struct syms *, const char *);
+
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */
@@ -125,6 +128,7 @@ struct syms		*kelf, *uelf;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
+int			 is_dynamic_elf = 0;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -142,6 +146,8 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
+	pid_t pid = -1;
+	const char *exec_path = NULL;
 
 	setlocale(LC_ALL, "");
 
@@ -158,7 +164,7 @@ main(int argc, char *argv[])
 			noaction = 1;
 			break;
 		case 'p':
-			uelf = kelf_open(optarg);
+			exec_path = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -174,18 +180,11 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
-	 /* Cannot pledge due to special ioctl()s */
-	if (unveil(__PATH_DEVDT, "r") == -1)
-		err(1, "unveil %s", __PATH_DEVDT);
-	if (unveil(_PATH_KSYMS, "r") == -1)
-		err(1, "unveil %s", _PATH_KSYMS);
-	if (filename != NULL) {
-		if (unveil(filename, "r") == -1)
-			err(1, "unveil %s", filename);
-	}
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-
+	/*
+	 * Cannot pledge due to special ioctl()s
+	 * Cannot unveil() because we are loading symbols
+	 * from shared objects which location is unknown here.
+	 */
 	if (filename != NULL) {
 		btscript = read_btfile(filename, &btslen);
 		argc--;
@@ -208,10 +207,17 @@ main(int argc, char *argv[])
 		return error;
 
 	if (showprobes || g_nprobes > 0) {
-		fd = open(__PATH_DEVDT, O_RDONLY);
+		if (fd == -1)
+			fd = open(__PATH_DEVDT, O_RDONLY);
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
+
+		if (argv[0] != 0) {
+			pid = strtonum(argv[0], 0, INT_MAX, NULL);
+			if (errno == 0)
+				uelf = dt_load_syms(pid, uelf, exec_path);
+		}
 	}
 
 	if (showprobes) {
@@ -611,7 +617,7 @@ rules_setup(int fd)
 	}
 
 	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS);
+		kelf = kelf_open_kernel(_PATH_KSYMS);
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
@@ -1808,7 +1814,10 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
+		if (is_dynamic_elf)
+			str = builtin_stack(dtev, 0, 0);
+		else
+			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
@@ -2129,4 +2138,83 @@ dt_get_offset(pid_t pid)
 	}
 
 	return aux->dtga_auxbase;
+}
+
+struct syms *
+dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
+{
+	struct dtioc_getshlibinfo	 dtgs;
+	struct shlibinfo		 si;
+	struct shlibinfo_entry		*sie;
+	struct dtioc_getshlibinfo_map	 dtgsm;
+	struct shlibinfo_entry		 static_sie[2];
+
+	dtgs.dtgs_pid = pid;
+	dtgs.dtgs_shlibinfo = &si;
+	/* get maphint size */
+	if (ioctl(dtfd, DIOCGETSHLIBINFO, &dtgs)) {
+		/*
+		 * no process is found for pid, we may exit right here.
+		 * we leave it up to caller who should discover there
+		 * is no process running for desired pid.
+		 */
+		if (errno == ESRCH)
+			return NULL;
+
+		switch (errno) {
+		case ENOTSUP:
+			warn("assuming statically linked binary");
+			if (exec_path == NULL)
+				err(1, "the statically linked process requires -p "
+				    "option with /path/to/executable");
+			/*
+			 * create fake shlibinfo mapping for statically linked
+			 * executable. There is a terminator entry [1]and entry
+			 * and entry for executable itself [1] which covers
+			 * entire process space.
+			 */
+			sie = &static_sie[1];
+			sie->sie_start = NULL;
+			sie->sie_end = NULL;
+			sie->sie_path[0] = '\0';
+			sie = &static_sie[0];
+			snprintf(sie->sie_path, sizeof (sie->sie_path), "%s",
+			    exec_path);
+			sie->sie_start = NULL;
+			sie->sie_end = (void *)-1;
+			syms = kelf_load_syms(sie, syms);
+			break;
+		case ESRCH:
+			warn("no process for %d", pid);
+			syms = NULL;
+			break;
+		default:
+			warn("unknown error");
+			syms = NULL; 
+		}
+		return syms;
+	}
+
+	/* make space for terminator */
+	sie = calloc(si.si_count + 1, sizeof (struct shlibinfo_entry));
+	if (sie == NULL) {
+		warn("malloc");
+		return NULL;
+	}
+
+	dtgsm.dtgsm_pid = pid;
+	dtgsm.dtgsm_si = si;
+	dtgsm.dtgsm_sie = sie;
+	if (ioctl(dtfd, DIOCGETSHLIBINFOMAP, &dtgsm)) {
+		warn("DIOCGETSHLIBINFOMAP");
+		free(sie);
+		return NULL;
+	}
+
+	is_dynamic_elf = 1;
+	syms = kelf_load_syms(sie, syms);
+
+	free(sie);
+
+	return syms;
 }
