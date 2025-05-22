@@ -25,6 +25,7 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/shlibinfo.h>
 
 #include <machine/intr.h>
 
@@ -163,6 +164,9 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
+int	dt_ioctl_get_shlibinfo(struct dt_softc *, struct dtioc_getshlibinfo *);
+int	dt_ioctl_get_shlibinfo_map(struct dt_softc *,
+    struct dtioc_getshlibinfo_map *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -300,6 +304,8 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
+	case DIOCGETSHLIBINFO:
+	case DIOCGETSHLIBINFOMAP:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -325,6 +331,14 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
+		break;
+	case DIOCGETSHLIBINFO:
+		error = dt_ioctl_get_shlibinfo(sc,
+		    (struct dtioc_getshlibinfo *)addr);
+		break;
+	case DIOCGETSHLIBINFOMAP:
+		error = dt_ioctl_get_shlibinfo_map(sc,
+		    (struct dtioc_getshlibinfo_map *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -679,6 +693,64 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
+}
+
+int
+dt_ioctl_get_shlibinfo(struct dt_softc *sc, struct dtioc_getshlibinfo *dtgs)
+{
+	struct uio uio;
+	struct iovec iov;
+	struct process *pr;
+	struct proc *p = curproc;
+	int e;
+
+	if ((pr = prfind(dtgs->dtgs_pid)) == NULL)
+		return ESRCH;
+
+	if (pr->ps_shlibinfo == NULL)
+		return ENOTSUP;
+
+	iov.iov_base = dtgs->dtgs_shlibinfo;
+	iov.iov_len = sizeof (struct shlibinfo);
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = (off_t)(vaddr_t)pr->ps_shlibinfo;
+	uio.uio_resid = sizeof (struct shlibinfo);
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_procp = p;
+	uio.uio_rw = UIO_READ;
+	e = process_domem(p, pr, &uio, PT_READ_D);
+
+	return e;
+}
+
+int
+dt_ioctl_get_shlibinfo_map(struct dt_softc *sc,
+    struct dtioc_getshlibinfo_map *dtgsm)
+{
+	struct uio uio;
+	struct iovec iov;
+	struct process *pr;
+	struct proc *p = curproc;
+	int e;
+
+	if ((pr = prfind(dtgsm->dtgsm_pid)) == NULL)
+		return ESRCH;
+
+	iov.iov_base = dtgsm->dtgsm_sie;
+	iov.iov_len =
+	    sizeof (struct shlibinfo_entry) * dtgsm->dtgsm_si.si_count;
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = (off_t)(vaddr_t)dtgsm->dtgsm_si.si_entries;
+	uio.uio_resid =
+	    sizeof (struct shlibinfo_entry) * dtgsm->dtgsm_si.si_count;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_procp = p;
+	uio.uio_rw = UIO_READ;
+	e = process_domem(p, pr, &uio, PT_READ_D);
+
+	return e;
 }
 
 struct dt_probe *
