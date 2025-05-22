@@ -206,6 +206,7 @@ process_initialize(struct process *pr, struct proc *p)
 	timeout_set_flags(&pr->ps_realit_to, realitexpire, pr,
 	    KCLOCK_UPTIME, 0);
 	timeout_set(&pr->ps_rucheck_to, rucheck, pr);
+	pr->ps_shlibinfo = NULL;
 }
 
 
@@ -293,6 +294,7 @@ process_new(struct proc *p, struct process *parent, int flags)
 	/* mark as embryo to protect against others */
 	pr->ps_flags |= PS_EMBRYO;
 
+	pr->ps_shlibinfo = parent->ps_shlibinfo;
 	/* Force visibility of all of the above changes */
 	membar_producer();
 

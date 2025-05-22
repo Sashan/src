@@ -42,6 +42,9 @@
 #include <sys/signalvar.h>
 #include <sys/pool.h>
 #include <sys/vnode.h>
+#include <sys/socket.h>
+#include <sys/mount.h>
+#include <sys/syscallargs.h>
 
 /*
  *  Locks used to protect struct members in this file:
@@ -680,3 +683,20 @@ pgrpdump(void)
 	}
 }
 #endif /* DEBUG */
+
+int
+sys_set_shlibinfo(struct proc *p, void *v, register_t *retval)
+{
+	struct sys_set_shlibinfo_args /* {
+		syscallarg(const void *) shlibinfo;
+	} */ *uap = v;
+	extern int allowdt;
+	struct process *pr = p->p_p;
+
+	if (atomic_load_int(&allowdt) == 0)
+		return EPERM;
+
+	pr->ps_shlibinfo = (void *) SCARG(uap, shlibinfo);
+
+	return 0;
+}
