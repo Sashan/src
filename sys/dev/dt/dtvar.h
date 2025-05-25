@@ -22,6 +22,7 @@
 #include <sys/ioccom.h>
 #include <sys/stacktrace.h>
 #include <sys/time.h>
+#include <sys/syslimits.h>
 
 /*
  * Length of provider/probe/function names, including NUL.
@@ -126,13 +127,26 @@ struct dtioc_getaux {
 	unsigned long		 dtga_auxbase;	/* AUX_base value */
 };
 
+struct dtioc_rdvn {
+	pid_t			 dtrv_pid;
+	caddr_t			 dtrv_va;
+	caddr_t			 dtrv_buf;
+	caddr_t			 dtrv_base;
+	caddr_t			 dtrv_end;
+	uint64_t		 dtrv_ino;
+	uint32_t		 dtrv_dev;
+	size_t			 dtrv_sz;
+	size_t			 dtrv_len;
+};
+
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
 #define DTIOCGSTATS	_IOR('D', 2, struct dtioc_stat)
 #define DTIOCRECORD	_IOW('D', 3, int)
 #define DTIOCPRBENABLE	_IOW('D', 4, struct dtioc_req)
-#define DTIOCPRBDISABLE	 _IOW('D', 5, struct dtioc_req)
+#define DTIOCPRBDISABLE	_IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
-#define DTIOCGETAUXBASE	 _IOWR('D', 7, struct dtioc_getaux)
+#define DTIOCGETAUXBASE	_IOWR('D', 7, struct dtioc_getaux)
+#define DTIOCRDVNODE	_IOWR('D', 7, struct dtioc_rdvn)
 
 #ifdef _KERNEL
 
