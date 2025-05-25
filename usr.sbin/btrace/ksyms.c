@@ -28,6 +28,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <dev/dt/dtvar.h>
+#include <sys/queue.h>
 
 #include "btrace.h"
 
@@ -42,14 +45,22 @@ struct syms {
 	size_t nsymb;
 };
 
-int sym_compare_search(const void *, const void *);
-int sym_compare_sort(const void *, const void *);
+struct shlib_syms {
+	struct syms		*sls_syms;
+	caddr_t			 sls_base;
+	caddr_t			 sls_end;
+	LIST_ENTRY(shlib_syms)	 sls_le;
+};
 
-struct syms *
-kelf_open(const char *path)
+static LIST_HEAD(table, shlib_syms) shlib_lh = LIST_HEAD_INITIALIZER(table);
+
+static int sym_compare_search(const void *, const void *);
+static int sym_compare_sort(const void *, const void *);
+
+static struct syms *
+read_syms(Elf *elf, void *base_addr)
 {
 	char *name;
-	Elf *elf;
 	Elf_Data *data = NULL;
 	Elf_Scn	*scn = NULL, *symtab = NULL;
 	GElf_Sym sym;
@@ -58,38 +69,29 @@ kelf_open(const char *path)
 	unsigned long diff;
 	struct sym *tmp;
 	struct syms *syms = NULL;
-	int fd;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(1, "elf_version: %s", elf_errmsg(-1));
 
-	fd = open(path, O_RDONLY);
-	if (fd == -1) {
-		warn("open: %s", path);
+	if (elf_kind(elf) != ELF_K_ELF) {
+		warnx("elf_keind() != ELF_K_ELF");
 		return NULL;
 	}
 
-	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
-		warnx("elf_begin: %s", elf_errmsg(-1));
-		goto bad;
-	}
-
-	if (elf_kind(elf) != ELF_K_ELF)
-		goto bad;
 
 	if (elf_getshdrstrndx(elf, &shstrndx) != 0) {
 		warnx("elf_getshdrstrndx: %s", elf_errmsg(-1));
-		goto bad;
+		return NULL;
 	}
 
 	while ((scn = elf_nextscn(elf, scn)) != NULL) {
 		if (gelf_getshdr(scn, &shdr) != &shdr) {
 			warnx("elf_getshdr: %s", elf_errmsg(-1));
-			goto bad;
+			return NULL;
 		}
 		if ((name = elf_strptr(elf, shstrndx, shdr.sh_name)) == NULL) {
 			warnx("elf_strptr: %s", elf_errmsg(-1));
-			goto bad;
+			return NULL;
 		}
 		if (strcmp(name, ELF_SYMTAB) == 0 &&
 		    shdr.sh_type == SHT_SYMTAB && shdr.sh_entsize != 0) {
@@ -102,17 +104,19 @@ kelf_open(const char *path)
 		}
 	}
 	if (symtab == NULL) {
-		warnx("%s: %s: section not found", path, ELF_SYMTAB);
-		goto bad;
+		warnx("%s: %s: section not found", __func__, ELF_SYMTAB);
+		return NULL;
 	}
 	if (strtabndx == SIZE_MAX) {
-		warnx("%s: %s: section not found", path, ELF_STRTAB);
-		goto bad;
+		warnx("%s: %s: section not found", __func__, ELF_STRTAB);
+		return NULL;
 	}
 
 	data = elf_rawdata(symtab, data);
-	if (data == NULL)
-		goto bad;
+	if (data == NULL) {
+		warnx("%s elf_rwadata() unable to read syms from\n", __func__);
+		return NULL;
+	}
 
 	if ((syms = calloc(1, sizeof(*syms))) == NULL)
 		err(1, NULL);
@@ -130,7 +134,8 @@ kelf_open(const char *path)
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value;
+		syms->table[syms->nsymb].sym_value = sym.st_value +
+		    (intptr_t)base_addr;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
@@ -157,55 +162,118 @@ kelf_open(const char *path)
 		syms->table[i].sym_size = diff;
 	}
 
-bad:
-	elf_end(elf);
-	close(fd);
 	return syms;
 }
 
-void
-kelf_close(struct syms *syms)
+static struct syms *
+read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t base_addr)
+{
+	Elf *elf;
+	struct syms *syms;
+
+	if ((elf = elf_memory(elfbuf, elfbuf_sz)) == NULL) {
+		warnx("elf_memory: %s", elf_errmsg(-1));
+		return NULL;
+	}
+
+	syms = read_syms(elf, base_addr);
+	elf_end(elf);
+
+	return syms;
+}
+
+static void
+free_syms(struct syms *syms)
 {
 	size_t i;
 
-	if (syms == NULL)
-		return;
+	if (syms != NULL) {
+		for (i = 0; i < syms->nsymb; i++)
+			free(syms->table[i].sym_name);
 
-	for (i = 0; i < syms->nsymb; i++)
-		free(syms->table[i].sym_name);
-	free(syms->table);
-	free(syms);
+		free(syms->table);
+		free(syms);
+	}
 }
 
-int
-kelf_snprintsym(struct syms *syms, char *str, size_t size, unsigned long pc,
-    unsigned long off)
+static struct shlib_syms *
+load_syms(int dtdev, pid_t pid, caddr_t pc)
 {
-	struct sym key = { .sym_value = pc + off };
-	struct sym *entry;
-	Elf_Addr offset;
+	struct shlib_syms *new_sls, *sls;
+	struct dtioc_rdvn dtrv;
+	struct syms *syms;
 
-	if (syms == NULL)
-		goto fallback;
+	memset(&dtrv, 0, sizeof (dtrv));
+	dtrv.dtrv_pid = pid;
+	dtrv.dtrv_va = pc;
 
-	entry = bsearch(&key, syms->table, syms->nsymb, sizeof *syms->table,
-	    sym_compare_search);
-	if (entry == NULL)
-		goto fallback;
-
-	offset = pc - (entry->sym_value + off);
-	if (offset != 0) {
-		return snprintf(str, size, "\n%s+0x%llx",
-		    entry->sym_name, (unsigned long long)offset);
+	if (ioctl(dtdev, DTIOCRDVNODE, &dtrv)) {
+		warn("DTIOCRDVNODE fails for %p\n", pc);
+		return NULL;
 	}
 
-	return snprintf(str, size, "\n%s", entry->sym_name);
+	dtrv.dtrv_sz = dtrv.dtrv_len;
+	dtrv.dtrv_buf = malloc(dtrv.dtrv_sz);
+	if (dtrv.dtrv_buf == NULL) {
+		warn("%s malloc for elf", __func__);
+		return NULL;
+	}
+	if (ioctl(dtdev, DTIOCRDVNODE, &dtrv)) {
+		warn("DTIOCRDVNODE fails for %p\n", pc);
+		free(dtrv.dtrv_buf);
+		return NULL;
+	}
 
-fallback:
-	return snprintf(str, size, "\n0x%lx", pc);
+	syms = read_syms_buf(dtrv.dtrv_buf, dtrv.dtrv_len, dtrv.dtrv_base);
+	free(dtrv.dtrv_buf);
+
+	new_sls = malloc(sizeof (struct shlib_syms));
+	if (new_sls == NULL) {
+		warn("%s malloc(shlib_syms))", __func__);
+		free_syms(syms);
+		return NULL;
+	}
+	new_sls->sls_base = dtrv.dtrv_base;
+	new_sls->sls_end = dtrv.dtrv_end;
+	new_sls->sls_syms = syms;
+
+	LIST_FOREACH(sls, &shlib_lh, sls_le) {
+		if (new_sls->sls_base < sls->sls_base)
+			break;
+	}
+
+	if (sls == NULL)
+		LIST_INSERT_HEAD(&shlib_lh, new_sls, sls_le);
+	else
+		LIST_INSERT_BEFORE(sls, new_sls, sls_le);
+
+	return new_sls;
 }
 
-int
+static struct shlib_syms *
+find_shlib(caddr_t pc)
+{
+	struct shlib_syms *sls, *match_sls;
+
+	match_sls = NULL;
+	LIST_FOREACH(sls, &shlib_lh, sls_le) {
+		if (sls->sls_base > pc)
+			break;
+		match_sls = sls;
+	}
+
+	/*
+	 * program counter must fit <sls_base, sls_end> range,
+	 * if it does not, then the address has not been resolved
+	 * yet.
+	 */
+	if (match_sls->sls_end <= pc)
+		match_sls = NULL;
+
+	return match_sls;
+}
+
+static int
 sym_compare_sort(const void *ap, const void *bp)
 {
 	const struct sym *a = ap, *b = bp;
@@ -215,7 +283,7 @@ sym_compare_sort(const void *ap, const void *bp)
 	return a->sym_value > b->sym_value;
 }
 
-int
+static int
 sym_compare_search(const void *keyp, const void *entryp)
 {
 	const struct sym *entry = entryp, *key = keyp;
@@ -223,4 +291,100 @@ sym_compare_search(const void *keyp, const void *entryp)
 	if (key->sym_value < entry->sym_value)
 		return -1;
 	return key->sym_value >= entry->sym_value + entry->sym_size;
+}
+
+struct syms *
+kelf_open_kernel(const char *path)
+{
+	struct syms *syms;
+	Elf *elf;
+	int fd;
+
+	fd = open(path, O_RDONLY);
+	if (fd == -1)
+		return NULL;
+
+	elf = elf_begin(fd, ELF_C_READ, NULL);
+	if (elf == NULL) {
+		close(fd);
+		return NULL;
+	}
+
+	syms = read_syms(elf, 0);
+	elf_end(elf);
+	close(fd);
+
+	return syms;
+}
+
+void
+kelf_open(void)
+{
+	LIST_INIT(&shlib_lh);
+}
+
+void
+kelf_close(struct syms *ksyms)
+{
+	struct shlib_syms *sls;
+
+	while (!LIST_EMPTY(&shlib_lh)) {
+		sls = LIST_FIRST(&shlib_lh);
+		LIST_REMOVE(sls, sls_le);
+		free_syms(sls->sls_syms);
+		free(sls);
+	}
+
+	free_syms(ksyms);
+}
+
+int
+kelf_snprintsym_proc(int dtfd, pid_t pid, char *str, size_t size,
+    unsigned long pc, unsigned long off)
+{
+	struct shlib_syms *sls;
+	struct sym key = { .sym_value = pc + off };
+	struct sym *entry;
+	Elf_Addr offset;
+
+	if ((sls = find_shlib((caddr_t)key.sym_value)) == NULL)
+		sls = load_syms(dtfd, pid, (caddr_t)key.sym_value);
+
+	if (sls == NULL || sls->sls_syms == NULL)
+		return snprintf(str, size, "\n0x%lx", pc);
+
+	entry = bsearch(&key, sls->sls_syms->table, sls->sls_syms->nsymb,
+	    sizeof *sls->sls_syms->table, sym_compare_search);
+	if (entry == NULL)
+		return snprintf(str, size, "\n0x%lx", pc);
+
+	offset = pc - (entry->sym_value + off);
+	if (offset != 0) {
+		return snprintf(str, size, "\n%s+0x%llx",
+		    entry->sym_name, (unsigned long long)offset);
+	}
+
+	return snprintf(str, size, "\n%s", entry->sym_name);
+}
+
+int
+kelf_snprintsym_kernel(struct syms *syms, char *str, size_t size,
+    unsigned long pc, unsigned long off)
+{
+	struct sym key = { .sym_value = pc + off };
+	struct sym *entry;
+	Elf_Addr offset;
+
+	entry = bsearch(&key, syms->table, syms->nsymb, sizeof *syms->table,
+	    sym_compare_search);
+	if (entry == NULL)
+		return snprintf(str, size, "\n0x%lx", pc);
+
+	offset = pc - (entry->sym_value + off);
+	if (offset != 0) {
+		return snprintf(str, size, "\n%s+0x%llx",
+		    entry->sym_name, (unsigned long long)offset);
+	}
+
+	return snprintf(str, size, "\n%s", entry->sym_name);
 }

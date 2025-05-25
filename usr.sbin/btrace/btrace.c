@@ -113,6 +113,8 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
+struct syms		*dt_load_syms(pid_t, void *, struct syms *);
+
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */
@@ -124,6 +126,7 @@ uint64_t		 bt_filtered;	/* # of events filtered out */
 
 struct syms		*kelf;
 
+static pid_t		 pid = -1;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
@@ -216,6 +219,9 @@ main(int argc, char *argv[])
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
+
+		if (argv[0] != 0)
+			pid = strtonum(argv[0], 0, INT_MAX, NULL);
 
 		if (exec_path == NULL)
 			is_dynamic_elf = 1;
@@ -833,11 +839,11 @@ builtin_stack(struct dt_evt *dtev, int kernel, unsigned long offset)
 		int l;
 
 		if (!kernel)
-			l = kelf_snprintsym_proc(dtfd, dtev->dtev_pid, bp,
-			    sz - 1, st->st_pc[i], offset);
-		else
-			l = kelf_snprintsym_kernel(kelf, bp, sz - 1,
+			l = kelf_snprintsym_proc(dtfd, pid, bp, sz - 1,
 			    st->st_pc[i], offset);
+		else
+			l = kelf_snprintsym_kernel(kelf, bp, sz - 1, st->st_pc[i],
+			    offset);
 		if (l < 0)
 			break;
 		if (l >= sz - 1) {
