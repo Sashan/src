@@ -25,6 +25,10 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/vnode.h>
+#include <uvm/uvm.h>
+#include <uvm/uvm_map.h>
+#include <uvm/uvm_vnode.h>
 
 #include <machine/intr.h>
 
@@ -163,6 +167,7 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
+int	dt_ioctl_rd_vnode(struct dt_softc *, struct dtioc_rdvn *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -300,6 +305,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
+	case DTIOCRDVNODE:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -325,6 +331,9 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
+		break;
+	case DTIOCRDVNODE:
+		error = dt_ioctl_rd_vnode(sc, (struct dtioc_rdvn *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -685,6 +694,59 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
+}
+
+int
+dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
+{
+	struct process *ps;
+	struct proc *p = curproc;
+	boolean_t ok;
+	struct vm_map_entry *e;
+	int err = 0;
+	struct uvm_vnode *uvn;
+	struct vnode *vn;
+	struct vattr va;
+
+	if ((ps = prfind(dtrv->dtrv_pid)) == NULL)
+		return ESRCH;
+
+	vm_map_lock_read(&ps->ps_vmspace->vm_map);
+
+	ok = uvm_map_lookup_entry(&ps->ps_vmspace->vm_map,
+	    (vaddr_t)dtrv->dtrv_va, &e);
+	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
+	    (!UVM_OBJ_IS_VTEXT(e->object.uvm_obj))) {
+		err = EFAULT;
+		vn = NULL;
+	} else {
+		uvn = (struct uvm_vnode *)e->object.uvm_obj;
+		vn = uvn->u_vnode;
+		vref(vn);
+	}
+
+	vm_map_unlock_read(&ps->ps_vmspace->vm_map);
+
+	if (vn != NULL) {
+		if (dtrv->dtrv_buf == NULL) {
+			dtrv->dtrv_sz = 0;
+			err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
+			if (err == 0) {
+				dtrv->dtrv_sz = (size_t)uvn->u_size;
+				dtrv->dtrv_ino = va.va_fileid;
+				dtrv->dtrv_dev = va.va_fsid;
+				dtrv->dtrv_base = (caddr_t)e->start;
+				dtrv->dtrv_end = (caddr_t)e->end;
+			}
+		} else {
+			err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
+			    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
+			    p->p_p->ps_ucred, &dtrv->dtrv_sz, p);
+		}
+		vrele(vn);
+	}
+
+	return err;
 }
 
 struct dt_probe *
