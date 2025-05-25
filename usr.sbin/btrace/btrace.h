@@ -19,6 +19,8 @@
 #ifndef BTRACE_H
 #define BTRACE_H
 
+#include <dev/dt/dtvar.h>
+
 #ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
@@ -37,9 +39,12 @@ unsigned long		 dt_get_offset(pid_t);
 
 /* ksyms.c */
 struct syms;
-struct syms		*kelf_open(const char *);
+struct syms		*kelf_open_kernel(const char *);
+struct syms		*kelf_load_syms(void  *, struct syms *);
 void			 kelf_close(struct syms *);
-int			 kelf_snprintsym(struct syms *, char *, size_t,
+int			 kelf_snprintsym_proc(int, pid_t, char *, size_t,
+			    unsigned long, unsigned long);
+int			 kelf_snprintsym_kernel(struct syms *, char *, size_t,
 			    unsigned long, unsigned long);
 
 /* map.c */
