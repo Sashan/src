@@ -267,7 +267,7 @@ find_shlib(caddr_t pc)
 	 * if it does not, then the address has not been resolved
 	 * yet.
 	 */
-	if (match_sls->sls_end <= pc)
+	if (match_sls == NULL || match_sls->sls_end <= pc)
 		match_sls = NULL;
 
 	return match_sls;
