@@ -131,6 +131,7 @@ struct dtioc_rdvn {
 	pid_t			 dtrv_pid;
 	caddr_t			 dtrv_va;
 	caddr_t			 dtrv_buf;
+	off_t			 dtrv_offset;
 	caddr_t			 dtrv_base;
 	caddr_t			 dtrv_end;
 	uint64_t		 dtrv_ino;
@@ -146,7 +147,7 @@ struct dtioc_rdvn {
 #define DTIOCPRBDISABLE	_IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
 #define DTIOCGETAUXBASE	_IOWR('D', 7, struct dtioc_getaux)
-#define DTIOCRDVNODE	_IOWR('D', 7, struct dtioc_rdvn)
+#define DTIOCRDVNODE	_IOWR('D', 8, struct dtioc_rdvn)
 
 #ifdef _KERNEL
 

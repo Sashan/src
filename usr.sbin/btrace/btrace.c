@@ -113,8 +113,6 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
-struct syms		*dt_load_syms(pid_t, void *, struct syms *);
-
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */

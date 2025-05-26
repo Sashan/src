@@ -34,6 +34,8 @@
 
 #include <dev/dt/dtvar.h>
 
+#include <sys/syslog.h>
+
 /*
  * Number of frames to skip in stack traces.
  *
@@ -716,9 +718,11 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	ok = uvm_map_lookup_entry(&ps->ps_vmspace->vm_map,
 	    (vaddr_t)dtrv->dtrv_va, &e);
 	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
-	    (!UVM_OBJ_IS_VTEXT(e->object.uvm_obj))) {
+	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) { /* was _VTEXT */
 		err = EFAULT;
 		vn = NULL;
+		log(LOG_ERR, "%s no soup for %p (%p %p %x %x)\n", __func__, dtrv->dtrv_va, vn, e, e == NULL ? -1 : e->etype,
+		(e != NULL && e->object.uvm_obj) ? ((struct vnode *)e->object.uvm_obj)->v_flag : -1);
 	} else {
 		uvn = (struct uvm_vnode *)e->object.uvm_obj;
 		vn = uvn->u_vnode;
@@ -732,16 +736,27 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			dtrv->dtrv_sz = 0;
 			err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
 			if (err == 0) {
-				dtrv->dtrv_sz = (size_t)uvn->u_size;
+				dtrv->dtrv_len = (size_t)uvn->u_size;
 				dtrv->dtrv_ino = va.va_fileid;
 				dtrv->dtrv_dev = va.va_fsid;
 				dtrv->dtrv_base = (caddr_t)e->start;
 				dtrv->dtrv_end = (caddr_t)e->end;
+				dtrv->dtrv_offset = e->offset;
+				log(LOG_ERR, "%s required size is %zu [%p : %llx ]\n", __func__, dtrv->dtrv_sz, dtrv->dtrv_base, dtrv->dtrv_offset);
+					/*
+					 * base - offset == base address for whole .so
+					 * symbol address:
+					 *	(base - offset) + symvalue from elfsym()
+					 * dtrv_sz is actual size of .so file
+					 */
+			} else {
+				log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
 			}
 		} else {
 			err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
 			    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
-			    p->p_p->ps_ucred, &dtrv->dtrv_sz, p);
+			    p->p_p->ps_ucred, &dtrv->dtrv_len, p);
+			log(LOG_ERR, "%s going to read into %p bytes %zu %zu\n", __func__, dtrv->dtrv_buf, dtrv->dtrv_sz, dtrv->dtrv_len);
 		}
 		vrele(vn);
 	}
