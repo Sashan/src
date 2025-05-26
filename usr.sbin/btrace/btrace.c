@@ -113,8 +113,6 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
-struct syms		*dt_load_syms(pid_t, void *, struct syms *);
-
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */
@@ -130,7 +128,7 @@ static pid_t		 pid = -1;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
-int			 is_dynamic_elf = 0;
+int			 is_dynamic_elf = 1;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -222,6 +220,9 @@ main(int argc, char *argv[])
 
 		if (argv[0] != 0)
 			pid = strtonum(argv[0], 0, INT_MAX, NULL);
+
+		if (exec_path == NULL)
+			is_dynamic_elf = 1;
 	}
 
 	if (showprobes) {
