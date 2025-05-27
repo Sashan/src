@@ -70,9 +70,6 @@ read_syms(Elf *elf, void *base_addr)
 	struct sym *tmp;
 	struct syms *syms = NULL;
 
-	if (elf_version(EV_CURRENT) == EV_NONE)
-		errx(1, "elf_version: %s", elf_errmsg(-1));
-
 	if (elf_kind(elf) != ELF_K_ELF) {
 		warnx("elf_keind() != ELF_K_ELF");
 		return NULL;
@@ -170,6 +167,9 @@ read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t base_addr)
 {
 	Elf *elf;
 	struct syms *syms;
+
+	if (elf_version(EV_CURRENT) == EV_NONE)
+		errx(1, "elf_version: %s", elf_errmsg(-1));
 
 	if ((elf = elf_memory(elfbuf, elfbuf_sz)) == NULL) {
 		warnx("elf_memory: %s", elf_errmsg(-1));
@@ -304,6 +304,9 @@ kelf_open_kernel(const char *path)
 	fd = open(path, O_RDONLY);
 	if (fd == -1)
 		return NULL;
+
+	if (elf_version(EV_CURRENT) == EV_NONE)
+		errx(1, "elf_version: %s", elf_errmsg(-1));
 
 	elf = elf_begin(fd, ELF_C_READ, NULL);
 	if (elf == NULL) {
