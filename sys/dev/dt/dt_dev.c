@@ -743,12 +743,22 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 				dtrv->dtrv_end = (caddr_t)e->end;
 				dtrv->dtrv_offset = e->offset;
 				log(LOG_ERR, "%s required size is %zu [%p : %llx ]\n", __func__, dtrv->dtrv_sz, dtrv->dtrv_base, dtrv->dtrv_offset);
-					/*
-					 * base - offset == base address for whole .so
-					 * symbol address:
-					 *	(base - offset) + symvalue from elfsym()
-					 * dtrv_sz is actual size of .so file
-					 */
+				/*
+				 * we find map entry `e` using program counter
+				 * which comes from traced process. The map
+				 * entry refers to text segment (a.k.a. text
+				 * section in .so) All symbol offsets  found in
+				 * .so are calculated from the beginning of
+				 * .so.
+				 *
+				 * e->start is address of .text section
+				 * e->offset is offset from the
+				 * beginning of .so.
+				 *
+				 * to calculate pc's offset w.r.t.
+				 * beginning of .so module we do:
+				 * (base - offset) + pc
+				 */
 			} else {
 				log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
 			}
