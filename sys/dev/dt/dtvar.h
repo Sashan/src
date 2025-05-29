@@ -128,16 +128,20 @@ struct dtioc_getaux {
 };
 
 struct dtioc_rdvn {
-	pid_t			 dtrv_pid;
+	pid_t			 dtrv_pid;	/* process to inspect */
 	caddr_t			 dtrv_va;
-	caddr_t			 dtrv_buf;
-	off_t			 dtrv_offset;
+				    /* programm counter in inspected process */
+	caddr_t			 dtrv_buf;	/* where to dump data */
+	size_t			 dtrv_sz;	/* size of buffer */
+	off_t			 dtrv_offset;	/* ?offset into obj/section ? */
+	caddr_t			 dtrv_lbase;
+				    /* address where obj got loaded to */
 	caddr_t			 dtrv_base;
-	caddr_t			 dtrv_end;
-	uint64_t		 dtrv_ino;
-	uint32_t		 dtrv_dev;
-	size_t			 dtrv_sz;
-	size_t			 dtrv_len;
+				    /* address where section got loaded to */
+	caddr_t			 dtrv_end;	/* end address for section */
+	uint64_t		 dtrv_ino;	/* file inode */
+	uint32_t		 dtrv_dev;	/* device/mount inode */
+	size_t			 dtrv_len;	/* length needed */
 };
 
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
