@@ -318,6 +318,12 @@ stacktrace_save_utrace(struct stacktrace *st)
 
 	while (frame != NULL && st->st_count < STACKTRACE_MAX) {
 		if (copyin(frame, &f, sizeof(f)) != 0)
+			/*
+			 * the last return address (if saved) is invalid,
+			 * strip it
+			 */
+			st->st_count -= (st->st_count == 0) ? 0 : 1;
+			break;
 			break;
 		st->st_pc[st->st_count++] = f.f_retaddr;
 		frame = f.f_frame;
