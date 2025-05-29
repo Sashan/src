@@ -224,8 +224,7 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		return NULL;
 	}
 
-	syms = read_syms_buf(dtrv.dtrv_buf, dtrv.dtrv_len,
-	    dtrv.dtrv_base - dtrv.dtrv_offset);
+	syms = read_syms_buf(dtrv.dtrv_buf, dtrv.dtrv_len, dtrv.dtrv_lbase);
 	free(dtrv.dtrv_buf);
 
 	new_sls = malloc(sizeof (struct shlib_syms));
@@ -234,8 +233,8 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		free_syms(syms);
 		return NULL;
 	}
-	new_sls->sls_base = dtrv.dtrv_base;
-	new_sls->sls_end = dtrv.dtrv_end;
+	new_sls->sls_base = dtrv.dtrv_lbase;
+	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
 	new_sls->sls_syms = syms;
 
 	LIST_FOREACH(sls, &shlib_lh, sls_le) {
