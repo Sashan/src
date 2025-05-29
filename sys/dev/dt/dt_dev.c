@@ -704,7 +704,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	struct process *ps;
 	struct proc *p = curproc;
 	boolean_t ok;
-	struct vm_map_entry *e;
+	struct vm_map_entry *e, *ebase, *ewalk;
 	int err = 0;
 	struct uvm_vnode *uvn;
 	struct vnode *vn;
@@ -727,6 +727,32 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		uvn = (struct uvm_vnode *)e->object.uvm_obj;
 		vn = uvn->u_vnode;
 		vref(vn);
+
+		/*
+		 * fill details if running in query mode.
+		 */
+		if (dtrv->dtrv_buf == NULL) {
+			/*
+			 * traverse to the lowest section which belongs to
+			 * vnode (elf-object). This is is the base address
+			 * where .so got loaded to (the lowest address in .so)
+			 * All symbols offsets are calculated to that address.
+			 */
+			ebase = e;
+			ewalk = e;
+			while ((ewalk = RBT_LEFT(uvm_map_addr, ewalk)) != NULL &&
+			    ewalk->object.uvm_obj == e->object.uvm_obj)
+				ebase = ewalk;
+
+			dtrv->dtrv_len = (size_t)uvn->u_size;
+			dtrv->dtrv_lbase = (caddr_t)(ebase->start);
+			dtrv->dtrv_base = (caddr_t)e->start;
+			dtrv->dtrv_end = (caddr_t)e->end;
+			dtrv->dtrv_offset = e->offset;
+			    /* w.r.t section ?  definitely not offset w.r.t. of
+			     * .so (where .so got loaded to)
+			     */
+		}
 	}
 
 	vm_map_unlock_read(&ps->ps_vmspace->vm_map);
@@ -736,29 +762,12 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			dtrv->dtrv_sz = 0;
 			err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
 			if (err == 0) {
-				dtrv->dtrv_len = (size_t)uvn->u_size;
 				dtrv->dtrv_ino = va.va_fileid;
 				dtrv->dtrv_dev = va.va_fsid;
-				dtrv->dtrv_base = (caddr_t)e->start;
-				dtrv->dtrv_end = (caddr_t)e->end;
-				dtrv->dtrv_offset = e->offset;
-				log(LOG_ERR, "%s required size is %zu [%p : %llx ]\n", __func__, dtrv->dtrv_sz, dtrv->dtrv_base, dtrv->dtrv_offset);
 				/*
-				 * we find map entry `e` using program counter
-				 * which comes from traced process. The map
-				 * entry refers to text segment (a.k.a. text
-				 * section in .so) All symbol offsets  found in
-				 * .so are calculated from the beginning of
-				 * .so.
-				 *
-				 * e->start is address of .text section
-				 * e->offset is offset from the
-				 * beginning of .so.
-				 *
-				 * to calculate pc's offset w.r.t.
-				 * beginning of .so module we do:
-				 * (base - offset) + pc
+				 * assuming holding a ref to vn is sufficient to traverse e.
 				 */
+				log(LOG_ERR, "%s required size is %zu [%p (%p) : %llx ]\n", __func__, dtrv->dtrv_len, dtrv->dtrv_base, dtrv->dtrv_lbase, dtrv->dtrv_offset);
 			} else {
 				log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
 			}
