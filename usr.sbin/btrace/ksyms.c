@@ -133,6 +133,7 @@ read_syms(Elf *elf, void *base_addr)
 			err(1, NULL);
 		syms->table[syms->nsymb].sym_value = sym.st_value +
 		    (intptr_t)base_addr;
+		fprintf(stdout, "%s [ %llx ] ( %llx + %llx )\n", name, syms->table[syms->nsymb].sym_value, sym.st_value + (intptr_t)base_addr);
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
