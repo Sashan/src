@@ -350,6 +350,10 @@ kelf_snprintsym_proc(int dtfd, pid_t pid, char *str, size_t size,
 	struct sym *entry;
 	Elf_Addr offset;
 
+	*str = '\0';
+	if (pc == 0)
+		return 0;
+
 	if ((sls = find_shlib((caddr_t)key.sym_value)) == NULL)
 		sls = load_syms(dtfd, pid, (caddr_t)key.sym_value);
 
