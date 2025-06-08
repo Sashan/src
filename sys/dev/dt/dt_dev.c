@@ -706,7 +706,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	boolean_t ok;
 	struct vm_map_entry *e, *ebase, *ewalk;
 	int err = 0;
-	struct uvm_vnode *uvn;
+	struct uvm_vnode *uvn, *uvn_walk;
 	struct vnode *vn;
 	struct vattr va;
 
@@ -733,25 +733,32 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		 */
 		if (dtrv->dtrv_buf == NULL) {
 			/*
-			 * traverse to the lowest section which belongs to
-			 * vnode (elf-object). This is is the base address
-			 * where .so got loaded to (the lowest address in .so)
-			 * All symbols offsets are calculated to that address.
+			 * Find the base address where .so library got loaded.
+			 * We walk the tree from left (starting at lowest map
+			 * entry). We search for the first map entry which refers
+			 * to the same vnode we found by uvm_map_lookup_entry().
+			 * The first map entry we find is the map entry with base
+			 * address.
 			 */
 			ebase = e;
-			ewalk = e;
-			while ((ewalk = RBT_LEFT(uvm_map_addr, ewalk)) != NULL &&
-			    ewalk->object.uvm_obj == e->object.uvm_obj)
-				ebase = ewalk;
+			RBT_FOREACH(ewalk, uvm_map_addr,
+			    &ps->ps_vmspace->vm_map.addr) {
+				if (ewalk->object.uvm_obj != NULL &&
+				    UVM_OBJ_IS_VNODE(ewalk->object.uvm_obj)) {
+					uvn_walk = (struct uvm_vnode *)
+					    ewalk->object.uvm_obj;
+					if (vn == uvn_walk->u_vnode) {
+						ebase = ewalk;
+						break;
+					}
+				}
+			}
 
 			dtrv->dtrv_len = (size_t)uvn->u_size;
 			dtrv->dtrv_lbase = (caddr_t)(ebase->start);
 			dtrv->dtrv_base = (caddr_t)e->start;
 			dtrv->dtrv_end = (caddr_t)e->end;
 			dtrv->dtrv_offset = e->offset;
-			    /* w.r.t section ?  definitely not offset w.r.t. of
-			     * .so (where .so got loaded to)
-			     */
 		}
 	}
 
