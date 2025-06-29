@@ -131,7 +131,7 @@ struct dtioc_rdvn {
 	pid_t			 dtrv_pid;	/* process to inspect */
 	caddr_t			 dtrv_va;
 				    /* programm counter in inspected process */
-	caddr_t			 dtrv_buf;	/* where to dump data */
+	int			 dtrv_fd;	/* where to dump data */
 	size_t			 dtrv_sz;	/* size of buffer */
 	off_t			 dtrv_offset;	/* ?offset into obj/section ? */
 	caddr_t			 dtrv_lbase;
