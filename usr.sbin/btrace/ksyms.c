@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <dev/dt/dtvar.h>
 #include <sys/queue.h>
 
@@ -133,7 +134,7 @@ read_syms(Elf *elf, void *base_addr)
 			err(1, NULL);
 		syms->table[syms->nsymb].sym_value = sym.st_value +
 		    (intptr_t)base_addr;
-		fprintf(stdout, "%s [ %llx ] ( %llx + %llx )\n", name, syms->table[syms->nsymb].sym_value, sym.st_value + (intptr_t)base_addr);
+		fprintf(stdout, "%s [ %lx ] ( %llx )\n", name, syms->table[syms->nsymb].sym_value, sym.st_value + (intptr_t)base_addr);
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
@@ -203,30 +204,25 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	struct shlib_syms *new_sls, *sls;
 	struct dtioc_rdvn dtrv;
 	struct syms *syms;
+        char *elfbuf;
 
 	memset(&dtrv, 0, sizeof (dtrv));
 	dtrv.dtrv_pid = pid;
 	dtrv.dtrv_va = pc;
-
+	dtrv.dtrv_fd = dup(2);
 	if (ioctl(dtdev, DTIOCRDVNODE, &dtrv)) {
 		warn("DTIOCRDVNODE fails for %p\n", pc);
 		return NULL;
 	}
 
-	dtrv.dtrv_sz = dtrv.dtrv_len;
-	dtrv.dtrv_buf = malloc(dtrv.dtrv_sz);
-	if (dtrv.dtrv_buf == NULL) {
-		warn("%s malloc for elf", __func__);
-		return NULL;
+	elfbuf = mmap(NULL, dtrv.dtrv_sz, PROT_READ, 0, dtrv.dtrv_fd, 0);
+	if (elfbuf == NULL) {
+		warn("mmap");
+		close(dtrv.dtrv_fd);
 	}
-	if (ioctl(dtdev, DTIOCRDVNODE, &dtrv)) {
-		warn("DTIOCRDVNODE fails for %p\n", pc);
-		free(dtrv.dtrv_buf);
-		return NULL;
-	}
-
-	syms = read_syms_buf(dtrv.dtrv_buf, dtrv.dtrv_sz, dtrv.dtrv_lbase);
-	free(dtrv.dtrv_buf);
+	syms = read_syms_buf(elfbuf, dtrv.dtrv_sz, dtrv.dtrv_lbase);
+	munmap(elfbuf, dtrv.dtrv_sz);
+	close(dtrv.dtrv_fd);
 
 	new_sls = malloc(sizeof (struct shlib_syms));
 	if (new_sls == NULL) {
