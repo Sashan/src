@@ -29,6 +29,9 @@
 #include <uvm/uvm.h>
 #include <uvm/uvm_map.h>
 #include <uvm/uvm_vnode.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/fcntl.h>
 
 #include <machine/intr.h>
 
@@ -709,6 +712,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	struct uvm_vnode *uvn, *uvn_walk;
 	struct vnode *vn;
 	struct vattr va;
+	struct file *fp;
 
 	if ((ps = prfind(dtrv->dtrv_pid)) == NULL)
 		return ESRCH;
@@ -729,43 +733,42 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		vref(vn);
 
 		/*
-		 * fill details if running in query mode.
+		 * Find the base address where .so library got loaded.
+		 * We walk the tree from left (starting at lowest map
+		 * entry). We search for the first map entry which refers
+		 * to the same vnode we found by uvm_map_lookup_entry().
+		 * The first map entry we find is the map entry with base
+		 * address.
 		 */
-		if (dtrv->dtrv_buf == NULL) {
-			/*
-			 * Find the base address where .so library got loaded.
-			 * We walk the tree from left (starting at lowest map
-			 * entry). We search for the first map entry which refers
-			 * to the same vnode we found by uvm_map_lookup_entry().
-			 * The first map entry we find is the map entry with base
-			 * address.
-			 */
-			ebase = e;
-			RBT_FOREACH(ewalk, uvm_map_addr,
-			    &ps->ps_vmspace->vm_map.addr) {
-				if (ewalk->object.uvm_obj != NULL &&
-				    UVM_OBJ_IS_VNODE(ewalk->object.uvm_obj)) {
-					uvn_walk = (struct uvm_vnode *)
-					    ewalk->object.uvm_obj;
-					if (vn == uvn_walk->u_vnode) {
-						ebase = ewalk;
-						break;
-					}
+		ebase = e;
+		RBT_FOREACH(ewalk, uvm_map_addr,
+		    &ps->ps_vmspace->vm_map.addr) {
+			if (ewalk->object.uvm_obj != NULL &&
+			    UVM_OBJ_IS_VNODE(ewalk->object.uvm_obj)) {
+				uvn_walk = (struct uvm_vnode *)
+				    ewalk->object.uvm_obj;
+				if (vn == uvn_walk->u_vnode) {
+					ebase = ewalk;
+					break;
 				}
 			}
-
-			dtrv->dtrv_len = (size_t)uvn->u_size;
-			dtrv->dtrv_lbase = (caddr_t)(ebase->start);
-			dtrv->dtrv_base = (caddr_t)e->start;
-			dtrv->dtrv_end = (caddr_t)e->end;
-			dtrv->dtrv_offset = e->offset;
 		}
+
+		dtrv->dtrv_len = (size_t)uvn->u_size;
+		dtrv->dtrv_lbase = (caddr_t)(ebase->start);
+		dtrv->dtrv_base = (caddr_t)e->start;
+		dtrv->dtrv_end = (caddr_t)e->end;
+		dtrv->dtrv_offset = e->offset;
 	}
 
 	vm_map_unlock_read(&ps->ps_vmspace->vm_map);
 
 	if (vn != NULL) {
-		if (dtrv->dtrv_buf == NULL) {
+		fdplock(p->p_fd);
+		fp = fd_getfile(p->p_fd, dtrv->dtrv_fd);
+		if (fp == NULL) {
+			err = EBADF;
+		} else {
 			dtrv->dtrv_sz = 0;
 			err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
 			if (err == 0) {
@@ -778,12 +781,22 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			} else {
 				log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
 			}
-		} else {
+			err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
+			if (err == 0) {
+				fp->f_data = vn;
+				fp->f_type = DTYPE_VNODE;
+				fp->f_ops = &vnops;
+				fp->f_offset = 0;
+			}
+
+#if 0
 			err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
 			    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
 			    p->p_p->ps_ucred, &dtrv->dtrv_len, p);
 			log(LOG_ERR, "%s going to read into %p bytes %zu %zu\n", __func__, dtrv->dtrv_buf, dtrv->dtrv_sz, dtrv->dtrv_len);
+#endif
 		}
+		fdpunlock(p->p_fd);
 		vrele(vn);
 	}
 
