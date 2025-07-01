@@ -665,7 +665,6 @@ CRYPTO_set_dynlock_lock_callback
 CRYPTO_set_ex_data
 CRYPTO_set_id_callback
 CRYPTO_set_locking_callback
-CRYPTO_set_mem_ex_functions
 CRYPTO_set_mem_functions
 CRYPTO_strdup
 CRYPTO_thread_id
@@ -862,13 +861,10 @@ ECPKParameters_print_fp
 ECParameters_dup
 ECParameters_print
 ECParameters_print_fp
-EC_GFp_mont_method
-EC_GFp_simple_method
 EC_GROUP_check
 EC_GROUP_check_discriminant
 EC_GROUP_clear_free
 EC_GROUP_cmp
-EC_GROUP_copy
 EC_GROUP_dup
 EC_GROUP_free
 EC_GROUP_get0_generator
@@ -883,13 +879,9 @@ EC_GROUP_get_degree
 EC_GROUP_get_order
 EC_GROUP_get_point_conversion_form
 EC_GROUP_get_seed_len
-EC_GROUP_have_precompute_mult
-EC_GROUP_method_of
-EC_GROUP_new
 EC_GROUP_new_by_curve_name
 EC_GROUP_new_curve_GFp
 EC_GROUP_order_bits
-EC_GROUP_precompute_mult
 EC_GROUP_set_asn1_flag
 EC_GROUP_set_curve
 EC_GROUP_set_curve_GFp
@@ -943,7 +935,6 @@ EC_KEY_set_private_key
 EC_KEY_set_public_key
 EC_KEY_set_public_key_affine_coordinates
 EC_KEY_up_ref
-EC_METHOD_get_field_type
 EC_POINT_add
 EC_POINT_bn2point
 EC_POINT_clear_free
@@ -952,7 +943,6 @@ EC_POINT_copy
 EC_POINT_dbl
 EC_POINT_dup
 EC_POINT_free
-EC_POINT_get_Jprojective_coordinates_GFp
 EC_POINT_get_affine_coordinates
 EC_POINT_get_affine_coordinates_GFp
 EC_POINT_hex2point
@@ -960,21 +950,17 @@ EC_POINT_invert
 EC_POINT_is_at_infinity
 EC_POINT_is_on_curve
 EC_POINT_make_affine
-EC_POINT_method_of
 EC_POINT_mul
 EC_POINT_new
 EC_POINT_oct2point
 EC_POINT_point2bn
 EC_POINT_point2hex
 EC_POINT_point2oct
-EC_POINT_set_Jprojective_coordinates_GFp
 EC_POINT_set_affine_coordinates
 EC_POINT_set_affine_coordinates_GFp
 EC_POINT_set_compressed_coordinates
 EC_POINT_set_compressed_coordinates_GFp
 EC_POINT_set_to_infinity
-EC_POINTs_make_affine
-EC_POINTs_mul
 EC_curve_nid2nist
 EC_curve_nist2nid
 EC_get_builtin_curves
@@ -1802,6 +1788,7 @@ PKCS12_free
 PKCS12_get0_mac
 PKCS12_get_friendlyname
 PKCS12_it
+PKCS12_key_gen_uni
 PKCS12_mac_present
 PKCS12_new
 PKCS12_newpass
@@ -2476,7 +2463,6 @@ X509_NAME_hash_old
 X509_NAME_it
 X509_NAME_new
 X509_NAME_oneline
-X509_NAME_print
 X509_NAME_print_ex
 X509_NAME_print_ex_fp
 X509_NAME_set
@@ -2488,7 +2474,6 @@ X509_OBJECT_idx_by_subject
 X509_OBJECT_new
 X509_OBJECT_retrieve_by_subject
 X509_OBJECT_retrieve_match
-X509_OBJECT_up_ref_count
 X509_PKEY_free
 X509_PKEY_new
 X509_PUBKEY_free

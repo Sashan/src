@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.h,v 1.213 2025/02/16 11:39:28 bluhm Exp $	*/
+/*	$OpenBSD: route.h,v 1.216 2025/03/16 21:58:08 bluhm Exp $	*/
 /*	$NetBSD: route.h,v 1.9 1996/02/13 22:00:49 christos Exp $	*/
 
 /*
@@ -41,6 +41,7 @@
  *	N	net lock
  *	X	exclusive net lock, or shared net lock + kernel lock
  *	R	art (rtable) lock
+ *	r	per route entry mutex	rt_mtx
  *	L	arp/nd6/etc lock for updates, net lock for reads
  *	T	rttimer_mtx		route timer lists
  */
@@ -93,6 +94,7 @@ struct rt_metrics {
 #define	RTM_RTTUNIT	1000000	/* units for rtt, rttvar, as units per sec */
 #define	RTTTOPRHZ(r)	((r) / (RTM_RTTUNIT / PR_SLOWHZ))
 
+#include <sys/mutex.h>
 #include <sys/queue.h>
 #include <net/rtable.h>
 
@@ -120,18 +122,15 @@ struct rtentry {
 	struct ifaddr	*rt_ifa;	/* [N] interface addr to use */
 	caddr_t		 rt_llinfo;	/* [L] pointer to link level info or
 					   an MPLS structure */
-	union {
-		struct rtentry	*_nh;	/* [X] rtentry for rt_gateway */
-		unsigned int	 _ref;	/* [X] # gateway rtentry refs */
-	} RT_gw;
-#define rt_gwroute	 RT_gw._nh
-#define rt_cachecnt	 RT_gw._ref
+	struct rtentry	*rt_gwroute;	/* [X] rtentry for rt_gateway */
 	struct rtentry	*rt_parent;	/* [N] if cloned, parent rtentry */
 	LIST_HEAD(, rttimer) rt_timer;  /* queue of timeouts for misc funcs */
+	struct mutex	 rt_mtx;	/* lock members of this struct */
+	struct refcnt	 rt_refcnt;	/* # held references */
 	struct rt_kmetrics rt_rmx;	/* metrics used by rx'ing protocols */
+	unsigned int	 rt_cachecnt;	/* [r] # gateway rtentry refs */
 	unsigned int	 rt_ifidx;	/* [N] interface to use */
 	unsigned int	 rt_flags;	/* [X] up/down?, host/net */
-	struct refcnt	 rt_refcnt;	/* # held references */
 	int		 rt_plen;	/* [I] prefix length */
 	uint16_t	 rt_labelid;	/* [N] route label ID */
 	uint8_t		 rt_priority;	/* [N] routing priority to use */

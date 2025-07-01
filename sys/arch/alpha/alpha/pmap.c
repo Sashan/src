@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.c,v 1.92 2024/08/23 15:14:45 miod Exp $ */
+/* $OpenBSD: pmap.c,v 1.94 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pmap.c,v 1.154 2000/12/07 22:18:55 thorpej Exp $ */
 
 /*-
@@ -397,7 +397,7 @@ void	pmap_tlb_shootdown_job_put(struct pmap_tlb_shootdown_q *,
  * Internal routines
  */
 void	alpha_protection_init(void);
-void	pmap_do_remove(pmap_t, vaddr_t, vaddr_t, boolean_t);
+void	pmap_do_remove(pmap_t, vaddr_t, vaddr_t);
 boolean_t pmap_remove_mapping(pmap_t, vaddr_t, pt_entry_t *,
 	    boolean_t, cpuid_t);
 void	pmap_changebit(struct vm_page *, pt_entry_t, pt_entry_t, cpuid_t);
@@ -1008,8 +1008,8 @@ pmap_init(void)
 {
 
 #ifdef DEBUG
-        if (pmapdebug & PDB_FOLLOW)
-                printf("pmap_init()\n");
+	if (pmapdebug & PDB_FOLLOW)
+		printf("pmap_init()\n");
 #endif
 
 	/* initialize protection array */
@@ -1150,19 +1150,17 @@ pmap_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva)
 		printf("pmap_remove(%p, %lx, %lx)\n", pmap, sva, eva);
 #endif
 
-	pmap_do_remove(pmap, sva, eva, TRUE);
+	pmap_do_remove(pmap, sva, eva);
 }
 
 /*
  * pmap_do_remove:
  *
  *	This actually removes the range of addresses from the
- *	specified map.  It is used by pmap_collect() (does not
- *	want to remove wired mappings) and pmap_remove() (does
- *	want to remove wired mappings).
+ *	specified map.
  */
 void
-pmap_do_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva, boolean_t dowired)
+pmap_do_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva)
 {
 	pt_entry_t *l1pte, *l2pte, *l3pte;
 	pt_entry_t *saved_l1pte, *saved_l2pte, *saved_l3pte;
@@ -1185,8 +1183,6 @@ pmap_do_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva, boolean_t dowired)
 	 */
 	if (pmap == pmap_kernel()) {
 		PMAP_LOCK(pmap);
-
-		KASSERT(dowired == TRUE);
 
 		while (sva < eva) {
 			l3pte = PMAP_KERNEL_PTE(sva);
@@ -1267,9 +1263,7 @@ pmap_do_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva, boolean_t dowired)
 
 					for (; sva < l2eva && sva < eva;
 					     sva += PAGE_SIZE, l3pte++) {
-						if (pmap_pte_v(l3pte) &&
-						    (dowired == TRUE ||
-						     pmap_pte_w(l3pte) == 0)) {
+						if (pmap_pte_v(l3pte)) {
 							needisync |=
 							    pmap_remove_mapping(
 								pmap, sva,
@@ -2018,42 +2012,6 @@ pmap_extract(pmap_t pmap, vaddr_t va, paddr_t *pap)
 }
 
 /*
- * pmap_collect:		[ INTERFACE ]
- *
- *	Garbage collects the physical map system for pages which are no
- *	longer used.  Success need not be guaranteed -- that is, there
- *	may well be pages which are not referenced, but others may be
- *	collected.
- *
- *	Called by the pageout daemon when pages are scarce.
- */
-void
-pmap_collect(pmap_t pmap)
-{
-
-#ifdef DEBUG
-	if (pmapdebug & PDB_FOLLOW)
-		printf("pmap_collect(%p)\n", pmap);
-#endif
-
-	/*
-	 * If called for the kernel pmap, just return.  We
-	 * handle this case in the event that we ever want
-	 * to have swappable kernel threads.
-	 */
-	if (pmap == pmap_kernel())
-		return;
-
-	/*
-	 * This process is about to be swapped out; free all of
-	 * the PT pages by removing the physical mappings for its
-	 * entire address space.  Note: pmap_do_remove() performs
-	 * all necessary locking.
-	 */
-	pmap_do_remove(pmap, VM_MIN_ADDRESS, VM_MAX_ADDRESS, FALSE);
-}
-
-/*
  * pmap_activate:		[ INTERFACE ]
  *
  *	Activate the pmap used by the specified process.  This includes
@@ -2186,8 +2144,8 @@ pmap_copy_page(struct vm_page *srcpg, struct vm_page *dstpg)
 	if (pmapdebug & PDB_FOLLOW)
 		printf("pmap_copy_page(%lx, %lx)\n", src, dst);
 #endif
-        s = (caddr_t)ALPHA_PHYS_TO_K0SEG(src);
-        d = (caddr_t)ALPHA_PHYS_TO_K0SEG(dst);
+	s = (caddr_t)ALPHA_PHYS_TO_K0SEG(src);
+	d = (caddr_t)ALPHA_PHYS_TO_K0SEG(dst);
 	memcpy(d, s, PAGE_SIZE);
 }
 
@@ -2671,7 +2629,7 @@ pmap_pv_dump(paddr_t pa)
 	printf("\n");
 }
 #endif
- 
+
 /*
  * vtophys:
  *
@@ -3391,7 +3349,7 @@ pmap_asn_alloc(pmap_t pmap, cpuid_t cpu_id)
 		 * ASN is still in the current generation; keep on using it.
 		 */
 #ifdef DEBUG
-		if (pmapdebug & PDB_ASN) 
+		if (pmapdebug & PDB_ASN)
 			printf("pmap_asn_alloc: same generation, keeping %u\n",
 			    pma->pma_asn);
 #endif

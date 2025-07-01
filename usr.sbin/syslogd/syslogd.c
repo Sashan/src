@@ -1,4 +1,4 @@
-/*	$OpenBSD: syslogd.c,v 1.284 2025/01/23 12:27:42 henning Exp $	*/
+/*	$OpenBSD: syslogd.c,v 1.287 2025/06/26 19:10:13 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2014-2021 Alexander Bluhm <bluhm@genua.de>
@@ -1168,24 +1168,32 @@ acceptcb(int lfd, short event, void *arg, int usetls)
 	log_debug("Peer address and port %s", peername);
 	if ((p = malloc(sizeof(*p))) == NULL) {
 		log_warn("allocate peername \"%s\"", peername);
+		if (peername != hostname_unknown)
+			free(peername);
 		close(fd);
 		return;
 	}
 	p->p_fd = fd;
-	if ((p->p_bufev = bufferevent_new(fd, tcp_readcb,
+	p->p_ctx = NULL;
+	p->p_peername = NULL;
+	if ((p->p_bufev = bufferevent_new(fd,
+	    usetls ? tls_handshakecb : tcp_readcb,
 	    usetls ? tls_handshakecb : NULL, tcp_closecb, p)) == NULL) {
 		log_warn("bufferevent \"%s\"", peername);
 		free(p);
+		if (peername != hostname_unknown)
+			free(peername);
 		close(fd);
 		return;
 	}
-	p->p_ctx = NULL;
 	if (usetls) {
 		if (tls_accept_socket(server_ctx, &p->p_ctx, fd) == -1) {
 			log_warnx("tls_accept_socket \"%s\": %s",
 			    peername, tls_error(server_ctx));
 			bufferevent_free(p->p_bufev);
 			free(p);
+			if (peername != hostname_unknown)
+				free(peername);
 			close(fd);
 			return;
 		}
@@ -1236,6 +1244,7 @@ tls_handshakecb(struct bufferevent *bufev, void *arg)
 	}
 
 	bufferevent_setcb(bufev, tcp_readcb, NULL, tcp_closecb, p);
+	tcp_readcb(bufev, arg);
 }
 
 /*
@@ -1375,6 +1384,10 @@ tcp_closecb(struct bufferevent *bufev, short event, void *arg)
 	if (p->p_hostname != hostname_unknown)
 		free(p->p_hostname);
 	bufferevent_free(p->p_bufev);
+	if (p->p_ctx) {
+		tls_close(p->p_ctx);
+		tls_free(p->p_ctx);
+	}
 	close(p->p_fd);
 	free(p);
 }

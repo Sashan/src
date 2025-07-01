@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci.h,v 1.12 2024/10/02 17:05:56 dv Exp $	*/
+/*	$OpenBSD: pci.h,v 1.14 2025/06/12 21:04:37 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -90,7 +90,6 @@ struct pci {
 	uint64_t pci_next_io_bar;
 	uint8_t pci_next_pic_irq;
 	uint32_t pci_addr_reg;
-	uint32_t pci_data_reg;
 
 	struct pci_dev pci_devices[PCI_CONFIG_MAX_DEV];
 };
@@ -102,8 +101,6 @@ int pci_add_device(uint8_t *, uint16_t, uint16_t, uint8_t, uint8_t, uint16_t,
 int pci_add_bar(uint8_t, uint32_t, void *, void *);
 int pci_set_bar_fn(uint8_t, uint8_t, void *, void *);
 uint8_t pci_get_dev_irq(uint8_t);
-int pci_dump(int);
-int pci_restore(int);
 
 #ifdef __amd64__
 void pci_handle_address_reg(struct vm_run_params *);

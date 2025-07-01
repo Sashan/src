@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtsock.c,v 1.381 2025/02/16 11:39:28 bluhm Exp $	*/
+/*	$OpenBSD: rtsock.c,v 1.384 2025/06/12 20:37:59 deraadt Exp $	*/
 /*	$NetBSD: rtsock.c,v 1.18 1996/03/29 00:32:10 cgd Exp $	*/
 
 /*
@@ -483,8 +483,7 @@ rtm_senddesync(struct socket *so)
 		int ret;
 
 		mtx_enter(&so->so_rcv.sb_mtx);
-		ret = sbappendaddr(so, &so->so_rcv, &route_src,
-		    desync_mbuf, NULL);
+		ret = sbappendaddr(&so->so_rcv, &route_src, desync_mbuf, NULL);
 		mtx_leave(&so->so_rcv.sb_mtx);
 
 		if (ret != 0) {
@@ -604,7 +603,7 @@ rtm_sendup(struct socket *so, struct mbuf *m0)
 
 	mtx_enter(&so->so_rcv.sb_mtx);
 	if (sbspace_locked(&so->so_rcv) < (2 * MSIZE) ||
-	    sbappendaddr(so, &so->so_rcv, &route_src, m, NULL) == 0)
+	    sbappendaddr(&so->so_rcv, &route_src, m, NULL) == 0)
 		send_desync = 1;
 	mtx_leave(&so->so_rcv.sb_mtx);
 
@@ -630,6 +629,9 @@ rtm_report(struct rtentry *rt, u_char type, int seq, int tableid)
 #ifdef BFD
 	struct sockaddr_bfd	 sa_bfd;
 #endif
+#ifdef MPLS
+	struct sockaddr_mpls	 sa_mpls;
+#endif
 	struct ifnet		*ifp = NULL;
 	int			 len;
 
@@ -647,8 +649,6 @@ rtm_report(struct rtentry *rt, u_char type, int seq, int tableid)
 #endif
 #ifdef MPLS
 	if (rt->rt_flags & RTF_MPLS) {
-		struct sockaddr_mpls	 sa_mpls;
-
 		bzero(&sa_mpls, sizeof(sa_mpls));
 		sa_mpls.smpls_family = AF_MPLS;
 		sa_mpls.smpls_len = sizeof(sa_mpls);
@@ -1967,6 +1967,9 @@ sysctl_dumpentry(struct rtentry *rt, void *v, unsigned int id)
 #ifdef BFD
 	struct sockaddr_bfd	 sa_bfd;
 #endif
+#ifdef MPLS
+	struct sockaddr_mpls	 sa_mpls;
+#endif
 	struct sockaddr_rtlabel	 sa_rl;
 	struct sockaddr_in6	 sa_mask;
 
@@ -2009,8 +2012,6 @@ sysctl_dumpentry(struct rtentry *rt, void *v, unsigned int id)
 #endif
 #ifdef MPLS
 	if (rt->rt_flags & RTF_MPLS) {
-		struct sockaddr_mpls	 sa_mpls;
-
 		bzero(&sa_mpls, sizeof(sa_mpls));
 		sa_mpls.smpls_family = AF_MPLS;
 		sa_mpls.smpls_len = sizeof(sa_mpls);
@@ -2045,6 +2046,27 @@ sysctl_dumpentry(struct rtentry *rt, void *v, unsigned int id)
 	}
 	return (error);
 }
+
+#ifndef SMALL_KERNEL
+int
+sysctl_rtable_rtstat(void *oldp, size_t *oldlenp, void *newp)
+{
+	extern struct cpumem *rtcounters;
+	uint64_t counters[rts_ncounters];
+	struct rtstat rtstat;
+	uint32_t *words = (uint32_t *)&rtstat;
+	int i;
+
+	CTASSERT(sizeof(rtstat) == (nitems(counters) * sizeof(uint32_t)));
+	memset(&rtstat, 0, sizeof rtstat);
+	counters_read(rtcounters, counters, nitems(counters), NULL);
+
+	for (i = 0; i < nitems(counters); i++)
+		words[i] = (uint32_t)counters[i];
+
+	return (sysctl_rdstruct(oldp, oldlenp, newp, &rtstat, sizeof(rtstat)));
+}
+#endif /* SMALL_KERNEL */
 
 int
 sysctl_iflist(int af, struct walkarg *w)
@@ -2184,7 +2206,6 @@ sysctl_rtable(int *name, u_int namelen, void *where, size_t *given, void *new,
 	int			 i, error = EINVAL;
 	u_char			 af;
 	struct walkarg		 w;
-	struct rt_tableinfo	 tableinfo;
 	u_int			 tableid = 0;
 
 	if (new)
@@ -2222,30 +2243,23 @@ sysctl_rtable(int *name, u_int namelen, void *where, size_t *given, void *new,
 		}
 		NET_UNLOCK_SHARED();
 		break;
-
-	case NET_RT_IFLIST:
-		NET_LOCK_SHARED();
-		error = sysctl_iflist(af, &w);
-		NET_UNLOCK_SHARED();
-		break;
-
+#ifndef SMALL_KERNEL
 	case NET_RT_STATS:
 		return (sysctl_rtable_rtstat(where, given, new));
 	case NET_RT_TABLE:
 		tableid = w.w_arg;
-		if (!rtable_exists(tableid))
+		if (rtable_exists(tableid)) {
+			struct rt_tableinfo	 tableinfo;
+
+			memset(&tableinfo, 0, sizeof tableinfo);
+			tableinfo.rti_tableid = tableid;
+			tableinfo.rti_domainid = rtable_l2(tableid);
+			error = sysctl_rdstruct(where, given, new,
+			    &tableinfo, sizeof(tableinfo));
+			return (error);
+		} else
 			return (ENOENT);
-		memset(&tableinfo, 0, sizeof tableinfo);
-		tableinfo.rti_tableid = tableid;
-		tableinfo.rti_domainid = rtable_l2(tableid);
-		error = sysctl_rdstruct(where, given, new,
-		    &tableinfo, sizeof(tableinfo));
-		return (error);
-	case NET_RT_IFNAMES:
-		NET_LOCK_SHARED();
-		error = sysctl_ifnames(&w);
-		NET_UNLOCK_SHARED();
-		break;
+#endif /* SMALL_KERNEL */
 	case NET_RT_SOURCE:
 		tableid = w.w_arg;
 		if (!rtable_exists(tableid))
@@ -2261,6 +2275,17 @@ sysctl_rtable(int *name, u_int namelen, void *where, size_t *given, void *new,
 				break;
 		}
 		break;
+	case NET_RT_IFLIST:
+		NET_LOCK_SHARED();
+		error = sysctl_iflist(af, &w);
+		NET_UNLOCK_SHARED();
+		break;
+
+	case NET_RT_IFNAMES:
+		NET_LOCK_SHARED();
+		error = sysctl_ifnames(&w);
+		NET_UNLOCK_SHARED();
+		break;
 	}
 	free(w.w_tmem, M_RTABLE, w.w_tmemsize);
 	if (where) {
@@ -2274,25 +2299,6 @@ sysctl_rtable(int *name, u_int namelen, void *where, size_t *given, void *new,
 		    PAGE_SIZE);
 	}
 	return (error);
-}
-
-int
-sysctl_rtable_rtstat(void *oldp, size_t *oldlenp, void *newp)
-{
-	extern struct cpumem *rtcounters;
-	uint64_t counters[rts_ncounters];
-	struct rtstat rtstat;
-	uint32_t *words = (uint32_t *)&rtstat;
-	int i;
-
-	CTASSERT(sizeof(rtstat) == (nitems(counters) * sizeof(uint32_t)));
-	memset(&rtstat, 0, sizeof rtstat);
-	counters_read(rtcounters, counters, nitems(counters), NULL);
-
-	for (i = 0; i < nitems(counters); i++)
-		words[i] = (uint32_t)counters[i];
-
-	return (sysctl_rdstruct(oldp, oldlenp, newp, &rtstat, sizeof(rtstat)));
 }
 
 int

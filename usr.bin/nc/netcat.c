@@ -1,4 +1,4 @@
-/* $OpenBSD: netcat.c,v 1.229 2024/11/02 17:19:27 tb Exp $ */
+/* $OpenBSD: netcat.c,v 1.234 2025/06/24 13:37:11 tb Exp $ */
 /*
  * Copyright (c) 2001 Eric Jackson <ericj@monkey.org>
  * Copyright (c) 2015 Bob Beck.  All rights reserved.
@@ -108,6 +108,7 @@ char	*tls_expectname;			/* required name in peer cert */
 char	*tls_expecthash;			/* required hash of peer cert */
 char	*tls_ciphers;				/* TLS ciphers */
 char	*tls_protocols;				/* TLS protocols */
+char	*tls_alpn;				/* TLS ALPN */
 FILE	*Zflag;					/* file to save peer cert */
 
 int recvcount, recvlimit;
@@ -190,6 +191,8 @@ main(int argc, char *argv[])
 				socksv = -1; /* HTTP proxy CONNECT */
 			else if (strcmp(optarg, "4") == 0)
 				socksv = 4; /* SOCKS v.4 */
+			else if (strcasecmp(optarg, "4A") == 0)
+				socksv = 44; /* SOCKS v.4A */
 			else if (strcmp(optarg, "5") == 0)
 				socksv = 5; /* SOCKS v.5 */
 			else
@@ -531,6 +534,8 @@ main(int argc, char *argv[])
 		if (tls_config_set_protocols(tls_cfg, protocols) == -1)
 			errx(1, "%s", tls_config_error(tls_cfg));
 		if (tls_config_set_ciphers(tls_cfg, tls_ciphers) == -1)
+			errx(1, "%s", tls_config_error(tls_cfg));
+		if (tls_alpn != NULL && tls_config_set_alpn(tls_cfg, tls_alpn) == -1)
 			errx(1, "%s", tls_config_error(tls_cfg));
 		if (!lflag && (TLSopt & TLS_CCERT))
 			errx(1, "clientcert is only valid with -l");
@@ -1669,11 +1674,12 @@ process_tls_opt(char *s, int *flags)
 		int		 flag;
 		char		**value;
 	} *t, tlskeywords[] = {
+		{ "alpn",		-1,			&tls_alpn },
 		{ "ciphers",		-1,			&tls_ciphers },
 		{ "clientcert",		TLS_CCERT,		NULL },
 		{ "muststaple",		TLS_MUSTSTAPLE,		NULL },
-		{ "noverify",		TLS_NOVERIFY,		NULL },
 		{ "noname",		TLS_NONAME,		NULL },
+		{ "noverify",		TLS_NOVERIFY,		NULL },
 		{ "protocols",		-1,			&tls_protocols },
 		{ NULL,			-1,			NULL },
 	};
@@ -1692,6 +1698,8 @@ process_tls_opt(char *s, int *flags)
 					errx(1, "invalid tls value `%s'", s);
 				*t->value = v;
 			} else {
+				if (v != NULL)
+					errx(1, "invalid tls value `%s'", s);
 				*flags |= t->flag;
 			}
 			return 1;
@@ -1718,7 +1726,7 @@ void
 report_tls(struct tls *tls_ctx, char *host)
 {
 	time_t t;
-	const char *ocsp_url;
+	const char *alpn_proto, *ocsp_url;
 
 	fprintf(stderr, "TLS handshake negotiated %s/%s with host %s\n",
 	    tls_conn_version(tls_ctx), tls_conn_cipher(tls_ctx), host);
@@ -1770,6 +1778,8 @@ report_tls(struct tls *tls_ctx, char *host)
 		    tls_peer_ocsp_result(tls_ctx));
 		break;
 	}
+	if ((alpn_proto = tls_conn_alpn_selected(tls_ctx)) != NULL)
+		fprintf(stderr, "Application Layer Protocol: %s\n", alpn_proto);
 }
 
 void
@@ -1842,7 +1852,7 @@ help(void)
 	\t-v		Verbose\n\
 	\t-W recvlimit	Terminate after receiving a number of packets\n\
 	\t-w timeout	Timeout for connects and final net reads\n\
-	\t-X proto	Proxy protocol: \"4\", \"5\" (SOCKS) or \"connect\"\n\
+	\t-X proto	Proxy protocol: \"4\", \"4A\", \"5\" (SOCKS) or \"connect\"\n\
 	\t-x addr[:port]\tSpecify proxy address and port\n\
 	\t-Z		Peer certificate file\n\
 	\t-z		Zero-I/O mode [used for scanning]\n\

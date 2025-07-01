@@ -1,4 +1,4 @@
-#	$OpenBSD: files.amd64,v 1.112 2024/11/04 22:08:03 jsg Exp $
+#	$OpenBSD: files.amd64,v 1.115 2025/06/07 15:11:12 kettenis Exp $
 
 maxpartitions 16
 maxusers 2 16 128
@@ -26,9 +26,9 @@ file	arch/amd64/amd64/sys_machdep.c
 file	arch/amd64/amd64/trap.c
 file	arch/amd64/amd64/vm_machdep.c
 file	arch/amd64/amd64/fpu.c
-file	arch/amd64/amd64/softintr.c
 file	arch/amd64/amd64/i8259.c
 file	arch/amd64/amd64/cacheinfo.c
+file	arch/amd64/amd64/ghcb.c
 file	arch/amd64/amd64/vector.S
 file	arch/amd64/amd64/copy.S
 file	arch/amd64/amd64/spl.S
@@ -238,6 +238,7 @@ file	arch/amd64/amd64/acpi_machdep.c		acpi
 file	arch/amd64/amd64/acpi_wakecode.S	acpi & !small_kernel
 file	dev/acpi/acpi_x86.c			acpi & suspend & !small_kernel
 file	dev/acpi/acpi_apm.c			acpi
+file	dev/acpi/acpicpu_x86.c			acpicpu needs-flag
 
 device	acpipci
 attach	acpipci at acpi

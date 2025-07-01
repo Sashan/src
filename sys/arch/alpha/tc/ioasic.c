@@ -1,4 +1,4 @@
-/* $OpenBSD: ioasic.c,v 1.19 2022/03/13 08:04:13 mpi Exp $ */
+/* $OpenBSD: ioasic.c,v 1.21 2025/06/29 15:55:22 miod Exp $ */
 /* $NetBSD: ioasic.c,v 1.34 2000/07/18 06:10:06 thorpej Exp $ */
 
 /*-
@@ -131,9 +131,7 @@ tc_addr_t ioasic_base;		/* XXX XXX XXX */
 int ioasicfound;
 
 int
-ioasicmatch(parent, cfdata, aux)
-	struct device *parent;
-	void *cfdata, *aux;
+ioasicmatch(struct device *parent, void *cfdata, void *aux)
 {
 	struct tc_attach_args *ta = aux;
 
@@ -152,9 +150,7 @@ ioasicmatch(parent, cfdata, aux)
 }
 
 void
-ioasicattach(parent, self, aux)
-	struct device *parent, *self;
-	void *aux;
+ioasicattach(struct device *parent, struct device *self, void *aux)
 {
 	struct ioasic_softc *sc = (struct ioasic_softc *)self;
 	struct tc_attach_args *ta = aux;
@@ -165,7 +161,7 @@ ioasicattach(parent, self, aux)
 
 	ioasicfound = 1;
 
-	sc->sc_bst = ta->ta_memt; 
+	sc->sc_bst = ta->ta_memt;
 	if (bus_space_map(ta->ta_memt, ta->ta_addr,
 			0x400000, 0, &sc->sc_bsh)) {
 		printf("%s: unable to map device\n", sc->sc_dv.dv_xname);
@@ -213,12 +209,8 @@ ioasicattach(parent, self, aux)
 }
 
 void
-ioasic_intr_establish(ioa, cookie, level, func, arg, name)
-	struct device *ioa;
-	void *cookie, *arg;
-	int level;
-	int (*func)(void *);
-	const char *name;
+ioasic_intr_establish(struct device *ioa, void *cookie, int level,
+    int (*func)(void *), void *arg, const char *name)
 {
 	struct ioasic_softc *sc = (void *)ioasic_cd.cd_devs[0];
 	u_long dev, i, imsk;
@@ -243,14 +235,12 @@ ioasic_intr_establish(ioa, cookie, level, func, arg, name)
 		panic("ioasic_intr_establish: invalid cookie.");
 
 	imsk = bus_space_read_4(sc->sc_bst, sc->sc_bsh, IOASIC_IMSK);
-        imsk |= ioasic_devs[i].iad_intrbits;
-        bus_space_write_4(sc->sc_bst, sc->sc_bsh, IOASIC_IMSK, imsk);
+	imsk |= ioasic_devs[i].iad_intrbits;
+	bus_space_write_4(sc->sc_bst, sc->sc_bsh, IOASIC_IMSK, imsk);
 }
 
 void
-ioasic_intr_disestablish(ioa, cookie)
-	struct device *ioa;
-	void *cookie;
+ioasic_intr_disestablish(struct device *ioa, void *cookie)
 {
 	struct ioasic_softc *sc = (void *)ioasic_cd.cd_devs[0];
 	u_long dev, i, imsk;
@@ -280,8 +270,7 @@ ioasic_intr_disestablish(ioa, cookie)
 }
 
 int
-ioasic_intrnull(val)
-	void *val;
+ioasic_intrnull(void *val)
 {
 
 	panic("ioasic_intrnull: uncaught IOASIC intr for cookie %ld",
@@ -292,8 +281,7 @@ ioasic_intrnull(val)
  * ASIC interrupt handler.
  */
 int
-ioasic_intr(val)
-	void *val;
+ioasic_intr(void *val)
 {
 	register struct ioasic_softc *sc = val;
 	register int ifound;
@@ -387,7 +375,7 @@ ioasic_led_blink(void *unused)
 			pattern = averunnable.ldavg[0] >> FSHIFT;
 		else {
 			pattern = led_pattern8[led_blink_state.patpos];
-			led_blink_state.patpos = 
+			led_blink_state.patpos =
 			    (led_blink_state.patpos + 1) % sizeof(led_pattern8);
 		}
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bpe.c,v 1.22 2023/12/23 10:52:54 bluhm Exp $ */
+/*	$OpenBSD: if_bpe.c,v 1.24 2025/03/02 21:28:31 bluhm Exp $ */
 /*
  * Copyright (c) 2018 David Gwynne <dlg@openbsd.org>
  *
@@ -305,6 +305,7 @@ bpe_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct bpe_softc *sc = ifp->if_softc;
 	struct ifreq *ifr = (struct ifreq *)data;
 	struct ifbrparam *bparam = (struct ifbrparam *)data;
+	struct ifnet *ifp0;
 	int error = 0;
 
 	switch (cmd) {
@@ -317,6 +318,13 @@ bpe_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		} else {
 			if (ISSET(ifp->if_flags, IFF_RUNNING))
 				error = bpe_down(sc);
+		}
+		break;
+
+	case SIOCSIFXFLAGS:
+		if ((ifp0 = if_get(sc->sc_key.k_if)) != NULL) {
+			ifsetlro(ifp0, ISSET(ifr->ifr_flags, IFXF_LRO));
+			if_put(ifp0);
 		}
 		break;
 
@@ -729,7 +737,7 @@ bpe_find(struct ifnet *ifp0, uint32_t isid)
 }
 
 void
-bpe_input(struct ifnet *ifp0, struct mbuf *m)
+bpe_input(struct ifnet *ifp0, struct mbuf *m, struct netstack *ns)
 {
 	struct bpe_softc *sc;
 	struct ifnet *ifp;
@@ -809,7 +817,7 @@ bpe_input(struct ifnet *ifp0, struct mbuf *m)
 	pf_pkt_addr_changed(m);
 #endif
 
-	if_vinput(ifp, m);
+	if_vinput(ifp, m, ns);
 	return;
 
 drop:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_lock.c,v 1.75 2024/07/03 01:36:50 jsg Exp $	*/
+/*	$OpenBSD: kern_lock.c,v 1.81 2025/06/24 15:37:43 jca Exp $	*/
 
 /*
  * Copyright (c) 2017 Visa Hankala
@@ -24,6 +24,7 @@
 #include <sys/atomic.h>
 #include <sys/witness.h>
 #include <sys/mutex.h>
+#include <sys/pclock.h>
 
 #include <ddb/db_output.h>
 
@@ -32,9 +33,29 @@
 #error "MP_LOCKDEBUG requires DDB"
 #endif
 
-/* CPU-dependent timing, this needs to be settable from ddb. */
-int __mp_lock_spinout = INT_MAX;
+/*
+ * CPU-dependent timing, this needs to be settable from ddb.
+ * Use a "long" to allow larger thresholds on fast 64 bits machines.
+ */
+long __mp_lock_spinout = 1L * INT_MAX;
 #endif /* MP_LOCKDEBUG */
+
+extern int ncpusfound;
+
+/*
+ * Min & max numbers of "busy cycles" to waste before trying again to
+ * acquire a contended lock using an atomic operation.
+ *
+ * The min number must be as small as possible to not introduce extra
+ * latency.  It also doesn't matter if the first steps of an exponential
+ * backoff are smalls.
+ *
+ * The max number is used to cap the exponential backoff.  It should
+ * be small enough to not waste too many cycles in %sys time and big
+ * enough to reduce (ideally avoid) cache line contention.
+ */
+#define CPU_MIN_BUSY_CYCLES	1
+#define CPU_MAX_BUSY_CYCLES	ncpusfound
 
 #ifdef MULTIPROCESSOR
 
@@ -106,7 +127,7 @@ __mp_lock_spin(struct __mp_lock *mpl, u_int me)
 {
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
 #ifdef MP_LOCKDEBUG
-	int nticks = __mp_lock_spinout;
+	long nticks = __mp_lock_spinout;
 #endif
 
 	spc->spc_spinning++;
@@ -228,8 +249,9 @@ void
 mtx_enter(struct mutex *mtx)
 {
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
+	unsigned int i, ncycle = CPU_MIN_BUSY_CYCLES;
 #ifdef MP_LOCKDEBUG
-	int nticks = __mp_lock_spinout;
+	long nticks = __mp_lock_spinout;
 #endif
 
 	WITNESS_CHECKORDER(MUTEX_LOCK_OBJECT(mtx),
@@ -238,15 +260,18 @@ mtx_enter(struct mutex *mtx)
 	spc->spc_spinning++;
 	while (mtx_enter_try(mtx) == 0) {
 		do {
-			CPU_BUSY_CYCLE();
+			/* Busy loop with exponential backoff. */
+			for (i = ncycle; i > 0; i--)
+				CPU_BUSY_CYCLE();
 #ifdef MP_LOCKDEBUG
-			if (--nticks == 0) {
-				db_printf("%s: %p lock spun out\n",
-				    __func__, mtx);
+			if ((nticks -= ncycle) <= 0) {
+				db_printf("%s: %p lock spun out\n", __func__, mtx);
 				db_enter();
 				nticks = __mp_lock_spinout;
 			}
 #endif
+			if (ncycle < CPU_MAX_BUSY_CYCLES)
+				ncycle += ncycle;
 		} while (mtx->mtx_owner != NULL);
 	}
 	spc->spc_spinning--;
@@ -265,20 +290,27 @@ mtx_enter_try(struct mutex *mtx)
 	if (mtx->mtx_wantipl != IPL_NONE)
 		s = splraise(mtx->mtx_wantipl);
 
-	owner = atomic_cas_ptr(&mtx->mtx_owner, NULL, ci);
+	/*
+	 * Avoid unconditional atomic operation to prevent cache line
+	 * contention.
+	 */
+	owner = mtx->mtx_owner;
 #ifdef DIAGNOSTIC
 	if (__predict_false(owner == ci))
 		panic("mtx %p: locking against myself", mtx);
 #endif
 	if (owner == NULL) {
-		membar_enter_after_atomic();
-		if (mtx->mtx_wantipl != IPL_NONE)
-			mtx->mtx_oldipl = s;
+		owner = atomic_cas_ptr(&mtx->mtx_owner, NULL, ci);
+		if (owner == NULL) {
+			membar_enter_after_atomic();
+			if (mtx->mtx_wantipl != IPL_NONE)
+				mtx->mtx_oldipl = s;
 #ifdef DIAGNOSTIC
-		ci->ci_mutex_level++;
+			ci->ci_mutex_level++;
 #endif
-		WITNESS_LOCK(MUTEX_LOCK_OBJECT(mtx), LOP_EXCLUSIVE);
-		return (1);
+			WITNESS_LOCK(MUTEX_LOCK_OBJECT(mtx), LOP_EXCLUSIVE);
+			return (1);
+		}
 	}
 
 	if (mtx->mtx_wantipl != IPL_NONE)
@@ -353,6 +385,7 @@ void
 db_mtx_enter(struct db_mutex *mtx)
 {
 	struct cpu_info *ci = curcpu(), *owner;
+	unsigned int i, ncycle = CPU_MIN_BUSY_CYCLES;
 	unsigned long s;
 
 #ifdef DIAGNOSTIC
@@ -361,12 +394,22 @@ db_mtx_enter(struct db_mutex *mtx)
 #endif
 
 	s = intr_disable();
-
 	for (;;) {
-		owner = atomic_cas_ptr(&mtx->mtx_owner, NULL, ci);
-		if (owner == NULL)
-			break;
-		CPU_BUSY_CYCLE();
+		/*
+		 * Avoid unconditional atomic operation to prevent cache
+		 * line contention.
+		 */
+		owner = mtx->mtx_owner;
+		if (owner == NULL) {
+			owner = atomic_cas_ptr(&mtx->mtx_owner, NULL, ci);
+			if (owner == NULL)
+				break;
+			/* Busy loop with exponential backoff. */
+			for (i = ncycle; i > 0; i--)
+				CPU_BUSY_CYCLE();
+			if (ncycle < CPU_MAX_BUSY_CYCLES)
+				ncycle += ncycle;
+		}
 	}
 	membar_enter_after_atomic();
 
@@ -418,3 +461,102 @@ _mtx_init_flags(struct mutex *m, int ipl, const char *name, int flags,
 	_mtx_init(m, ipl);
 }
 #endif /* WITNESS */
+
+void
+pc_lock_init(struct pc_lock *pcl)
+{
+	pcl->pcl_gen = 0;
+}
+
+unsigned int
+pc_sprod_enter(struct pc_lock *pcl)
+{
+	unsigned int gen;
+
+	gen = pcl->pcl_gen;
+	pcl->pcl_gen = ++gen;
+	membar_producer();
+
+	return (gen);
+}
+
+void
+pc_sprod_leave(struct pc_lock *pcl, unsigned int gen)
+{
+	membar_producer();
+	pcl->pcl_gen = ++gen;
+}
+
+#ifdef MULTIPROCESSOR
+unsigned int
+pc_mprod_enter(struct pc_lock *pcl)
+{
+	unsigned int gen, ngen, ogen;
+
+	gen = pcl->pcl_gen;
+	for (;;) {
+		while (gen & 1) {
+			CPU_BUSY_CYCLE();
+			gen = pcl->pcl_gen;
+		}
+
+		ngen = 1 + gen;
+		ogen = atomic_cas_uint(&pcl->pcl_gen, gen, ngen);
+		if (gen == ogen)
+			break;
+
+		CPU_BUSY_CYCLE();
+		gen = ogen;
+	}
+
+	membar_enter_after_atomic();
+	return (ngen);
+}
+
+void
+pc_mprod_leave(struct pc_lock *pcl, unsigned int gen)
+{
+	membar_exit();
+	pcl->pcl_gen = ++gen;
+}
+#else /* MULTIPROCESSOR */
+unsigned int	pc_mprod_enter(struct pc_lock *)
+		    __attribute__((alias("pc_sprod_enter")));
+void		pc_mprod_leave(struct pc_lock *, unsigned int)
+		    __attribute__((alias("pc_sprod_leave")));
+#endif /* MULTIPROCESSOR */
+
+void
+pc_cons_enter(struct pc_lock *pcl, unsigned int *genp)
+{
+	unsigned int gen;
+
+	gen = pcl->pcl_gen;
+	while (gen & 1) {
+		CPU_BUSY_CYCLE();
+		gen = pcl->pcl_gen;
+	}
+
+	membar_consumer();
+	*genp = gen;
+}
+
+int
+pc_cons_leave(struct pc_lock *pcl, unsigned int *genp)
+{
+	unsigned int gen;
+
+	membar_consumer();
+
+	gen = pcl->pcl_gen;
+	if (gen & 1) {
+		do {
+			CPU_BUSY_CYCLE();
+			gen = pcl->pcl_gen;
+		} while (gen & 1);
+	} else if (gen == *genp)
+		return (0);
+
+	*genp = gen;
+	return (EBUSY);
+}

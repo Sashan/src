@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.20 2024/11/21 13:35:20 claudio Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.22 2025/06/19 10:28:41 jmatthew Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021, 2024 Florian Obser <florian@openbsd.org>
@@ -347,6 +347,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 				fatal(NULL);
 			memcpy(iface_conf, imsg.data, sizeof(struct
 			    iface_conf));
+			if (iface_conf->name[sizeof(iface_conf->name) - 1]
+			    != '\0')
+				fatalx("%s: IMSG_RECONF_IFACE invalid name",
+				    __func__);
+
 			SIMPLEQ_INIT(&iface_conf->iface_ia_list);
 			SIMPLEQ_INSERT_TAIL(&nconf->iface_list,
 			    iface_conf, entry);
@@ -380,6 +385,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 				fatal(NULL);
 			memcpy(iface_pd_conf, imsg.data, sizeof(struct
 			    iface_pd_conf));
+			if (iface_pd_conf->name[sizeof(iface_pd_conf->name) - 1]
+			    != '\0')
+				fatalx("%s: IMSG_RECONF_IFACE_PD invalid name",
+				    __func__);
+
 			SIMPLEQ_INSERT_TAIL(&iface_ia_conf->iface_pd_list,
 			    iface_pd_conf, entry);
 			break;
@@ -549,9 +559,6 @@ update_iface(uint32_t if_index)
 	int			 flags;
 	char			 ifnamebuf[IF_NAMESIZE], *if_name;
 
-	if (getifaddrs(&ifap) != 0)
-		fatal("getifaddrs");
-
 	if ((if_name = if_indextoname(if_index, ifnamebuf)) == NULL)
 		return;
 
@@ -560,6 +567,9 @@ update_iface(uint32_t if_index)
 
 	if (find_iface_conf(&frontend_conf->iface_list, if_name) == NULL)
 		return;
+
+	if (getifaddrs(&ifap) != 0)
+		fatal("getifaddrs");
 
 	memset(&ifinfo, 0, sizeof(ifinfo));
 	ifinfo.if_index = if_index;

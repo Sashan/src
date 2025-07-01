@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# Copyright (c) 2021 Ingo Schwarze <schwarze@openbsd.org>
+# Copyright (c) 2021,2022,2023,2024,2025 Ingo Schwarze <schwarze@openbsd.org>
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -29,6 +29,9 @@ my %internal = (
 	BN_DEC_CONV BN_DEC_FMT1 BN_DEC_FMT2 BN_DEC_NUM BN_LLONG BN_LONG
 	BN_MASK2 BN_MASK2h BN_MASK2h1 BN_MASK2l
 	BN_TBIT BN_ULLONG
+    )],
+    conf => [qw(
+	conf_st conf_method_st
     )],
     evp => [qw(
 	ASN1_PKEY_CTRL_CMS_ENVELOPE ASN1_PKEY_CTRL_CMS_RI_TYPE
@@ -116,7 +119,7 @@ my %postponed = (
 
 my $MANW = 'man -M /usr/share/man -w';
 my $srcdir = '/usr/src/lib/libcrypto/man';
-my $hfile = '/usr/include/openssl';
+my $hfile = '/usr/include';
 
 my $in_cplusplus = 0;
 my $in_comment = 0;
@@ -133,6 +136,7 @@ if (defined $ARGV[0] && $ARGV[0] eq '-v') {
 	shift @ARGV;
 }
 $#ARGV == 0 or die "usage: $0 [-v] headername";
+$hfile .= "/openssl" unless $ARGV[0] eq 'tls';
 $hfile .= "/$ARGV[0].h";
 open my $in_fh, '<', $hfile or die "$hfile: $!";
 
@@ -236,6 +240,7 @@ try_again:
 	# Uninteresting lines.
 
 	if (/^\s*$/ ||
+	    /^DECLARE_LHASH_OF\(\w+\);$/ ||
 	    /^DECLARE_STACK_OF\(\w+\)$/ ||
 	    /^DECLARE_PKCS12_STACK_OF\(\w+\)$/ ||
 	    /^TYPEDEF_D2I2D_OF\(\w+\);$/ ||
@@ -288,7 +293,7 @@ try_again:
 			print "D- $line\n" if $verbose;
 			next;
 		}
-		if ($id =~ /^(?:ASN1|BIO|BN|EVP|X509(?:V3)?)_[FR]_\w+$/) {
+		if ($id =~ /^(?:ASN1|BIO|BN|CONF|EVP|X509(?:V3)?)_[FR]_\w+$/) {
 			print "D- $line\n" if $verbose;
 			next;
 		}

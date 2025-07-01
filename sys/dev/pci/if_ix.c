@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ix.c,v 1.218 2024/10/04 05:22:10 yasuoka Exp $	*/
+/*	$OpenBSD: if_ix.c,v 1.221 2025/06/24 11:02:03 stsp Exp $	*/
 
 /******************************************************************************
 
@@ -550,6 +550,19 @@ ixgbe_ioctl(struct ifnet * ifp, u_long command, caddr_t data)
 		}
 		break;
 
+	case SIOCSIFXFLAGS:
+		if (ISSET(ifr->ifr_flags, IFXF_LRO) !=
+		    ISSET(ifp->if_xflags, IFXF_LRO)) {
+			if (ISSET(ifr->ifr_flags, IFXF_LRO))
+				SET(ifp->if_xflags, IFXF_LRO);
+			else
+				CLR(ifp->if_xflags, IFXF_LRO);
+
+			if (ifp->if_flags & IFF_UP)
+				ixgbe_init(sc);
+		}
+		break;
+
 	case SIOCSIFMEDIA:
 	case SIOCGIFMEDIA:
 		IOCTL_DEBUGOUT("ioctl: SIOCxIFMEDIA (Get/Set Interface Media)");
@@ -762,8 +775,15 @@ ixgbe_init(void *arg)
 	ixgbe_init_hw(&sc->hw);
 	ixgbe_initialize_transmit_units(sc);
 
-	/* Use 2k clusters, even for jumbo frames */
-	sc->rx_mbuf_sz = MCLBYTES + ETHER_ALIGN;
+	/*
+	 * Use 4k clusters in LRO mode to avoid m_defrag calls in case of
+	 * socket splicing.  Or, use 2k clusters in non-LRO mode, even for
+	 * jumbo frames.
+	 */
+	if (ISSET(ifp->if_xflags, IFXF_LRO))
+		sc->rx_mbuf_sz = MCLBYTES * 2 - ETHER_ALIGN;
+	else
+		sc->rx_mbuf_sz = MCLBYTES + ETHER_ALIGN;
 
 	/* Prepare receive descriptors and buffers */
 	if (ixgbe_setup_receive_structures(sc)) {
@@ -2621,6 +2641,7 @@ ixgbe_txeof(struct ix_txring *txr)
 	unsigned int			 head, tail, last;
 	struct ixgbe_tx_buf		*tx_buffer;
 	struct ixgbe_legacy_tx_desc	*tx_desc;
+	int done = 0;
 
 	if (!ISSET(ifp->if_flags, IFF_RUNNING))
 		return FALSE;
@@ -2653,6 +2674,7 @@ ixgbe_txeof(struct ix_txring *txr)
 		tx_buffer->m_head = NULL;
 		tx_buffer->eop_index = -1;
 
+		done = 1;
 		tail = last + 1;
 		if (tail == sc->num_tx_desc)
 			tail = 0;
@@ -2671,7 +2693,7 @@ ixgbe_txeof(struct ix_txring *txr)
 
 	txr->next_to_clean = tail;
 
-	if (ifq_is_oactive(ifq))
+	if (done && ifq_is_oactive(ifq))
 		ifq_restart(ifq);
 
 	return TRUE;

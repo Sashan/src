@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.244 2025/02/17 08:56:33 mvs Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.251 2025/06/26 21:46:40 bluhm Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -159,6 +159,7 @@ const struct pr_usrreqs tcp6_usrreqs = {
 };
 #endif
 
+#ifndef SMALL_KERNEL
 const struct sysctl_bounded_args tcpctl_vars[] = {
 	{ TCPCTL_KEEPINITTIME, &tcp_keepinit_sec, 1,
 	    3 * TCPTV_KEEPINIT / TCP_TIME(1) },
@@ -180,6 +181,7 @@ const struct sysctl_bounded_args tcpctl_vars[] = {
 	{ TCPCTL_ALWAYS_KEEPALIVE, &tcp_always_keepalive, 0, 1 },
 	{ TCPCTL_TSO, &tcp_do_tso, 0, 1 },
 };
+#endif /* SMALL_KERNEL */
 
 struct	inpcbtable tcbtable;
 #ifdef INET6
@@ -852,7 +854,7 @@ tcp_send(struct socket *so, struct mbuf *m, struct mbuf *nam,
 		ostate = tp->t_state;
 
 	mtx_enter(&so->so_snd.sb_mtx);
-	sbappendstream(so, &so->so_snd, m);
+	sbappendstream(&so->so_snd, m);
 	mtx_leave(&so->so_snd.sb_mtx);
 	m = NULL;
 
@@ -984,7 +986,7 @@ tcp_sendoob(struct socket *so, struct mbuf *m, struct mbuf *nam,
 	 * Otherwise, snd_up should be one lower.
 	 */
 	mtx_enter(&so->so_snd.sb_mtx);
-	sbappendstream(so, &so->so_snd, m);
+	sbappendstream(&so->so_snd, m);
 	mtx_leave(&so->so_snd.sb_mtx);
 	m = NULL;
 	tp->snd_up = tp->snd_una + so->so_snd.sb_cc;
@@ -1214,7 +1216,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 		struct tcpcb *tp = NULL;
 
 		if (inp != NULL) {
-			so = in_pcbsolock_ref(inp);
+			so = in_pcbsolock(inp);
 			if (so != NULL)
 				tp = intotcpcb(inp);
 		}
@@ -1223,7 +1225,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 		else
 			error = ESRCH;
 
-		in_pcbsounlock_rele(inp, so);
+		in_pcbsounlock(inp, so);
 		NET_UNLOCK_SHARED();
 		in_pcbunref(inp);
 		return (error);
@@ -1246,7 +1248,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 	}
 
 	if (inp != NULL)
-		so = in_pcbsolock_ref(inp);
+		so = in_pcbsolock(inp);
 
 	if (so != NULL && ISSET(so->so_state, SS_CONNECTOUT)) {
 		tir.ruid = so->so_ruid;
@@ -1256,7 +1258,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 		tir.euid = -1;
 	}
 
-	in_pcbsounlock_rele(inp, so);
+	in_pcbsounlock(inp, so);
 	NET_UNLOCK_SHARED();
 	in_pcbunref(inp);
 
@@ -1264,6 +1266,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 	return copyout(&tir, oldp, sizeof(tir));
 }
 
+#ifndef SMALL_KERNEL
 int
 tcp_sysctl_tcpstat(void *oldp, size_t *oldlenp, void *newp)
 {
@@ -1332,6 +1335,7 @@ tcp_sysctl_tcpstat(void *oldp, size_t *oldlenp, void *newp)
 	ASSIGN(tcps_preddat);
 	ASSIGN(tcps_pcbhashmiss);
 	ASSIGN(tcps_noport);
+	ASSIGN(tcps_closing);
 	ASSIGN(tcps_badsyn);
 	ASSIGN(tcps_dropsyn);
 	ASSIGN(tcps_rcvbadsig);
@@ -1419,22 +1423,40 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (ENOTDIR);
 
 	switch (name[0]) {
-	case TCPCTL_BADDYNAMIC:
-		NET_LOCK();
-		error = sysctl_struct(oldp, oldlenp, newp, newlen,
-		    baddynamicports.tcp, sizeof(baddynamicports.tcp));
-		NET_UNLOCK();
-		return (error);
-
 	case TCPCTL_ROOTONLY:
-		if (newp && securelevel > 0)
+		if (newp && (int)atomic_load_int(&securelevel) > 0)
 			return (EPERM);
-		NET_LOCK();
-		error = sysctl_struct(oldp, oldlenp, newp, newlen,
-		    rootonlyports.tcp, sizeof(rootonlyports.tcp));
-		NET_UNLOCK();
-		return (error);
+		/* FALLTHROUGH */
+	case TCPCTL_BADDYNAMIC: {
+		struct baddynamicports *ports = (name[0] == TCPCTL_ROOTONLY ?
+		    &rootonlyports : &baddynamicports);
+		const size_t bufitems = DP_MAPSIZE;
+		const size_t buflen = bufitems * sizeof(uint32_t);
+		size_t i;
+		uint32_t *buf;
+		int error;
 
+		buf = malloc(buflen, M_SYSCTL, M_WAITOK | M_ZERO);
+
+		NET_LOCK_SHARED();
+		for (i = 0; i < bufitems; ++i)
+			buf[i] = ports->tcp[i];
+		NET_UNLOCK_SHARED();
+
+		error = sysctl_struct(oldp, oldlenp, newp, newlen,
+		    buf, buflen);
+
+		if (error == 0 && newp) {
+			NET_LOCK();
+			for (i = 0; i < bufitems; ++i)
+				ports->tcp[i] = buf[i];
+			NET_UNLOCK();
+		}
+
+		free(buf, M_SYSCTL, buflen);
+
+		return (error);
+	}
 	case TCPCTL_IDENT:
 		return tcp_ident(oldp, oldlenp, newp, newlen, 0);
 
@@ -1442,29 +1464,37 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return tcp_ident(oldp, oldlenp, newp, newlen, 1);
 
 	case TCPCTL_REASS_LIMIT:
-		NET_LOCK();
-		nval = tcp_reass_limit;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &nval);
-		if (!error && nval != tcp_reass_limit) {
-			error = pool_sethardlimit(&tcpqe_pool, nval, NULL, 0);
-			if (!error)
-				tcp_reass_limit = nval;
-		}
-		NET_UNLOCK();
-		return (error);
+	case TCPCTL_SACKHOLE_LIMIT: {
+		struct pool *pool;
+		int *var;
 
-	case TCPCTL_SACKHOLE_LIMIT:
-		NET_LOCK();
-		nval = tcp_sackhole_limit;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &nval);
-		if (!error && nval != tcp_sackhole_limit) {
-			error = pool_sethardlimit(&sackhl_pool, nval, NULL, 0);
-			if (!error)
-				tcp_sackhole_limit = nval;
+		if (name[0] == TCPCTL_REASS_LIMIT) {
+			pool = &tcpqe_pool;
+			var = &tcp_reass_limit;
+		} else {
+			pool = &sackhl_pool;
+			var = &tcp_sackhole_limit;
 		}
-		NET_UNLOCK();
-		return (error);
 
+		oval = nval = atomic_load_int(var);
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &nval);
+
+		if (error == 0 && oval != nval) {
+			extern struct rwlock sysctl_lock;
+
+			error = rw_enter(&sysctl_lock, RW_WRITE | RW_INTR);
+			if (error)
+				return (error);
+			if (nval != atomic_load_int(var)) {
+				error = pool_sethardlimit(pool, nval);
+				if (error == 0)
+					atomic_store_int(var, nval);
+			}
+			rw_exit(&sysctl_lock);
+		}
+
+		return (error);
+	}
 	case TCPCTL_STATS:
 		return (tcp_sysctl_tcpstat(oldp, oldlenp, newp));
 
@@ -1528,6 +1558,7 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	}
 	/* NOTREACHED */
 }
+#endif /* SMALL_KERNEL */
 
 /*
  * Scale the send buffer so that inflight data is not accounted against

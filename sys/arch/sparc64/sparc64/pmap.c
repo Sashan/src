@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.121 2024/06/26 01:40:49 jsg Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.123 2025/06/09 19:27:59 kettenis Exp $	*/
 /*	$NetBSD: pmap.c,v 1.107 2001/08/31 16:47:41 eeh Exp $	*/
 /*
  * 
@@ -1522,56 +1522,6 @@ pmap_release(struct pmap *pm)
 	ctx_free(pm);
 }
 
-/*
- * Garbage collects the physical map system for
- * pages which are no longer used.
- * Success need not be guaranteed -- that is, there
- * may well be pages which are not referenced, but
- * others may be collected.
- * Called by the pageout daemon when pages are scarce.
- */
-void
-pmap_collect(struct pmap *pm)
-{
-	int i, j, k, n, m, s;
-	paddr_t *pdir, *ptbl;
-	/* This is a good place to scan the pmaps for page tables with
-	 * no valid mappings in them and free them. */
-	
-	/* NEVER GARBAGE COLLECT THE KERNEL PMAP */
-	if (pm == pmap_kernel())
-		return;
-
-	s = splvm();
-	for (i=0; i<STSZ; i++) {
-		if ((pdir = (paddr_t *)(u_long)ldxa((vaddr_t)&pm->pm_segs[i], ASI_PHYS_CACHED))) {
-			m = 0;
-			for (k=0; k<PDSZ; k++) {
-				if ((ptbl = (paddr_t *)(u_long)ldxa((vaddr_t)&pdir[k], ASI_PHYS_CACHED))) {
-					m++;
-					n = 0;
-					for (j=0; j<PTSZ; j++) {
-						int64_t data = ldxa((vaddr_t)&ptbl[j], ASI_PHYS_CACHED);
-						if (data&TLB_V)
-							n++;
-					}
-					if (!n) {
-						/* Free the damn thing */
-						stxa((paddr_t)(u_long)&pdir[k], ASI_PHYS_CACHED, 0);
-						pmap_free_page((paddr_t)ptbl, pm);
-					}
-				}
-			}
-			if (!m) {
-				/* Free the damn thing */
-				stxa((paddr_t)(u_long)&pm->pm_segs[i], ASI_PHYS_CACHED, 0);
-				pmap_free_page((paddr_t)pdir, pm);
-			}
-		}
-	}
-	splx(s);
-}
-
 void
 pmap_zero_page(struct vm_page *pg)
 {
@@ -2434,7 +2384,7 @@ void
 pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 {
 	paddr_t pa = VM_PAGE_TO_PHYS(pg);
-	pv_entry_t pv;
+	pv_entry_t pv, freepvs = NULL;
 	int64_t data, clear, set;
 
 	if (prot & PROT_WRITE)
@@ -2514,11 +2464,9 @@ pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 			}
 			atomic_dec_long(&pv->pv_pmap->pm_stats.resident_count);
 
-			/* free the pv */
 			firstpv->pv_next = pv->pv_next;
-			mtx_leave(&pg->mdpage.pvmtx);
-			pool_put(&pv_pool, pv);
-			mtx_enter(&pg->mdpage.pvmtx);
+			pv->pv_next = freepvs;
+			freepvs = pv;
 		}
 
 		pv = firstpv;
@@ -2548,6 +2496,11 @@ pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 		}
 		dcache_flush_page(pa);
 		mtx_leave(&pg->mdpage.pvmtx);
+
+		while ((pv = freepvs) != NULL) {
+			freepvs = pv->pv_next;
+			pool_put(&pv_pool, pv);
+		}
 	}
 	/* We should really only flush the pages we demapped. */
 }

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.135 2024/06/14 04:43:11 djm Exp $
+#	$OpenBSD: Makefile,v 1.139 2025/06/28 13:34:08 dtucker Exp $
 
 OPENSSL?=	yes
 
@@ -12,7 +12,7 @@ REGRESS_SETUP_ONCE=misc	# For sk-dummy.so
 
 # Key conversion operations are not supported when built w/out OpenSSL.
 .if !defined(LTESTS_FROM) && ${OPENSSL:L} != no
-REGRESS_TARGETS=	t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12
+REGRESS_TARGETS=	t1 t2 t3 t4 t5 t7 t9 t10 t11 t12
 .endif
 
 LTESTS= 	connect \
@@ -58,6 +58,7 @@ LTESTS= 	connect \
 		sftp-batch \
 		sftp-glob \
 		sftp-perm \
+		sftp-resume \
 		sftp-uri \
 		reconfigure \
 		dynamic-forward \
@@ -98,6 +99,7 @@ LTESTS= 	connect \
 		knownhosts-command \
 		agent-restrict \
 		hostbased \
+		password \
 		channel-timeout \
 		connection-timeout \
 		match-subsystem \
@@ -107,7 +109,7 @@ LTESTS= 	connect \
 		penalty-expire
 
 INTEROP_TESTS=	putty-transfer putty-ciphers putty-kex conch-ciphers
-INTEROP_TESTS+=	dropbear-ciphers dropbear-kex
+INTEROP_TESTS+=	dropbear-ciphers dropbear-kex dropbear-server
 #INTEROP_TESTS+=ssh-com ssh-com-client ssh-com-keygen ssh-com-sftp
 
 EXTRA_TESTS=	agent-pkcs11
@@ -121,9 +123,9 @@ CLEANFILES+=	*.core actual agent-key.* authorized_keys_${USERNAME} \
 		ed25519-agent.pub empty.in expect failed-regress.log \
 		failed-ssh.log failed-sshd.log hkr.* host.ecdsa-sha2-nistp256 \
 		host.ecdsa-sha2-nistp384 host.ecdsa-sha2-nistp521 \
-		host.ssh-dss host.ssh-ed25519 host.ssh-rsa \
+		host.ssh-ed25519 host.ssh-rsa \
 		host_* host_ca_key* host_krl_* host_revoked_* key.* \
-		key.dsa-* key.ecdsa-* key.ed25519-512 key.ed25519-512.pub \
+		key.ecdsa-* key.ed25519-512 key.ed25519-512.pub \
 		key.rsa-* keys-command-args kh.* known_hosts askpass \
 		known_hosts-cert known_hosts.* krl-* ls.copy modpipe \
 		netcat pidfile putty.rsa2 ready regress.log remote_pid \
@@ -169,31 +171,12 @@ t5:
 	ssh-keygen -Bf ${.CURDIR}/rsa_openssh.pub |\
 		awk '{print $$2}' | diff - ${.CURDIR}/t5.ok
 
-t6:
-	set -xe ; if ssh -Q key | grep -q ^ssh-dss ; then \
-		ssh-keygen -if ${.CURDIR}/dsa_ssh2.prv > t6.out1 ; \
-		ssh-keygen -if ${.CURDIR}/dsa_ssh2.pub > t6.out2 ; \
-		chmod 600 t6.out1 ; \
-		ssh-keygen -yf t6.out1 | diff - t6.out2 ; \
-	fi
-
 t7.out:
 	ssh-keygen -q -t rsa -N '' -f $@ ; \
 
 t7: t7.out
 	ssh-keygen -lf t7.out > /dev/null
 	ssh-keygen -Bf t7.out > /dev/null
-
-t8.out:
-	set -xe ; if ssh -Q key | grep -q ^ssh-dss ; then \
-		ssh-keygen -q -t dsa -N '' -f $@ ; \
-	fi
-
-t8: t8.out
-	set -xe ; if ssh -Q key | grep -q ^ssh-dss ; then \
-		ssh-keygen -lf t8.out > /dev/null ; \
-		ssh-keygen -Bf t8.out > /dev/null ; \
-	fi
 
 t9.out:
 	ssh-keygen -q -t ecdsa -N '' -f $@

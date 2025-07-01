@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwx.c,v 1.189 2025/02/04 09:15:04 stsp Exp $	*/
+/*	$OpenBSD: if_iwx.c,v 1.191 2025/06/29 19:32:08 miod Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -1658,13 +1658,6 @@ iwx_write_prph(struct iwx_softc *sc, uint32_t addr, uint32_t val)
 {
 	iwx_nic_assert_locked(sc);
 	iwx_write_prph_unlocked(sc, addr, val);
-}
-
-void
-iwx_write_prph64(struct iwx_softc *sc, uint64_t addr, uint64_t val)
-{
-	iwx_write_prph(sc, (uint32_t)addr, val & 0xffffffff);
-	iwx_write_prph(sc, (uint32_t)addr + 4, val >> 32);
 }
 
 uint32_t
@@ -6912,8 +6905,8 @@ iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct iwx_link_config_cmd link_cmd;
 	struct iwx_mvm_sta_cfg_cmd sta_cmd;
-	uint32_t aggsize;
-	const uint32_t max_aggsize = (IWX_STA_FLG_MAX_AGG_SIZE_64K >>
+	uint32_t aggsize, mpdu_dens;
+	const uint32_t max_aggsize = (IWX_STA_FLG_MAX_AGG_SIZE_4M >>
 		    IWX_STA_FLG_MAX_AGG_SIZE_SHIFT);
 	int err, changes;
 
@@ -6970,6 +6963,9 @@ iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
 		if (iwx_mimo_enabled(sc))
 			sta_cmd.mimo = htole32(1);
 
+		mpdu_dens = (in->in_ni.ni_ampdu_param &
+		    IEEE80211_AMPDU_PARAM_SS) >> 2;
+
 		if (in->in_ni.ni_flags & IEEE80211_NODE_VHT) {
 			aggsize = (in->in_ni.ni_vhtcaps &
 			    IEEE80211_VHTCAP_MAX_AMPDU_LEN_MASK) >>
@@ -6981,8 +6977,8 @@ iwx_mld_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
 		if (aggsize > max_aggsize)
 			aggsize = max_aggsize;
 
-		sta_cmd.tx_ampdu_spacing = htole32(0);
-		sta_cmd.tx_ampdu_max_size = aggsize;
+		sta_cmd.tx_ampdu_spacing = htole32(mpdu_dens);
+		sta_cmd.tx_ampdu_max_size = htole32(aggsize);
 	}
 
 	return iwx_send_cmd_pdu(sc,

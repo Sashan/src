@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_local.h,v 1.34 2025/01/26 20:01:58 tb Exp $ */
+/*	$OpenBSD: x509_local.h,v 1.38 2025/03/06 07:20:01 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2013.
  */
@@ -184,9 +184,7 @@ struct x509_st {
 	X509_CINF *cert_info;
 	X509_ALGOR *sig_alg;
 	ASN1_BIT_STRING *signature;
-	int valid;
 	int references;
-	char *name;
 	CRYPTO_EX_DATA ex_data;
 	/* These contain copies of various extension values */
 	long ex_pathlen;
@@ -455,8 +453,7 @@ int X509V3_add_value_int(const char *name, const ASN1_INTEGER *aint,
 int X509V3_get_value_bool(const CONF_VALUE *value, int *asn1_bool);
 int X509V3_get_value_int(const CONF_VALUE *value, ASN1_INTEGER **aint);
 
-STACK_OF(CONF_VALUE) *X509V3_get_section(X509V3_CTX *ctx, const char *section);
-void X509V3_section_free(X509V3_CTX *ctx, STACK_OF(CONF_VALUE) *section);
+STACK_OF(CONF_VALUE) *X509V3_get0_section(X509V3_CTX *ctx, const char *section);
 
 const X509V3_EXT_METHOD *x509v3_ext_method_authority_key_identifier(void);
 const X509V3_EXT_METHOD *x509v3_ext_method_basic_constraints(void);

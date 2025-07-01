@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.133 2025/02/12 13:10:13 claudio Exp $ */
+/*	$OpenBSD: control.c,v 1.135 2025/03/10 14:11:38 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <errno.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -232,7 +233,7 @@ control_close(struct ctl_conn *c)
 
 	close(c->imsgbuf.fd);
 	free(c);
-	pauseaccept = 0;
+	pauseaccept = monotime_clear();
 	return (1);
 }
 
@@ -340,7 +341,7 @@ control_dispatch_msg(struct pollfd *pfd, struct peer_head *peers)
 					    p->conf.id, pid);
 				} else {
 					u_int			 i;
-					time_t			 d;
+					monotime_t		 d;
 					struct ctl_timer	 ct;
 
 					imsg_compose(&c->imsgbuf,

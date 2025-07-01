@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ethersubr.c,v 1.296 2025/01/15 06:15:44 dlg Exp $	*/
+/*	$OpenBSD: if_ethersubr.c,v 1.302 2025/06/04 17:35:21 bluhm Exp $	*/
 /*	$NetBSD: if_ethersubr.c,v 1.19 1996/05/07 02:40:30 thorpej Exp $	*/
 
 /*
@@ -265,7 +265,7 @@ ether_resolve(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
 			/* XXX Should we input an unencrypted IPsec packet? */
 			mcopy = m_copym(m, 0, M_COPYALL, M_NOWAIT);
 			if (mcopy != NULL)
-				if_input_local(ifp, mcopy, af);
+				if_input_local(ifp, mcopy, af, NULL);
 		}
 		break;
 #ifdef INET6
@@ -399,10 +399,10 @@ ether_output(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
  * to ether_input().
  */
 void
-ether_input(struct ifnet *ifp, struct mbuf *m)
+ether_input(struct ifnet *ifp, struct mbuf *m, struct netstack *ns)
 {
 	struct ether_header *eh;
-	void (*input)(struct ifnet *, struct mbuf *);
+	void (*input)(struct ifnet *, struct mbuf *, struct netstack *);
 	u_int16_t etype;
 	struct arpcom *ac;
 	const struct ether_brport *eb;
@@ -429,7 +429,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 	if (ISSET(m->m_flags, M_VLANTAG) ||
 	    etype == ETHERTYPE_VLAN || etype == ETHERTYPE_QINQ) {
 #if NVLAN > 0
-		m = vlan_input(ifp, m, &sdelim);
+		m = vlan_input(ifp, m, &sdelim, ns);
 		if (m == NULL)
 			return;
 #else
@@ -455,7 +455,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		eb->eb_port_take(eb->eb_port);
 	smr_read_leave();
 	if (eb != NULL) {
-		m = (*eb->eb_input)(ifp, m, dst, eb->eb_port);
+		m = (*eb->eb_input)(ifp, m, dst, eb->eb_port, ns);
 		eb->eb_port_rele(eb->eb_port);
 		if (m == NULL) {
 			return;
@@ -487,7 +487,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		 */
 		if (ifp->if_type != IFT_CARP &&
 		    !SRPL_EMPTY_LOCKED(&ifp->if_carp)) {
-			m = carp_input(ifp, m, dst);
+			m = carp_input(ifp, m, dst, ns);
 			if (m == NULL)
 				return;
 
@@ -559,7 +559,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 			struct pipex_session *session;
 
 			if ((session = pipex_pppoe_lookup_session(m)) != NULL) {
-				pipex_pppoe_input(m, session);
+				pipex_pppoe_input(m, session, ns);
 				pipex_rele_session(session);
 				return;
 			}
@@ -569,7 +569,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 			if (mq_enqueue(&pppoediscinq, m) == 0)
 				schednetisr(NETISR_PPPOE);
 		} else {
-			m = pppoe_vinput(ifp, m);
+			m = pppoe_vinput(ifp, m, ns);
 			if (m != NULL && mq_enqueue(&pppoeinq, m) == 0)
 				schednetisr(NETISR_PPPOE);
 		}
@@ -583,7 +583,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 #endif
 #if NBPE > 0
 	case ETHERTYPE_PBB:
-		bpe_input(ifp, m);
+		bpe_input(ifp, m, ns);
 		return;
 #endif
 	default:
@@ -594,7 +594,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 	}
 
 	m_adj(m, sizeof(*eh));
-	(*input)(ifp, m);
+	(*input)(ifp, m, ns);
 	return;
 dropanyway:
 	m_freem(m);
@@ -1103,7 +1103,6 @@ ether_extract_headers(struct mbuf *m0, struct ether_extracted *ext)
 		return;
 	}
 	ext->eh = mtod(m0, struct ether_header *);
-	ether_type = ntohs(ext->eh->ether_type);
 	hlen = sizeof(*ext->eh);
 	if (ext->paylen < hlen) {
 		DPRINTF("paylen %u, ehlen %zu", ext->paylen, hlen);
@@ -1111,6 +1110,7 @@ ether_extract_headers(struct mbuf *m0, struct ether_extracted *ext)
 		return;
 	}
 	ext->paylen -= hlen;
+	ether_type = ntohs(ext->eh->ether_type);
 
 #if NVLAN > 0
 	if (ether_type == ETHERTYPE_VLAN) {
@@ -1120,7 +1120,6 @@ ether_extract_headers(struct mbuf *m0, struct ether_extracted *ext)
 			return;
 		}
 		ext->evh = mtod(m0, struct ether_vlan_header *);
-		ether_type = ntohs(ext->evh->evl_proto);
 		hlen = sizeof(*ext->evh);
 		if (sizeof(*ext->eh) + ext->paylen < hlen) {
 			DPRINTF("paylen %zu, evhlen %zu",
@@ -1129,6 +1128,7 @@ ether_extract_headers(struct mbuf *m0, struct ether_extracted *ext)
 			return;
 		}
 		ext->paylen = sizeof(*ext->eh) + ext->paylen - hlen;
+		ether_type = ntohs(ext->evh->evl_proto);
 	}
 #endif
 
@@ -1341,6 +1341,8 @@ ether_frm_valid_etype(uint16_t etype)
 	switch (etype) {
 	case ETHERTYPE_LLDP:
 	case ETHERTYPE_EAPOL:
+	case ETHERTYPE_PTP:
+	case ETHERTYPE_CFM:
 		return (1);
 	}
 
@@ -1729,8 +1731,10 @@ ether_frm_send(struct socket *so, struct mbuf *m, struct mbuf *nam,
 	}
 
 	m = m_prepend(m, ETHER_ALIGN + sizeof(*eh), M_NOWAIT);
-	if (m == NULL)
+	if (m == NULL) {
+		error = ENOBUFS;
 		goto drop;
+	}
 	m_adj(m, ETHER_ALIGN);
 
 	if (txprio != IF_HDRPRIO_PACKET)
@@ -1830,7 +1834,7 @@ ether_frm_group(struct socket *so, int optname, struct mbuf *m)
 
 	soassertlocked(so);
 
-	if (m->m_len != sizeof(*fmr))
+	if (m == NULL || m->m_len != sizeof(*fmr))
 		return (EINVAL);
 
 	fmr = mtod(m, struct frame_mreq *);
@@ -1953,7 +1957,7 @@ ether_frm_setopt(struct ether_pcb *ep, int optname, struct mbuf *m)
 	if (!ISSET(ETHER_PCB_OPTS, optm))
 		return (ENOPROTOOPT);
 
-	if (m->m_len != sizeof(opt))
+	if (m == NULL || m->m_len != sizeof(opt))
 		return (EINVAL);
 
 	opt = *mtod(m, int *);
@@ -1981,7 +1985,7 @@ ether_frm_setsockopt(struct socket *so, int optname, struct mbuf *m)
 		error = ether_frm_group(so, optname, m);
 		break;
 	case FRAME_SENDPRIO:
-		if (m->m_len != sizeof(v)) {
+		if (m == NULL || m->m_len != sizeof(v)) {
 			error = EINVAL;
 			break;
 		}
@@ -2104,7 +2108,7 @@ ether_frm_recv(struct socket *so, struct mbuf *m0,
 	}
 
 	mtx_enter(&so->so_rcv.sb_mtx);
-	ok = sbappendaddr(so, &so->so_rcv, (struct sockaddr *)sfrm, m, cmsgs);
+	ok = sbappendaddr(&so->so_rcv, (struct sockaddr *)sfrm, m, cmsgs);
 	mtx_leave(&so->so_rcv.sb_mtx);
 
 	if (!ok) {

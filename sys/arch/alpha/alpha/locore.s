@@ -1,4 +1,4 @@
-/* $OpenBSD: locore.s,v 1.56 2024/10/10 19:33:05 miod Exp $ */
+/* $OpenBSD: locore.s,v 1.58 2025/05/21 09:06:58 mpi Exp $ */
 /* $NetBSD: locore.s,v 1.94 2001/04/26 03:10:44 ross Exp $ */
 
 /*-
@@ -258,7 +258,7 @@ LEAF(exception_return, 1)			/* XXX should be NESTED */
 5:	ldiq	a0, ALPHA_PSL_IPL_SOFT
 	call_pal PAL_OSF1_swpipl
 	mov	v0, s2				/* remember old IPL */
-	CALL(softintr_dispatch)
+	CALL(dosoftint)
 
 	/* SIR handled; restore IPL and check again */
 	mov	s2, a0
@@ -653,7 +653,7 @@ LEAF(cpu_switchto, 2)
 	 * We don't deactivate if we came here from sched_exit
 	 * (old pmap no longer exists; vmspace has been freed).
 	 * oldproc will be NULL in this case.  We have actually
-	 * taken care of calling pmap_deactivate() in cpu_exit(),
+	 * taken care of calling pmap_deactivate() in exit1(),
 	 * before the vmspace went away.
 	 */
 	beq	s0, 2f

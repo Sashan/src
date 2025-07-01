@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.144 2023/10/24 13:20:10 claudio Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.146 2025/06/26 20:28:07 miod Exp $	*/
 /*
  * Copyright (c) 1998, 1999, 2000, 2001 Steve Murphree, Jr.
  * Copyright (c) 1996 Nivas Madhur
@@ -902,10 +902,7 @@ out:
 }
 
 int
-sys_sysarch(p, v, retval)
-	struct proc *p;
-	void *v;
-	register_t *retval;
+sys_sysarch(struct proc *p, void *v, register_t *retval)
 {
 #if 0
 	struct sys_sysarch_args	/* {
@@ -1026,7 +1023,7 @@ luna88k_bootstrap()
 	avail_end = last_addr;
 
 #ifdef DEBUG
-	printf("LUNA-88K boot: memory from 0x%x to 0x%x\n",
+	printf("LUNA-88K boot: memory from 0x%lx to 0x%lx\n",
 	    avail_start, avail_end);
 #endif
 
@@ -1143,8 +1140,7 @@ get_nvram_data(void)
 }
 
 char *
-nvram_by_symbol(symbol)
-	char *symbol;
+nvram_by_symbol(char *symbol)
 {
 	char *value;
 	int i;

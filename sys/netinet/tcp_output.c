@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_output.c,v 1.153 2025/02/17 12:46:02 bluhm Exp $	*/
+/*	$OpenBSD: tcp_output.c,v 1.155 2025/06/23 20:59:25 mvs Exp $	*/
 /*	$NetBSD: tcp_output.c,v 1.16 1997/06/03 16:17:09 kml Exp $	*/
 
 /*
@@ -1095,7 +1095,7 @@ send:
 		}
 		error = ip_output(m, tp->t_inpcb->inp_options,
 		    &tp->t_inpcb->inp_route,
-		    (ip_mtudisc ? IP_MTUDISC : 0), NULL,
+		    (atomic_load_int(&ip_mtudisc) ? IP_MTUDISC : 0), NULL,
 		    &tp->t_inpcb->inp_seclevel, 0);
 		break;
 #ifdef INET6
@@ -1199,7 +1199,7 @@ tcp_setpersist(struct tcpcb *tp)
 }
 
 int
-tcp_chopper(struct mbuf *m0, struct mbuf_list *ml, struct ifnet *ifp,
+tcp_softtso_chop(struct mbuf_list *ml, struct mbuf *m0, struct ifnet *ifp,
     u_int mss)
 {
 	struct ip *ip = NULL;
@@ -1394,7 +1394,7 @@ tcp_if_output_tso(struct ifnet *ifp, struct mbuf **mp, struct sockaddr *dst,
 	}
 
 	/* as fallback do TSO in software */
-	if ((error = tcp_chopper(*mp, &ml, ifp, (*mp)->m_pkthdr.ph_mss)) ||
+	if ((error = tcp_softtso_chop(&ml, *mp, ifp, (*mp)->m_pkthdr.ph_mss)) ||
 	    (error = if_output_ml(ifp, &ml, dst, rt)))
 		goto done;
 	tcpstat_inc(tcps_outswtso);

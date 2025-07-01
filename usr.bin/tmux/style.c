@@ -1,4 +1,4 @@
-/* $OpenBSD: style.c,v 1.36 2024/11/15 13:12:20 nicm Exp $ */
+/* $OpenBSD: style.c,v 1.38 2025/06/20 14:54:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -98,6 +98,8 @@ style_parse(struct style *sy, const struct grid_cell *base, const char *in)
 			sy->default_type = STYLE_DEFAULT_PUSH;
 		else if (strcasecmp(tmp, "pop-default") == 0)
 			sy->default_type = STYLE_DEFAULT_POP;
+		else if (strcasecmp(tmp, "set-default") == 0)
+			sy->default_type = STYLE_DEFAULT_SET;
 		else if (strcasecmp(tmp, "nolist") == 0)
 			sy->list = STYLE_LIST_OFF;
 		else if (strncasecmp(tmp, "list=", 5) == 0) {
@@ -215,7 +217,9 @@ style_parse(struct style *sy, const struct grid_cell *base, const char *in)
 		} else if (strcasecmp(tmp, "none") == 0)
 			sy->gc.attr = 0;
 		else if (end > 2 && strncasecmp(tmp, "no", 2) == 0) {
-			if ((value = attributes_fromstring(tmp + 2)) == -1)
+			if (strcmp(tmp + 2, "attr") == 0)
+				value = 0xffff & ~GRID_ATTR_CHARSET;
+			else if ((value = attributes_fromstring(tmp + 2)) == -1)
 				goto error;
 			sy->gc.attr &= ~value;
 		} else if (end > 6 && strncasecmp(tmp, "width=", 6) == 0) {
@@ -310,6 +314,8 @@ style_tostring(struct style *sy)
 			tmp = "push-default";
 		else if (sy->default_type == STYLE_DEFAULT_POP)
 			tmp = "pop-default";
+		else if (sy->default_type == STYLE_DEFAULT_SET)
+			tmp = "set-default";
 		off += xsnprintf(s + off, sizeof s - off, "%s%s", comma, tmp);
 		comma = ",";
 	}

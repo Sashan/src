@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.292 2025/02/14 04:56:26 hastings Exp $
+# $OpenBSD: GENERIC,v 1.296 2025/06/23 18:42:52 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -42,6 +42,7 @@ acpi0		at mainbus?
 acpiac*		at acpi?
 acpibat*	at acpi?
 acpibtn*	at acpi?
+acpicpu*	at acpi?
 acpiec*		at acpi?
 acpige*		at acpi?
 acpimcfg*	at acpi?
@@ -275,6 +276,8 @@ hitemp*		at fdt?
 # MediaTek SoCs
 mtintc*		at fdt?
 mtrng*		at fdt?
+mtxhci*		at fdt?
+usb*		at mtxhci?
 
 # Marvell SoCs
 mvclock*	at fdt? early 1
@@ -347,6 +350,7 @@ qcipcc*		at fdt?
 qcmtx*		at fdt? early 1
 qcpas*		at fdt?
 qcpdc*		at fdt?
+qcscm*		at acpi?
 qcscm*		at fdt?
 qcsmem*		at fdt?
 qcsmptp*	at fdt?
@@ -585,6 +589,7 @@ ims*		at ihidev?		# HID-over-I2C mouse/trackpad
 wsmouse*	at ims? mux 0
 imt*		at ihidev?		# HID-over-I2C multitouch trackpad
 wsmouse*	at imt? mux 0
+iasuskbd*	at ihidev?		# HID-over-I2C ASUS keyboard
 ipmi*		at iic?			# IPMI (SIIF)
 islrtc*		at iic?			# ISL1208 RTC
 maxrtc*		at iic?			# DS1307 RTC

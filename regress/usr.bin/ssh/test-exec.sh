@@ -1,4 +1,4 @@
-#	$OpenBSD: test-exec.sh,v 1.122 2024/12/06 07:05:54 dtucker Exp $
+#	$OpenBSD: test-exec.sh,v 1.130 2025/06/28 13:34:08 dtucker Exp $
 #	Placed in the Public Domain.
 
 #SUDO=sudo
@@ -60,7 +60,7 @@ SCP=scp
 PLINK=/usr/local/bin/plink
 PUTTYGEN=/usr/local/bin/puttygen
 CONCH=/usr/local/bin/conch
-DROPBEAR=/usr/local/bin/dropbear
+DROPBEAR=/usr/local/sbin/dropbear
 DBCLIENT=/usr/local/bin/dbclient
 DROPBEARKEY=/usr/local/bin/dropbearkey
 DROPBEARCONVERT=/usr/local/bin/dropbearconvert
@@ -258,14 +258,14 @@ ssh_logfile ()
 # [kbytes] to ensure the file is at least that large.
 DATANAME=data
 DATA=$OBJ/${DATANAME}
-cat ${SSH} >${DATA}
+cat ${REAL_SSH} >${DATA}
 COPY=$OBJ/copy
 rm -f ${COPY}
 
 increase_datafile_size()
 {
 	while [ `du -k ${DATA} | cut -f1` -lt $1 ]; do
-		cat ${SSH} >>${DATA}
+		cat ${REAL_SSH} >>${DATA}
 	done
 }
 
@@ -337,10 +337,11 @@ save_debug_log ()
 
 	for logfile in $TEST_SSH_LOGDIR $TEST_REGRESS_LOGFILE \
 	    $TEST_SSH_LOGFILE $TEST_SSHD_LOGFILE; do
-		if [ ! -z "$SUDO" ] && [ -f "$logfile" ]; then
+		if [ ! -z "$SUDO" ] && [ -e "$logfile" ]; then
 			$SUDO chown -R $USER $logfile
 		fi
 	done
+	test -z "$SUDO" || $SUDO chmod ug+rw $TEST_SSHD_LOGFILE
 	echo $@ >>$TEST_REGRESS_LOGFILE
 	echo $@ >>$TEST_SSH_LOGFILE
 	echo $@ >>$TEST_SSHD_LOGFILE
@@ -348,19 +349,6 @@ save_debug_log ()
 	(cat $TEST_REGRESS_LOGFILE; echo) >>$OBJ/failed-regress.log
 	(cat $TEST_SSH_LOGFILE; echo) >>$OBJ/failed-ssh.log
 	(cat $TEST_SSHD_LOGFILE; echo) >>$OBJ/failed-sshd.log
-
-	# Save all logfiles in a tarball.
-	(cd $OBJ &&
-	  logfiles=""
-	  for i in $TEST_REGRESS_LOGFILE $TEST_SSH_LOGFILE $TEST_SSHD_LOGFILE \
-	    $TEST_SSH_LOGDIR; do
-		if [ -e "`basename $i`" ]; then
-			logfiles="$logfiles `basename $i`"
-		else
-			logfiles="$logfiles $i"
-		fi
-	  done
-	  tar cf "$tarname" $logfiles)
 }
 
 trace ()
@@ -658,7 +646,8 @@ esac
 
 if test "$REGRESS_INTEROP_DROPBEAR" = "yes" ; then
 	trace Create dropbear keys and add to authorized_keys
-	mkdir -p $OBJ/.dropbear
+	mkdir -p $OBJ/.dropbear $OBJ/.ssh
+	awk '{print "somehost "$2" "$3}' $OBJ/known_hosts >$OBJ/.ssh/known_hosts
 	kt="ed25519"
 	for i in dss rsa ecdsa; do
 		if $SSH -Q key-plain | grep "$i" >/dev/null; then
@@ -684,7 +673,7 @@ fi
 # create a proxy version of the client config
 (
 	cat $OBJ/ssh_config
-	echo proxycommand ${SUDO} env SSH_SK_HELPER=\"$SSH_SK_HELPER\" ${OBJ}/sshd-log-wrapper.sh -i -f $OBJ/sshd_proxy
+	echo proxycommand ${SUDO} env SSH_SK_HELPER=\"$SSH_SK_HELPER\" ${TEST_SSH_SSHD_ENV} ${OBJ}/sshd-log-wrapper.sh -i -f $OBJ/sshd_proxy
 ) > $OBJ/ssh_proxy
 
 # check proxy config
@@ -701,8 +690,9 @@ start_sshd ()
 	PIDFILE=$OBJ/pidfile
 	# start sshd
 	logfile="${TEST_SSH_LOGDIR}/sshd.`$OBJ/timestamp`.$$.log"
-	$SUDO ${SSHD} -f $OBJ/sshd_config "$@" -t || fatal "sshd_config broken"
-	$SUDO env SSH_SK_HELPER="$SSH_SK_HELPER" \
+	$SUDO env SSH_SK_HELPER="$SSH_SK_HELPER" ${TEST_SSH_SSHD_ENV} \
+	    ${SSHD} -f $OBJ/sshd_config "$@" -t || fatal "sshd_config broken"
+	$SUDO env SSH_SK_HELPER="$SSH_SK_HELPER" ${TEST_SSH_SSHD_ENV} \
 	    ${SSHD} -f $OBJ/sshd_config "$@" -E$logfile
 	echo "trace: Started sshd as daemon, logfile $logfile" >>$TEST_REGRESS_LOGFILE
 
@@ -737,7 +727,7 @@ p11_setup() {
 	p11_find_lib \
 		/usr/local/lib/softhsm/libsofthsm2.so
 	test -z "$TEST_SSH_PKCS11" && return 1
-	verbose "using token library $TEST_SSH_PKCS11"
+	trace "using token library $TEST_SSH_PKCS11"
 	TEST_SSH_PIN=1234
 	TEST_SSH_SOPIN=12345678
 	if [ "x$TEST_SSH_SSHPKCS11HELPER" != "x" ]; then
@@ -803,6 +793,28 @@ EOF
 # Peforms ssh-add with the right token PIN.
 p11_ssh_add() {
 	env SSH_ASKPASS="$PIN_SH" SSH_ASKPASS_REQUIRE=force ${SSHADD} "$@"
+}
+
+start_ssh_agent() {
+	EXTRA_AGENT_ARGS="$1"
+	SSH_AUTH_SOCK="$OBJ/agent.sock"
+	export SSH_AUTH_SOCK
+	rm -f $SSH_AUTH_SOCK $OBJ/agent.log
+	trace "start agent"
+	${SSHAGENT} ${EXTRA_AGENT_ARGS} -d -a $SSH_AUTH_SOCK \
+	    > $OBJ/agent.log 2>&1 &
+	AGENT_PID=$!
+	trap "kill $AGENT_PID" EXIT
+	for x in 0 1 2 3 4 ; do
+		# Give it a chance to start
+		${SSHADD} -l > /dev/null 2>&1
+		r=$?
+		test $r -eq 1 && break
+		sleep 1
+	done
+	if [ $r -ne 1 ]; then
+		fatal "ssh-add -l did not fail with exit code 1 (got $r)"
+	fi
 }
 
 # source test body

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_page.c,v 1.180 2024/12/27 12:04:40 mpi Exp $	*/
+/*	$OpenBSD: uvm_page.c,v 1.183 2025/04/27 08:37:47 mpi Exp $	*/
 /*	$NetBSD: uvm_page.c,v 1.44 2000/11/27 08:40:04 chs Exp $	*/
 
 /*
@@ -255,6 +255,8 @@ uvm_page_init(vaddr_t *kvm_startp, vaddr_t *kvm_endp)
 		    i++, curpg++, pgno++, paddr += PAGE_SIZE) {
 			curpg->phys_addr = paddr;
 			VM_MDPAGE_INIT(curpg);
+			curpg->uobject = NULL;
+			curpg->uanon = NULL;
 			if (pgno >= seg->avail_start &&
 			    pgno < seg->avail_end) {
 				uvmexp.npages++;
@@ -560,6 +562,8 @@ uvm_page_physload(paddr_t start, paddr_t end, paddr_t avail_start,
 		    lcv++, paddr += PAGE_SIZE) {
 			pgs[lcv].phys_addr = paddr;
 			VM_MDPAGE_INIT(&pgs[lcv]);
+			pgs[lcv].uobject = NULL;
+			pgs[lcv].uanon = NULL;
 			if (atop(paddr) >= avail_start &&
 			    atop(paddr) < avail_end) {
 				if (flags & PHYSLOAD_DEVICE) {
@@ -859,9 +863,7 @@ uvm_pagerealloc_multi(struct uvm_object *obj, voff_t off, vsize_t size,
 			uvm_pagecopy(tpg, pg);
 			KASSERT(tpg->wire_count == 1);
 			tpg->wire_count = 0;
-			uvm_lock_pageq();
 			uvm_pagefree(tpg);
-			uvm_unlock_pageq();
 			uvm_pagealloc_pg(pg, obj, offset, NULL);
 		}
 	}
@@ -943,17 +945,12 @@ uvm_pagerealloc(struct vm_page *pg, struct uvm_object *newobj, voff_t newoff)
  * uvm_pageclean: clean page
  *
  * => erase page's identity (i.e. remove from object)
- * => caller must lock page queues if `pg' is managed
  * => assumes all valid mappings of pg are gone
  */
 void
 uvm_pageclean(struct vm_page *pg)
 {
 	u_int flags_to_clear = 0;
-
-	if ((pg->pg_flags & (PG_TABLED|PQ_ACTIVE|PQ_INACTIVE)) &&
-	    (pg->uobject == NULL || !UVM_OBJ_IS_PMAP(pg->uobject)))
-		MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
 
 #ifdef DEBUG
 	if (pg->uobject == (void *)0xdeadbeef &&
@@ -978,14 +975,18 @@ uvm_pageclean(struct vm_page *pg)
 	/*
 	 * now remove the page from the queues
 	 */
-	uvm_pagedequeue(pg);
+	if (pg->pg_flags & (PQ_ACTIVE|PQ_INACTIVE)) {
+		uvm_lock_pageq();
+		uvm_pagedequeue(pg);
+		uvm_unlock_pageq();
+	}
 
 	/*
 	 * if the page was wired, unwire it now.
 	 */
 	if (pg->wire_count) {
 		pg->wire_count = 0;
-		uvmexp.wired--;
+		atomic_dec_int(&uvmexp.wired);
 	}
 	if (pg->uanon) {
 		pg->uanon->an_page = NULL;
@@ -1231,7 +1232,7 @@ uvm_pagewire(struct vm_page *pg)
 
 	if (pg->wire_count == 0) {
 		uvm_pagedequeue(pg);
-		uvmexp.wired++;
+		atomic_inc_int(&uvmexp.wired);
 	}
 	pg->wire_count++;
 }
@@ -1251,7 +1252,7 @@ uvm_pageunwire(struct vm_page *pg)
 	pg->wire_count--;
 	if (pg->wire_count == 0) {
 		uvm_pageactivate(pg);
-		uvmexp.wired--;
+		atomic_dec_int(&uvmexp.wired);
 	}
 }
 
@@ -1365,7 +1366,9 @@ uvm_page_owner_locked_p(struct vm_page *pg, boolean_t exclusive)
 		    : rw_lock_held(pg->uobject->vmobjlock);
 	}
 	if (pg->uanon != NULL) {
-		return rw_write_held(pg->uanon->an_lock);
+		return exclusive
+		    ? rw_write_held(pg->uanon->an_lock)
+		    : rw_lock_held(pg->uanon->an_lock);
 	}
 	return 1;
 }

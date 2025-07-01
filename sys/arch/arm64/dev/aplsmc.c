@@ -1,4 +1,4 @@
-/*	$OpenBSD: aplsmc.c,v 1.29 2025/02/14 18:42:43 kettenis Exp $	*/
+/*	$OpenBSD: aplsmc.c,v 1.31 2025/06/30 11:39:50 jsg Exp $	*/
 /*
  * Copyright (c) 2021 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -400,7 +400,6 @@ aplsmc_logmap(void *cookie, bus_addr_t addr)
 void
 aplsmc_handle_notification(struct aplsmc_softc *sc, uint64_t data)
 {
-	extern int allowpowerdown;
 #ifdef SUSPEND
 	extern int cpu_suspended;
 	uint32_t flt = 0;
@@ -436,12 +435,8 @@ aplsmc_handle_notification(struct aplsmc_softc *sc, uint64_t data)
 		switch (SMC_EV_SUBTYPE(data)) {
 		case SMC_PWRBTN_SHORT:
 		case SMC_PWRBTN_TOUCHID:
-			if (SMC_EV_DATA(data) == 1) {
-				if (allowpowerdown) {
-					allowpowerdown = 0;
-					prsignal(initprocess, SIGUSR2);
-				}
-			}
+			if (SMC_EV_DATA(data) == 1)
+				powerbutton_event();
 			break;
 		case SMC_PWRBTN_LONG:
 			break;

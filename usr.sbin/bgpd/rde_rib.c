@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_rib.c,v 1.267 2025/01/14 12:24:23 claudio Exp $ */
+/*	$OpenBSD: rde_rib.c,v 1.269 2025/04/24 20:17:49 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -222,7 +222,9 @@ rib_find(char *name)
 		return RIB_LOC_START;
 
 	for (id = 0; id < rib_size; id++) {
-		if (ribs[id] != NULL && !strcmp(ribs[id]->name, name))
+		/* cannot trust name to be properly terminated */
+		if (ribs[id] != NULL &&
+		    !strncmp(ribs[id]->name, name, sizeof(ribs[id]->name)))
 			return id;
 	}
 
@@ -1430,7 +1432,11 @@ prefix_adjout_flush_pending(struct rde_peer *peer)
 		RB_FOREACH_SAFE(p, prefix_tree, &peer->updates[aid], np) {
 			p->flags &= ~PREFIX_FLAG_UPDATE;
 			RB_REMOVE(prefix_tree, &peer->updates[aid], p);
-			peer->stats.pending_update--;
+			if (p->flags & PREFIX_FLAG_EOR) {
+				prefix_adjout_destroy(p);
+			} else {
+				peer->stats.pending_update--;
+			}
 		}
 	}
 }

@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.231 2024/12/19 23:56:32 tb Exp $
+# $OpenBSD: Makefile,v 1.238 2025/06/27 17:26:57 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -25,6 +25,7 @@ CFLAGS+= -DLIBRESSL_NAMESPACE -DLIBRESSL_CRYPTO_NAMESPACE
 CFLAGS+= -DHAVE_FUNOPEN
 
 CFLAGS+= -I${LCRYPTO_SRC}
+CFLAGS+= -I${LCRYPTO_SRC}/aes
 CFLAGS+= -I${LCRYPTO_SRC}/arch/${MACHINE_CPU}
 CFLAGS+= -I${LCRYPTO_SRC}/asn1
 CFLAGS+= -I${LCRYPTO_SRC}/bio
@@ -67,7 +68,6 @@ SRCS+= crypto_memory.c
 # aes/
 SRCS+= aes.c
 SRCS+= aes_core.c
-SRCS+= aes_ige.c
 
 # asn1/
 SRCS+= a_bitstr.c
@@ -159,6 +159,7 @@ SRCS+= bss_sock.c
 
 # bn/
 SRCS+= bn_add.c
+SRCS+= bn_add_sub.c
 SRCS+= bn_bpsw.c
 SRCS+= bn_const.c
 SRCS+= bn_convert.c
@@ -172,6 +173,7 @@ SRCS+= bn_kron.c
 SRCS+= bn_lib.c
 SRCS+= bn_mod.c
 SRCS+= bn_mod_sqrt.c
+SRCS+= bn_mod_words.c
 SRCS+= bn_mont.c
 SRCS+= bn_mul.c
 SRCS+= bn_prime.c
@@ -281,11 +283,13 @@ SRCS+= ec_asn1.c
 SRCS+= ec_convert.c
 SRCS+= ec_curve.c
 SRCS+= ec_err.c
+SRCS+= ec_field.c
 SRCS+= ec_key.c
 SRCS+= ec_lib.c
 SRCS+= ec_mult.c
 SRCS+= ec_pmeth.c
 SRCS+= eck_prn.c
+SRCS+= ecp_hp_methods.c
 SRCS+= ecp_methods.c
 SRCS+= ecx_methods.c
 
@@ -450,11 +454,7 @@ SRCS+= rand_lib.c
 SRCS+= randfile.c
 
 # rc2/
-SRCS+= rc2_cbc.c
-SRCS+= rc2_ecb.c
-SRCS+= rc2_skey.c
-SRCS+= rc2cfb64.c
-SRCS+= rc2ofb64.c
+SRCS+= rc2.c
 
 # rc4/
 SRCS+= rc4.c

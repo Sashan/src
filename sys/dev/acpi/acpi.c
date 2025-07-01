@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.443 2025/02/11 16:22:37 miod Exp $ */
+/* $OpenBSD: acpi.c,v 1.451 2025/06/17 13:01:11 krw Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -47,6 +47,8 @@
 
 #include "wd.h"
 
+extern int cpu_suspended;
+
 #ifdef ACPI_DEBUG
 int	acpi_debug = 16;
 #endif
@@ -54,6 +56,7 @@ int	acpi_debug = 16;
 int	acpi_poll_enabled;
 int	acpi_hasprocfvs;
 int	acpi_haspci;
+int	acpi_legacy_free;
 
 struct pool acpiwqpool;
 
@@ -887,27 +890,20 @@ acpi_gpio_event_task(void *arg0, int arg1)
 	char name[5];
 
 	if (pin < 256) {
-		if ((ev->tflags & LR_GPIO_MODE) == LR_GPIO_LEVEL) {
+		if ((ev->tflags & LR_GPIO_MODE) == LR_GPIO_LEVEL)
 			snprintf(name, sizeof(name), "_L%.2X", pin);
-			if (aml_evalname(sc, ev->node, name, 0, NULL, NULL)) {
-				if (gpio->intr_enable)
-					gpio->intr_enable(gpio->cookie, pin);
-				return;
-			}
-		} else {
+		else
 			snprintf(name, sizeof(name), "_E%.2X", pin);
-			if (aml_evalname(sc, ev->node, name, 0, NULL, NULL)) {
-				if (gpio->intr_enable)
-					gpio->intr_enable(gpio->cookie, pin);
-				return;
-			}
-		}
+		if (aml_evalname(sc, ev->node, name, 0, NULL, NULL) == 0)
+			goto intr_enable;
 	}
 
 	memset(&evt, 0, sizeof(evt));
 	evt.v_integer = pin;
 	evt.type = AML_OBJTYPE_INTEGER;
 	aml_evalname(sc, ev->node, "_EVT", 1, &evt, NULL);
+
+intr_enable:
 	if ((ev->tflags & LR_GPIO_MODE) == LR_GPIO_LEVEL) {
 		if (gpio->intr_enable)
 			gpio->intr_enable(gpio->cookie, pin);
@@ -917,6 +913,7 @@ acpi_gpio_event_task(void *arg0, int arg1)
 int
 acpi_gpio_event(void *arg)
 {
+	struct acpi_softc *sc = acpi_softc;
 	struct acpi_gpio_event *ev = arg;
 	struct acpi_gpio *gpio = ev->node->gpio;
 
@@ -924,8 +921,15 @@ acpi_gpio_event(void *arg)
 		if(gpio->intr_disable)
 			gpio->intr_disable(gpio->cookie, ev->pin);
 	}
+
+	if (cpu_suspended) {
+		cpu_suspended = 0;
+		sc->sc_wakegpe = -3;
+	}
+
 	acpi_addtask(acpi_softc, acpi_gpio_event_task, ev, ev->pin);
 	acpi_wakeup(acpi_softc);
+
 	return 1;
 }
 
@@ -951,7 +955,8 @@ acpi_gpio_parse_events(int crsidx, union acpi_resource *crs, void *arg)
 			ev->tflags = crs->lr_gpio.tflags;
 			ev->pin = pin;
 			gpio->intr_establish(gpio->cookie, pin,
-			    crs->lr_gpio.tflags, acpi_gpio_event, ev);
+			    crs->lr_gpio.tflags, IPL_BIO | IPL_WAKEUP,
+			    acpi_gpio_event, ev);
 		}
 		break;
 	default:
@@ -1143,6 +1148,11 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 	/* Perform post-parsing fixups */
 	aml_postparse();
 
+#if 0
+	if (sc->sc_fadt->hdr_revision > 2 &&
+	    !ISSET(sc->sc_fadt->iapc_boot_arch, FADT_LEGACY_DEVICES))
+		acpi_legacy_free = 1;
+#endif
 
 #ifndef SMALL_KERNEL
 	/* Find available sleeping states */
@@ -1202,6 +1212,7 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 	if (wakeup_dev_ct > 0)
 		device_register_wakeup(&sc->sc_dev);
 #endif
+#endif /* SMALL_KERNEL */
 
 	/*
 	 * ACPI is enabled now -- attach timer
@@ -1216,7 +1227,6 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 		aaa.aaa_memt = sc->sc_memt;
 		config_found(&sc->sc_dev, &aaa, acpi_print);
 	}
-#endif /* SMALL_KERNEL */
 
 	/*
 	 * Attach table-defined devices
@@ -1998,12 +2008,6 @@ acpi_sleep_task(void *arg0, int sleepmode)
 
 #endif /* SMALL_KERNEL */
 
-int
-acpi_resuming(struct acpi_softc *sc)
-{
-	return (getuptime() < sc->sc_resume_time + 10);
-}
-
 void
 acpi_reset(void)
 {
@@ -2070,15 +2074,17 @@ acpi_pbtn_task(void *arg0, int dummy)
 	    en | ACPI_PM1_PWRBTN_EN);
 	splx(s);
 
+#ifdef SUSPEND
 	/* Ignore button events if we're resuming. */
-	if (acpi_resuming(sc))
+	if (resuming())
 		return;
+#endif	/* SUSPEND */
 
 	switch (pwr_action) {
 	case 0:
 		break;
 	case 1:
-		acpi_addtask(sc, acpi_powerdown_task, sc, 0);
+		powerbutton_event();
 		break;
 #ifndef SMALL_KERNEL
 	case 2:
@@ -2106,21 +2112,9 @@ acpi_sbtn_task(void *arg0, int dummy)
 	splx(s);
 }
 
-void
-acpi_powerdown_task(void *arg0, int dummy)
-{
-	extern int allowpowerdown;
-
-	if (allowpowerdown == 1) {
-		allowpowerdown = 0;
-		prsignal(initprocess, SIGUSR2);
-	}
-}
-
 int
 acpi_interrupt(void *arg)
 {
-	extern int cpu_suspended;
 	struct acpi_softc *sc = (struct acpi_softc *)arg;
 	uint32_t processed = 0, idx, jdx;
 	uint16_t sts, en;
@@ -3237,7 +3231,9 @@ acpi_foundhid(struct aml_node *node, void *arg)
 		return (0);
 
 	sta = acpi_getsta(sc, node->parent);
-	if ((sta & (STA_PRESENT | STA_ENABLED)) != (STA_PRESENT | STA_ENABLED))
+	if ((sta & STA_PRESENT) == 0 && (sta & STA_DEV_OK) == 0)
+		return (1);
+	if ((sta & STA_ENABLED) == 0)
 		return (0);
 
 	if (aml_evalinteger(sc, node->parent, "_CCA", 0, NULL, &cca))

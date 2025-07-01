@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.338 2025/01/29 15:25:31 mpi Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.345 2025/06/03 08:38:17 mpi Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -2460,16 +2460,6 @@ uvm_map_teardown(struct vm_map *map)
 
 	vm_map_lock(map);
 
-	/* Remove address selectors. */
-	uvm_addr_destroy(map->uaddr_exe);
-	map->uaddr_exe = NULL;
-	for (i = 0; i < nitems(map->uaddr_any); i++) {
-		uvm_addr_destroy(map->uaddr_any[i]);
-		map->uaddr_any[i] = NULL;
-	}
-	uvm_addr_destroy(map->uaddr_brk_stack);
-	map->uaddr_brk_stack = NULL;
-
 	/*
 	 * Remove entries.
 	 *
@@ -2501,8 +2491,6 @@ uvm_map_teardown(struct vm_map *map)
 		entry = TAILQ_NEXT(entry, dfree.deadq);
 	}
 
-	vm_map_unlock(map);
-
 #ifdef VMMAP_DEBUG
 	numt = numq = 0;
 	RBT_FOREACH(entry, uvm_map_addr, &map->addr)
@@ -2510,11 +2498,30 @@ uvm_map_teardown(struct vm_map *map)
 	TAILQ_FOREACH(entry, &dead_entries, dfree.deadq)
 		numq++;
 	KASSERT(numt == numq);
+	/*
+	 * Let VMMAP_DEBUG checks work on an empty map if uvm_map_teardown()
+	 * is called twice.
+	 */
+	map->size = 0;
+	map->min_offset = 0;
+	map->max_offset = 0;
+	map->flags &= ~VM_MAP_ISVMSPACE;
 #endif
-	uvm_unmap_detach(&dead_entries, 0);
+	/* reinit RB tree since the above removal leaves the tree corrupted. */
+	RBT_INIT(uvm_map_addr, &map->addr);
+	vm_map_unlock(map);
 
-	pmap_destroy(map->pmap);
-	map->pmap = NULL;
+	/* Remove address selectors. */
+	uvm_addr_destroy(map->uaddr_exe);
+	map->uaddr_exe = NULL;
+	for (i = 0; i < nitems(map->uaddr_any); i++) {
+		uvm_addr_destroy(map->uaddr_any[i]);
+		map->uaddr_any[i] = NULL;
+	}
+	uvm_addr_destroy(map->uaddr_brk_stack);
+	map->uaddr_brk_stack = NULL;
+
+	uvm_unmap_detach(&dead_entries, 0);
 }
 
 /*
@@ -2744,7 +2751,7 @@ vmspace_validate(struct vm_map *map)
 		imin = imax = iter->start;
 
 		if (UVM_ET_ISHOLE(iter) || iter->object.uvm_obj != NULL ||
-		    iter->protection != PROT_NONE)
+		    iter->protection == PROT_NONE)
 			continue;
 
 		/*
@@ -3395,6 +3402,24 @@ uvmspace_addref(struct vmspace *vm)
 	atomic_inc_int(&vm->vm_refcnt);
 }
 
+void
+uvmspace_purge(struct vmspace *vm)
+{
+#ifdef SYSVSHM
+	/* Get rid of any SYSV shared memory segments. */
+	if (vm->vm_shm != NULL) {
+		KERNEL_LOCK();
+		shmexit(vm);
+		KERNEL_UNLOCK();
+	}
+#endif
+	/*
+	 * Lock the map, to wait out all other references to it.  delete
+	 * all of the mappings and pages they hold.
+	 */
+	uvm_map_teardown(&vm->vm_map);
+}
+
 /*
  * uvmspace_free: free a vmspace data structure
  */
@@ -3403,124 +3428,17 @@ uvmspace_free(struct vmspace *vm)
 {
 	if (atomic_dec_int_nv(&vm->vm_refcnt) == 0) {
 		/*
-		 * lock the map, to wait out all other references to it.  delete
-		 * all of the mappings and pages they hold, then call the pmap
-		 * module to reclaim anything left.
+		 * Sanity check.  Kernel threads never end up here and
+		 * userland ones already tear down there VM space in
+		 * exit1().
 		 */
-#ifdef SYSVSHM
-		/* Get rid of any SYSV shared memory segments. */
-		if (vm->vm_shm != NULL) {
-			KERNEL_LOCK();
-			shmexit(vm);
-			KERNEL_UNLOCK();
-		}
-#endif
+		uvmspace_purge(vm);
 
-		uvm_map_teardown(&vm->vm_map);
+		pmap_destroy(vm->vm_map.pmap);
+		vm->vm_map.pmap = NULL;
+
 		pool_put(&uvm_vmspace_pool, vm);
 	}
-}
-
-/*
- * uvm_share: Map the address range [srcaddr, srcaddr + sz) in
- * srcmap to the address range [dstaddr, dstaddr + sz) in
- * dstmap.
- *
- * The whole address range in srcmap must be backed by an object
- * (no holes).
- *
- * If successful, the address ranges share memory and the destination
- * address range uses the protection flags in prot.
- *
- * This routine assumes that sz is a multiple of PAGE_SIZE and
- * that dstaddr and srcaddr are page-aligned.
- */
-int
-uvm_share(struct vm_map *dstmap, vaddr_t dstaddr, vm_prot_t prot,
-    struct vm_map *srcmap, vaddr_t srcaddr, vsize_t sz)
-{
-	int ret = 0;
-	vaddr_t unmap_end;
-	vaddr_t dstva;
-	vsize_t s_off, len, n = sz, remain;
-	struct vm_map_entry *first = NULL, *last = NULL;
-	struct vm_map_entry *src_entry, *psrc_entry = NULL;
-	struct uvm_map_deadq dead;
-
-	if (srcaddr >= srcmap->max_offset || sz > srcmap->max_offset - srcaddr)
-		return EINVAL;
-
-	TAILQ_INIT(&dead);
-	vm_map_lock(dstmap);
-	vm_map_lock_read(srcmap);
-
-	if (!uvm_map_isavail(dstmap, NULL, &first, &last, dstaddr, sz)) {
-		ret = ENOMEM;
-		goto exit_unlock;
-	}
-	if (!uvm_map_lookup_entry(srcmap, srcaddr, &src_entry)) {
-		ret = EINVAL;
-		goto exit_unlock;
-	}
-
-	dstva = dstaddr;
-	unmap_end = dstaddr;
-	for (; src_entry != NULL;
-	    psrc_entry = src_entry,
-	    src_entry = RBT_NEXT(uvm_map_addr, src_entry)) {
-		/* hole in address space, bail out */
-		if (psrc_entry != NULL && psrc_entry->end != src_entry->start)
-			break;
-		if (src_entry->start >= srcaddr + sz)
-			break;
-
-		if (UVM_ET_ISSUBMAP(src_entry))
-			panic("uvm_share: encountered a submap (illegal)");
-		if (!UVM_ET_ISCOPYONWRITE(src_entry) &&
-		    UVM_ET_ISNEEDSCOPY(src_entry))
-			panic("uvm_share: non-copy_on_write map entries "
-			    "marked needs_copy (illegal)");
-
-		/*
-		 * srcaddr > map entry start? means we are in the middle of a
-		 * map, so we calculate the offset to use in the source map.
-		 */
-		if (srcaddr > src_entry->start)
-			s_off = srcaddr - src_entry->start;
-		else if (srcaddr == src_entry->start)
-			s_off = 0;
-		else
-			panic("uvm_share: map entry start > srcaddr");
-
-		remain = src_entry->end - src_entry->start - s_off;
-
-		/* Determine how many bytes to share in this pass */
-		if (n < remain)
-			len = n;
-		else
-			len = remain;
-
-		if (uvm_mapent_share(dstmap, dstva, len, s_off, prot, prot,
-		    srcmap, src_entry, &dead) == NULL)
-			break;
-
-		n -= len;
-		dstva += len;
-		srcaddr += len;
-		unmap_end = dstva + len;
-		if (n == 0)
-			goto exit_unlock;
-	}
-
-	ret = EINVAL;
-	uvm_unmap_remove(dstmap, dstaddr, unmap_end, &dead, FALSE, TRUE, FALSE);
-
-exit_unlock:
-	vm_map_unlock_read(srcmap);
-	vm_map_unlock(dstmap);
-	uvm_unmap_detach(&dead, 0);
-
-	return ret;
 }
 
 /*
@@ -4211,7 +4129,7 @@ uvm_map_immutable(struct vm_map *map, vaddr_t start, vaddr_t end, int imut)
 	error = 0;
 out:
 	vm_map_unlock(map);
-	return (0);
+	return (error);
 }
 
 /*

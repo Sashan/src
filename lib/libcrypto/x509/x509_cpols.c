@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_cpols.c,v 1.13 2024/07/13 15:08:58 tb Exp $ */
+/* $OpenBSD: x509_cpols.c,v 1.16 2025/05/10 05:54:39 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -62,9 +62,9 @@
 #include <openssl/asn1.h>
 #include <openssl/asn1t.h>
 #include <openssl/conf.h>
-#include <openssl/err.h>
 #include <openssl/x509v3.h>
 
+#include "err_local.h"
 #include "x509_local.h"
 
 /* Certificate policies extension support: this one is a bit complex... */
@@ -461,14 +461,13 @@ r2i_certpol(X509V3_EXT_METHOD *method, X509V3_CTX *ctx, char *value)
 			continue;
 		} else if (*pstr == '@') {
 			STACK_OF(CONF_VALUE) *polsect;
-			polsect = X509V3_get_section(ctx, pstr + 1);
+			polsect = X509V3_get0_section(ctx, pstr + 1);
 			if (!polsect) {
 				X509V3error(X509V3_R_INVALID_SECTION);
 				X509V3_conf_err(cnf);
 				goto err;
 			}
 			pol = policy_section(ctx, polsect, ia5org);
-			X509V3_section_free(ctx, polsect);
 			if (!pol)
 				goto err;
 		} else {
@@ -544,14 +543,13 @@ policy_section(X509V3_CTX *ctx, STACK_OF(CONF_VALUE) *polstrs, int ia5org)
 				X509V3_conf_err(cnf);
 				goto err;
 			}
-			unot = X509V3_get_section(ctx, cnf->value + 1);
+			unot = X509V3_get0_section(ctx, cnf->value + 1);
 			if (unot == NULL) {
 				X509V3error(X509V3_R_INVALID_SECTION);
 				X509V3_conf_err(cnf);
 				goto err;
 			}
 			qual = notice_section(ctx, unot, ia5org);
-			X509V3_section_free(ctx, unot);
 			if (qual == NULL)
 				goto err;
 

@@ -1,7 +1,7 @@
-.\"	$OpenBSD: ctime.3,v 1.47 2022/09/11 06:38:11 jmc Exp $
+.\"	$OpenBSD: ctime.3,v 1.49 2025/06/23 13:53:11 millert Exp $
 .\"
 .\"
-.Dd $Mdocdate: September 11 2022 $
+.Dd $Mdocdate: June 23 2025 $
 .Dt CTIME 3
 .Os
 .Sh NAME
@@ -22,23 +22,23 @@
 .In sys/types.h
 .In time.h
 .Vt extern char *tzname[2] ;
-.Ft "char *"
+.Ft char *
 .Fn ctime "const time_t *clock"
-.Ft "char *"
+.Ft char *
 .Fn ctime_r "const time_t *clock" "char *buf"
 .Ft double
 .Fn difftime "time_t time1" "time_t time0"
-.Ft "char *"
+.Ft char *
 .Fn asctime "const struct tm *tm"
-.Ft "char *"
+.Ft char *
 .Fn asctime_r "const struct tm *tm" "char *buf"
-.Ft "struct tm *"
+.Ft struct tm *
 .Fn localtime "const time_t *clock"
-.Ft "struct tm *"
+.Ft struct tm *
 .Fn localtime_r "const time_t *clock" "struct tm *result"
-.Ft "struct tm *"
+.Ft struct tm *
 .Fn gmtime "const time_t *clock"
-.Ft "struct tm *"
+.Ft struct tm *
 .Fn gmtime_r "const time_t *clock" "struct tm *result"
 .Ft time_t
 .Fn mktime "struct tm *tm"
@@ -53,8 +53,6 @@ function converts a
 .Vt time_t ,
 pointed to by
 .Fa clock ,
-representing the time in seconds since
-00:00:00 UTC, 1970-01-01,
 and returns a pointer to a
 string of the form
 .Pp
@@ -69,6 +67,17 @@ with five spaces before the year.
 These unusual formats are designed to make it less likely that older
 software that expects exactly 26 bytes of output will mistakenly output
 misleading values for out-of-range years.
+.Pp
+The
+.Fa clock
+time stamp represents the time in seconds since 1970-01-01 00:00:00
+Coordinated Universal Time (UTC).
+The POSIX standard says that time stamps must be nonnegative
+and must ignore leap seconds.
+Many implementations extend POSIX by allowing negative time stamps,
+and can therefore represent time stamps that predate the
+introduction of UTC and are some other flavor of Universal Time (UT).
+Some implementations support leap seconds, in contradiction to POSIX.
 .Pp
 The
 .Fn ctime_r
@@ -231,7 +240,7 @@ includes the following fields:
 	int tm_wday;	/* day of week (Sunday = 0) */
 	int tm_yday;	/* day of year (0 \- 365) */
 	int tm_isdst;	/* is summer time in effect? */
-	long tm_gmtoff;	/* offset from UTC in seconds */
+	long tm_gmtoff;	/* offset from UT in seconds */
 	char *tm_zone;	/* abbreviation of timezone name */
 .Ed
 .Pp
@@ -254,8 +263,9 @@ is non-zero if summer time is in effect.
 .Pp
 .Fa tm_gmtoff
 is the offset (in seconds) of the time represented
-from UTC, with positive values indicating east
+from UT, with positive values indicating east
 of the Prime Meridian.
+The field's name is derived from Greenwich Mean Time, a precursor of UT.
 .Sh RETURN VALUES
 The functions
 .Fn ctime ,

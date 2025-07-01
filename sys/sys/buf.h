@@ -1,4 +1,4 @@
-/*	$OpenBSD: buf.h,v 1.114 2024/02/03 18:51:58 beck Exp $	*/
+/*	$OpenBSD: buf.h,v 1.118 2025/06/08 06:23:43 rsadowski Exp $	*/
 /*	$NetBSD: buf.h,v 1.25 1997/04/09 21:12:17 mycroft Exp $	*/
 
 /*
@@ -84,12 +84,10 @@ struct bufq {
 };
 
 int		 bufq_init(struct bufq *, int);
-int		 bufq_switch(struct bufq *, int);
 void		 bufq_destroy(struct bufq *);
 
 void		 bufq_queue(struct bufq *, struct buf *);
 struct buf	*bufq_dequeue(struct bufq *);
-void		 bufq_requeue(struct bufq *, struct buf *);
 int		 bufq_peek(struct bufq *);
 void		 bufq_drain(struct bufq *);
 
@@ -164,9 +162,6 @@ struct bufcache {
 	struct bufqueue coldqueue;
 	struct bufqueue warmqueue;
 };
-
-/* Device driver compatibility definitions. */
-#define	b_active b_bcount		/* Driver queue head: drive active. */
 
 /*
  * These flags are kept in b_flags.
@@ -252,7 +247,6 @@ int bread(struct vnode *, daddr_t, int, struct buf **);
 int breadn(struct vnode *, daddr_t, int, daddr_t *, int *, int,
     struct buf **);
 void	brelse(struct buf *);
-#define bremfree bufcache_take
 void	bufinit(void);
 void	buf_dirty(struct buf *);
 void    buf_undirty(struct buf *);
@@ -290,6 +284,7 @@ int	buf_dealloc_mem(struct buf *);
 void	buf_fix_mapping(struct buf *, vsize_t);
 void	buf_alloc_pages(struct buf *, vsize_t);
 void	buf_free_pages(struct buf *);
+int	buf_realloc_pages(struct buf *, struct uvm_constraint_range *, int);
 
 void	minphys(struct buf *bp);
 int	physio(void (*strategy)(struct buf *), dev_t dev, int flags,

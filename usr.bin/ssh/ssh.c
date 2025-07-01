@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh.c,v 1.604 2025/02/15 01:48:30 djm Exp $ */
+/* $OpenBSD: ssh.c,v 1.614 2025/06/19 05:49:05 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -513,16 +513,28 @@ resolve_canonicalize(char **hostp, int port)
 static void
 check_load(int r, struct sshkey **k, const char *path, const char *message)
 {
+	char *fp;
+
 	switch (r) {
 	case 0:
+		if (k == NULL || *k == NULL)
+			return;
 		/* Check RSA keys size and discard if undersized */
-		if (k != NULL && *k != NULL &&
-		    (r = sshkey_check_rsa_length(*k,
+		if ((r = sshkey_check_rsa_length(*k,
 		    options.required_rsa_size)) != 0) {
 			error_r(r, "load %s \"%s\"", message, path);
 			free(*k);
 			*k = NULL;
+			break;
 		}
+		if ((fp = sshkey_fingerprint(*k,
+		    options.fingerprint_hash, SSH_FP_DEFAULT)) == NULL) {
+			fatal_f("failed to fingerprint %s %s key from %s",
+			    sshkey_type(*k), message, path);
+		}
+		debug("loaded %s from %s: %s %s", message, path,
+		    sshkey_type(*k), fp);
+		free(fp);
 		break;
 	case SSH_ERR_INTERNAL_ERROR:
 	case SSH_ERR_ALLOC_FAIL:
@@ -536,6 +548,8 @@ check_load(int r, struct sshkey **k, const char *path, const char *message)
 		error_r(r, "load %s \"%s\"", message, path);
 		break;
 	}
+	if (k != NULL && *k == NULL)
+		debug("no %s loaded from %s", message, path);
 }
 
 /*
@@ -623,7 +637,7 @@ valid_hostname(const char *s)
 	if (*s == '-')
 		return 0;
 	for (i = 0; s[i] != 0; i++) {
-		if (strchr("'`\"$\\;&<>|(){}", s[i]) != NULL ||
+		if (strchr("'`\"$\\;&<>|(){},", s[i]) != NULL ||
 		    isspace((u_char)s[i]) || iscntrl((u_char)s[i]))
 			return 0;
 	}
@@ -999,7 +1013,7 @@ main(int ac, char **av)
 			break;
 		case 'l':
 			if (options.user == NULL)
-				options.user = optarg;
+				options.user = xstrdup(optarg);
 			break;
 
 		case 'L':
@@ -1137,8 +1151,6 @@ main(int ac, char **av)
 
 	if (!valid_hostname(host))
 		fatal("hostname contains invalid characters");
-	if (options.user != NULL && !valid_ruser(options.user))
-		fatal("remote username contains invalid characters");
 	options.host_arg = xstrdup(host);
 
 #ifdef WITH_OPENSSL
@@ -1424,11 +1436,28 @@ main(int ac, char **av)
 	    options.host_key_alias : options.host_arg);
 	cinfo->host_arg = xstrdup(options.host_arg);
 	cinfo->remhost = xstrdup(host);
-	cinfo->remuser = xstrdup(options.user);
 	cinfo->homedir = xstrdup(pw->pw_dir);
 	cinfo->locuser = xstrdup(pw->pw_name);
 	cinfo->jmphost = xstrdup(options.jump_host == NULL ?
 	    "" : options.jump_host);
+
+	/*
+	 * Expand User. It cannot contain %r (itself) or %C since User is
+	 * a component of the hash.
+	 */
+	if (options.user != NULL) {
+		if ((p = percent_dollar_expand(options.user,
+		    DEFAULT_CLIENT_PERCENT_EXPAND_ARGS_NOUSER(cinfo),
+		    (char *)NULL)) == NULL)
+			fatal("invalid environment variable expansion");
+		free(options.user);
+		options.user = p;
+		if (!valid_ruser(options.user))
+			fatal("remote username contains invalid characters");
+	}
+
+	/* Now User is expanded, store it and calculate hash. */
+	cinfo->remuser = xstrdup(options.user);
 	cinfo->conn_hash_hex = ssh_connection_hash(cinfo->thishost,
 	    cinfo->remhost, cinfo->portstr, cinfo->remuser, cinfo->jmphost);
 
@@ -1525,6 +1554,28 @@ main(int ac, char **av)
 		free(options.user_hostfiles[j]);
 		free(cp);
 		options.user_hostfiles[j] = p;
+	}
+
+	for (j = 0; j < options.num_setenv; j++) {
+		char *name = options.setenv[j], *value;
+
+		if (name == NULL)
+			continue;
+		/* Expand only the value portion, not the variable name. */
+		if ((value = strchr(name, '=')) == NULL) {
+			/* shouldn't happen; vars are checked in readconf.c */
+			fatal("Invalid config SetEnv: %s", name);
+		}
+		*value++ = '\0';
+		cp = default_client_percent_dollar_expand(value, cinfo);
+		xasprintf(&p, "%s=%s", name, cp);
+		if (strcmp(value, p) != 0) {
+			debug3("expanded SetEnv '%s' '%s' -> '%s'",
+			    name, value, cp);
+		}
+		free(options.setenv[j]);
+		free(cp);
+		options.setenv[j] = p;
 	}
 
 	for (i = 0; i < options.num_local_forwards; i++) {
@@ -1665,10 +1716,9 @@ main(int ac, char **av)
 	if ((o) >= sensitive_data.nkeys) \
 		fatal_f("pubkey out of array bounds"); \
 	check_load(sshkey_load_public(p, &(sensitive_data.keys[o]), NULL), \
-	    &(sensitive_data.keys[o]), p, "pubkey"); \
+	    &(sensitive_data.keys[o]), p, "hostbased pubkey"); \
 	if (sensitive_data.keys[o] != NULL) { \
-		debug2("hostbased key %d: %s key from \"%s\"", o, \
-		    sshkey_ssh_name(sensitive_data.keys[o]), p); \
+		debug2("hostbased pubkey \"%s\" in slot %d", p, o); \
 		loaded++; \
 	} \
 } while (0)
@@ -1676,10 +1726,9 @@ main(int ac, char **av)
 	if ((o) >= sensitive_data.nkeys) \
 		fatal_f("cert out of array bounds"); \
 	check_load(sshkey_load_cert(p, &(sensitive_data.keys[o])), \
-	    &(sensitive_data.keys[o]), p, "cert"); \
+	    &(sensitive_data.keys[o]), p, "hostbased cert"); \
 	if (sensitive_data.keys[o] != NULL) { \
-		debug2("hostbased key %d: %s cert from \"%s\"", o, \
-		    sshkey_ssh_name(sensitive_data.keys[o]), p); \
+		debug2("hostbased cert \"%s\" in slot %d", p, o); \
 		loaded++; \
 	} \
 } while (0)
@@ -1688,15 +1737,9 @@ main(int ac, char **av)
 			L_CERT(_PATH_HOST_ECDSA_KEY_FILE, 0);
 			L_CERT(_PATH_HOST_ED25519_KEY_FILE, 1);
 			L_CERT(_PATH_HOST_RSA_KEY_FILE, 2);
-#ifdef WITH_DSA
-			L_CERT(_PATH_HOST_DSA_KEY_FILE, 3);
-#endif
 			L_PUBKEY(_PATH_HOST_ECDSA_KEY_FILE, 4);
 			L_PUBKEY(_PATH_HOST_ED25519_KEY_FILE, 5);
 			L_PUBKEY(_PATH_HOST_RSA_KEY_FILE, 6);
-#ifdef WITH_DSA
-			L_PUBKEY(_PATH_HOST_DSA_KEY_FILE, 7);
-#endif
 			L_CERT(_PATH_HOST_XMSS_KEY_FILE, 8);
 			L_PUBKEY(_PATH_HOST_XMSS_KEY_FILE, 9);
 			if (loaded == 0)
@@ -2390,9 +2433,7 @@ load_public_identity_files(const struct ssh_conn_info *cinfo)
 			continue;
 		xasprintf(&cp, "%s-cert", filename);
 		check_load(sshkey_load_public(cp, &public, NULL),
-		    &public, filename, "pubkey");
-		debug("identity file %s type %d", cp,
-		    public ? public->type : -1);
+		    &public, filename, "identity pubkey");
 		if (public == NULL) {
 			free(cp);
 			continue;
@@ -2421,9 +2462,7 @@ load_public_identity_files(const struct ssh_conn_info *cinfo)
 		free(cp);
 
 		check_load(sshkey_load_public(filename, &public, NULL),
-		    &public, filename, "certificate");
-		debug("certificate file %s type %d", filename,
-		    public ? public->type : -1);
+		    &public, filename, "identity cert");
 		free(options.certificate_files[i]);
 		options.certificate_files[i] = NULL;
 		if (public == NULL) {

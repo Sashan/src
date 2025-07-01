@@ -1,4 +1,4 @@
-/* $OpenBSD: pci_1000.c,v 1.12 2017/09/08 05:36:51 deraadt Exp $ */
+/* $OpenBSD: pci_1000.c,v 1.14 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pci_1000.c,v 1.12 2001/07/27 00:25:20 thorpej Exp $ */
 
 /*
@@ -102,10 +102,8 @@ void dec_1000_disable_intr(int irq);
 void pci_1000_imi(void);
 
 void
-pci_1000_pickintr(core, iot, memt, pc)
-	void *core;
-	bus_space_tag_t iot, memt;
-	pci_chipset_tag_t pc;
+pci_1000_pickintr(void *core, bus_space_tag_t iot, bus_space_tag_t memt,
+    pci_chipset_tag_t pc)
 {
 	int i;
 
@@ -113,12 +111,12 @@ pci_1000_pickintr(core, iot, memt, pc)
 
 	if (bus_space_map(iot, 0x536, 2, 0, &another_mystery_icu_ioh))
 		panic("pci_1000_pickintr");
-        pc->pc_intr_v = core;
-        pc->pc_intr_map = dec_1000_intr_map;
-        pc->pc_intr_string = dec_1000_intr_string;
+	pc->pc_intr_v = core;
+	pc->pc_intr_map = dec_1000_intr_map;
+	pc->pc_intr_string = dec_1000_intr_string;
 	pc->pc_intr_line = dec_1000_intr_line;
-        pc->pc_intr_establish = dec_1000_intr_establish;
-        pc->pc_intr_disestablish = dec_1000_intr_disestablish;
+	pc->pc_intr_establish = dec_1000_intr_establish;
+	pc->pc_intr_disestablish = dec_1000_intr_disestablish;
 
 	pc->pc_pciide_compat_intr_establish = NULL;
 	pc->pc_pciide_compat_intr_disestablish = NULL;
@@ -136,10 +134,8 @@ pci_1000_pickintr(core, iot, memt, pc)
 #endif
 }
 
-int     
-dec_1000_intr_map(pa, ihp)
-	struct pci_attach_args *pa;
-        pci_intr_handle_t *ihp;
+int
+dec_1000_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	pcitag_t bustag = pa->pa_intrtag;
 	int buspin, device, line = pa->pa_intrline;
@@ -183,24 +179,20 @@ dec_1000_intr_map(pa, ihp)
 }
 
 const char *
-dec_1000_intr_string(ccv, ih)
-	void *ccv;
-	pci_intr_handle_t ih;
+dec_1000_intr_string(void *ccv, pci_intr_handle_t ih)
 {
 	static const char irqmsg_fmt[] = "dec_1000 irq %ld";
-        static char irqstr[sizeof irqmsg_fmt];
+	static char irqstr[sizeof irqmsg_fmt];
 
-        if (ih >= PCI_NIRQ)
-                panic("dec_1000_intr_string: bogus dec_1000 IRQ 0x%lx", ih);
+	if (ih >= PCI_NIRQ)
+		panic("dec_1000_intr_string: bogus dec_1000 IRQ 0x%lx", ih);
 
-        snprintf(irqstr, sizeof irqstr, irqmsg_fmt, ih);
-        return (irqstr);
+	snprintf(irqstr, sizeof irqstr, irqmsg_fmt, ih);
+	return (irqstr);
 }
 
 int
-dec_1000_intr_line(ccv, ih)
-	void *ccv;
-	pci_intr_handle_t ih;
+dec_1000_intr_line(void *ccv, pci_intr_handle_t ih)
 {
 #if NSIO > 0
 	return sio_intr_line(NULL /*XXX*/, ih);
@@ -210,18 +202,13 @@ dec_1000_intr_line(ccv, ih)
 }
 
 void *
-dec_1000_intr_establish(ccv, ih, level, func, arg, name)
-        void *ccv;
-        pci_intr_handle_t ih;
-        int level;
-        int (*func)(void *);
-	void *arg;
-	const char *name;
-{           
+dec_1000_intr_establish(void *ccv, pci_intr_handle_t ih, int level,
+    int (*func)(void *), void *arg, const char *name)
+{
 	void *cookie;
 
-        if (ih >= PCI_NIRQ)
-                panic("dec_1000_intr_establish: IRQ too high, 0x%lx", ih);
+	if (ih >= PCI_NIRQ)
+		panic("dec_1000_intr_establish: IRQ too high, 0x%lx", ih);
 
 	cookie = alpha_shared_intr_establish(dec_1000_pci_intr, ih, IST_LEVEL,
 	    level, func, arg, name);
@@ -234,9 +221,8 @@ dec_1000_intr_establish(ccv, ih, level, func, arg, name)
 	return (cookie);
 }
 
-void    
-dec_1000_intr_disestablish(ccv, cookie)
-        void *ccv, *cookie;
+void
+dec_1000_intr_disestablish(void *ccv, void *cookie)
 {
 	struct alpha_shared_intrhand *ih = cookie;
 	unsigned int irq = ih->ih_num;
@@ -256,9 +242,7 @@ dec_1000_intr_disestablish(ccv, cookie)
 }
 
 void
-dec_1000_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+dec_1000_iointr(void *arg, unsigned long vec)
 {
 	int irq;
 
@@ -288,15 +272,13 @@ dec_1000_iointr(arg, vec)
  */
 
 void
-dec_1000_enable_intr(irq)
-	int irq;
+dec_1000_enable_intr(int irq)
 {
 	IW(IR() | 1 << irq);
 }
 
 void
-dec_1000_disable_intr(irq)
-	int irq;
+dec_1000_disable_intr(int irq)
 {
 	IW(IR() & ~(1 << irq));
 }
@@ -304,7 +286,7 @@ dec_1000_disable_intr(irq)
  * Initialize mystery ICU
  */
 void
-pci_1000_imi()
+pci_1000_imi(void)
 {
 	IW(0);					/* XXX ?? */
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.h,v 1.70 2025/02/07 21:48:26 bluhm Exp $ */
+/*	$OpenBSD: dhcpd.h,v 1.73 2025/06/10 06:29:53 dlg Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997, 1998, 1999
@@ -134,8 +134,6 @@ struct lease {
 };
 
 struct lease_state {
-	struct lease_state *next;
-
 	struct interface_info *ip;
 
 	time_t offered_expiry;
@@ -289,6 +287,7 @@ struct protocol {
 	int fd;
 	void (*handler)(struct protocol *);
 	void *local;
+	int pfd; /* slot used in the pollfd array */
 };
 
 #define _PATH_DHCPD_CONF	"/etc/dhcpd.conf"
@@ -444,7 +443,7 @@ ssize_t receive_packet(struct interface_info *, unsigned char *, size_t,
 extern struct interface_info *interfaces;
 extern struct protocol *protocols;
 extern struct dhcpd_timeout *timeouts;
-void discover_interfaces(int *);
+void discover_interfaces(void);
 void dispatch(void);
 int locate_network(struct packet *);
 void got_one(struct protocol *);

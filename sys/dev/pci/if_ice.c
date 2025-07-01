@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ice.c,v 1.28 2024/12/17 05:32:31 stsp Exp $	*/
+/*	$OpenBSD: if_ice.c,v 1.52 2025/06/27 16:18:10 jan Exp $	*/
 
 /*  Copyright (c) 2024, Intel Corporation
  *  All rights reserved.
@@ -84,6 +84,10 @@
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
+#include <netinet/udp.h>
 
 #define STRUCT_HACK_VAR_LEN
 
@@ -100,6 +104,12 @@
 
 #include "if_icereg.h"
 #include "if_icevar.h"
+
+/*
+ * Our network stack cannot handle packets greater than MAXMCLBYTES.
+ * This interface cannot handle packets greater than ICE_TSO_SIZE.
+ */
+CTASSERT(MAXMCLBYTES < ICE_TSO_SIZE);
 
 /**
  * @var ice_driver_version
@@ -129,10 +139,10 @@ const uint8_t ice_rc_version = 0;
 typedef void *ice_match_t;
 
 static const struct pci_matchid ice_devices[] = {
-	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E810_XXV_SFP },
-#if 0 /* no hardware available for testing: */
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E810_C_QSFP },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E810_C_SFP },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E810_XXV_QSFP },
-#endif
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E810_XXV_SFP },
 };
 
 int
@@ -287,35 +297,14 @@ struct ice_softc {
 	struct ice_resmgr os_imgr;
 
 	/* isc_* fields inherited from FreeBSD iflib struct if_softc_ctx */
-	int isc_vectors;
-	int isc_nrxqsets;
-	int isc_ntxqsets;
-	int isc_msix_bar;
 	int isc_tx_nsegments;
 	int isc_ntxd[8];
 	int isc_nrxd[8];
-	uint32_t isc_txqsizes[8];
-	uint32_t isc_rxqsizes[8];
-	uint8_t isc_txd_size[8];
-	uint8_t isc_rxd_size[8];
 	int isc_tx_tso_segments_max;
 	int isc_tx_tso_size_max;
 	int isc_tx_tso_segsize_max;
-	int isc_tx_csum_flags;
-	int isc_capabilities;
-	int isc_capenable;
-	int isc_rss_table_size;
-	int isc_rss_table_mask;
 	int isc_nrxqsets_max;
 	int isc_ntxqsets_max;
-	uint16_t isc_rxd_buf_size[8]; /* set at init time by driver, 0
-				         means use iflib-calculated size
-				         based on isc_max_frame_size */
-	uint16_t isc_max_frame_size; /* set at init time by driver */
-	uint16_t isc_min_frame_size; /* set at init time by driver, only used if
-					IFLIB_NEED_ETHER_PAD is set. */
-	uint32_t isc_pause_frames;   /* set by driver for iflib_timer to detect */
-	int isc_disable_msix;
 
 	/* Tx/Rx queue managers */
 	struct ice_resmgr tx_qmgr;
@@ -982,12 +971,11 @@ ice_set_mac_type(struct ice_hw *hw)
 	switch (sc->sc_pid) {
 #if 0
 	case ICE_DEV_ID_E810C_BACKPLANE:
-	case ICE_DEV_ID_E810C_QSFP:
-	case ICE_DEV_ID_E810C_SFP:
 	case ICE_DEV_ID_E810_XXV_BACKPLANE:
-	case ICE_DEV_ID_E810_XXV_QSFP:
-	case ICE_DEV_ID_E810_XXV_SFP:
 #endif
+	case PCI_PRODUCT_INTEL_E810_C_QSFP:
+	case PCI_PRODUCT_INTEL_E810_C_SFP:
+	case PCI_PRODUCT_INTEL_E810_XXV_QSFP:
 	case PCI_PRODUCT_INTEL_E810_XXV_SFP:
 		hw->mac_type = ICE_MAC_E810;
 		break;
@@ -11159,6 +11147,52 @@ ice_configure_all_rxq_interrupts(struct ice_vsi *vsi)
 }
 
 /**
+ * ice_configure_txq_interrupt - Configure HW Tx queue for an MSI-X interrupt
+ * @hw: ice hw structure
+ * @txqid: Tx queue index in PF space
+ * @vector: MSI-X vector index in PF/VF space
+ * @itr_idx: ITR index to use for interrupt
+ *
+ * @remark ice_flush() may need to be called after this
+ */
+void
+ice_configure_txq_interrupt(struct ice_hw *hw, uint16_t txqid, uint16_t vector,
+    uint8_t itr_idx)
+{
+	uint32_t val;
+
+	KASSERT(itr_idx <= ICE_ITR_NONE);
+
+	val = (QINT_TQCTL_CAUSE_ENA_M |
+	       (itr_idx << QINT_TQCTL_ITR_INDX_S) |
+	       (vector << QINT_TQCTL_MSIX_INDX_S));
+	ICE_WRITE(hw, QINT_TQCTL(txqid), val);
+}
+
+/**
+ * ice_configure_all_txq_interrupts - Configure HW Tx queues for MSI-X interrupts
+ * @vsi: the VSI to configure
+ *
+ * Called when setting up MSI-X interrupts to configure the Tx hardware queues.
+ */
+void
+ice_configure_all_txq_interrupts(struct ice_vsi *vsi)
+{
+	struct ice_hw *hw = &vsi->sc->hw;
+	int i;
+
+	for (i = 0; i < vsi->num_tx_queues; i++) {
+		struct ice_tx_queue *txq = &vsi->tx_queues[i];
+		int v = txq->irqv->iv_qid + 1;
+
+		ice_configure_txq_interrupt(hw, vsi->tx_qmap[txq->me], v,
+		    ICE_TX_ITR);
+	}
+
+	ice_flush(hw);
+}
+
+/**
  * ice_itr_to_reg - Convert an ITR setting into its register equivalent
  * @hw: The device HW structure
  * @itr_setting: the ITR setting to convert
@@ -11787,10 +11821,12 @@ ice_if_promisc_set(struct ice_softc *sc)
 	
 	ice_set_default_promisc_mask(promisc_mask);
 
-	if (multi_enable)
-		return (EOPNOTSUPP);
+	if (multi_enable && !promisc_enable) {
+		ice_clear_bit(ICE_PROMISC_UCAST_TX, promisc_mask);
+		ice_clear_bit(ICE_PROMISC_UCAST_RX, promisc_mask);
+	}
 
-	if (promisc_enable) {
+	if (promisc_enable || multi_enable) {
 		status = ice_set_vsi_promisc(hw, sc->pf_vsi.idx,
 					     promisc_mask, 0);
 		if (status && status != ICE_ERR_ALREADY_EXISTS) {
@@ -13057,6 +13093,8 @@ ice_up(struct ice_softc *sc)
 	ice_configure_all_rxq_interrupts(&sc->pf_vsi);
 	ice_configure_rx_itr(&sc->pf_vsi);
 
+	ice_configure_all_txq_interrupts(&sc->pf_vsi);
+
 	/* Configure promiscuous mode */
 	ice_if_promisc_set(sc);
 
@@ -13374,11 +13412,75 @@ ice_flush_txq_interrupts(struct ice_vsi *vsi)
 	}
 }
 
+void
+ice_txq_clean(struct ice_softc *sc, struct ice_tx_queue *txq)
+{
+	struct ice_tx_map *txm;
+	bus_dmamap_t map;
+	unsigned int i;
+
+	for (i = 0; i < txq->desc_count; i++) {
+		txm = &txq->tx_map[i];
+
+		if (txm->txm_m == NULL)
+			continue;
+
+		map = txm->txm_map;
+		bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
+		    BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_unload(sc->sc_dmat, map);
+
+		m_freem(txm->txm_m);
+		txm->txm_m = NULL;
+		txm->txm_eop = -1;
+	}
+
+	txq->txq_cons = txq->txq_prod = 0;
+
+	ifq_clr_oactive(txq->txq_ifq);
+}
+
+void
+ice_rxq_clean(struct ice_softc *sc, struct ice_rx_queue *rxq)
+{
+	struct ice_rx_map *rxm;
+	bus_dmamap_t map;
+	unsigned int i;
+
+	timeout_del_barrier(&rxq->rxq_refill);
+
+	for (i = 0; i < rxq->desc_count; i++) {
+		rxm = &rxq->rx_map[i];
+
+		if (rxm->rxm_m == NULL)
+			continue;
+
+		map = rxm->rxm_map;
+		bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
+		    BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_unload(sc->sc_dmat, map);
+
+		m_freem(rxm->rxm_m);
+		rxm->rxm_m = NULL;
+	}
+
+	if_rxr_init(&rxq->rxq_acct, ICE_MIN_DESC_COUNT, rxq->desc_count - 1);
+
+	m_freem(rxq->rxq_m_head);
+	rxq->rxq_m_head = NULL;
+	rxq->rxq_m_tail = &rxq->rxq_m_head;
+
+	rxq->rxq_prod = rxq->rxq_cons = 0;
+}
+
 int
 ice_down(struct ice_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
 	struct ice_hw *hw = &sc->hw;
+	struct ice_vsi *vsi = &sc->pf_vsi;
+	struct ice_tx_queue *txq;
+	struct ice_rx_queue *rxq;
 	int i;
 
 	rw_enter_write(&sc->sc_cfg_lock);
@@ -13432,7 +13534,13 @@ ice_down(struct ice_softc *sc)
 
 	/* Disable the Tx and Rx queues */
 	ice_vsi_disable_tx(&sc->pf_vsi);
+	for (i = 0, txq = vsi->tx_queues; i < vsi->num_tx_queues; i++, txq++) {
+		ifq_barrier(txq->txq_ifq);
+		intr_barrier(txq->irqv->iv_ihc);
+	}
 	ice_control_all_rx_queues(&sc->pf_vsi, false);
+	for (i = 0, rxq = vsi->rx_queues; i < vsi->num_rx_queues; i++, rxq++)
+		timeout_del_barrier(&rxq->rxq_refill);
 
 	if (!ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) &&
 		 !(ifp->if_flags & IFF_UP) && sc->link_up)
@@ -13444,6 +13552,11 @@ ice_down(struct ice_softc *sc)
 	}
 #endif
 
+	for (i = 0, txq = vsi->tx_queues; i < vsi->num_tx_queues; i++, txq++)
+		ice_txq_clean(sc, txq);
+	for (i = 0, rxq = vsi->rx_queues; i < vsi->num_rx_queues; i++, rxq++)
+		ice_rxq_clean(sc, rxq);
+
 	rw_exit_write(&sc->sc_cfg_lock);
 	NET_LOCK();
 	return 0;
@@ -13454,6 +13567,7 @@ ice_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct ice_softc *sc = ifp->if_softc;
 	struct ifreq *ifr = (struct ifreq *)data;
+	uint8_t addrhi[ETHER_ADDR_LEN], addrlo[ETHER_ADDR_LEN];
 	int s, error = 0;
 
 	s = splnet();
@@ -13478,6 +13592,45 @@ ice_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCGIFMEDIA:
 		error = ifmedia_ioctl(ifp, ifr, &sc->media, cmd);
 		break;
+	case SIOCADDMULTI:
+		error = ether_addmulti(ifr, &sc->sc_ac);
+		if (error == ENETRESET) {
+			struct ice_vsi *vsi = &sc->pf_vsi;
+
+			error = ether_multiaddr(&ifr->ifr_addr, addrlo, addrhi);
+			if (error)
+				break;
+
+			error = ice_add_vsi_mac_filter(vsi, addrlo);
+			if (error)
+				break;
+
+			if (sc->sc_ac.ac_multirangecnt > 0) {
+				SET(ifp->if_flags, IFF_ALLMULTI);
+				error = ENETRESET;
+			}
+		}
+		break;
+	case SIOCDELMULTI:
+		error = ether_delmulti(ifr, &sc->sc_ac);
+		if (error == ENETRESET) {
+			struct ice_vsi *vsi = &sc->pf_vsi;
+
+			error = ether_multiaddr(&ifr->ifr_addr, addrlo, addrhi);
+			if (error)
+				break;
+
+			error = ice_remove_vsi_mac_filter(vsi, addrlo);
+			if (error)
+				break;
+
+			if (ISSET(ifp->if_flags, IFF_ALLMULTI) &&
+			    sc->sc_ac.ac_multirangecnt == 0) {
+				CLR(ifp->if_flags, IFF_ALLMULTI);
+				error = ENETRESET;
+			}
+		}
+		break;
 	default:
 		error = ether_ioctl(ifp, &sc->sc_ac, cmd, data);
 		break;
@@ -13496,16 +13649,102 @@ ice_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	return error;
 }
 
-uint64_t
-ice_tx_setup_offload(struct mbuf *m0, struct ice_tx_queue *txq,
-    unsigned int prod)
+/**
+ * ice_tso_detect_sparse - detect TSO packets with too many segments
+ *
+ * Hardware only transmits packets with a maximum of 8 descriptors. For TSO
+ * packets, hardware needs to be able to build the split packets using 8 or
+ * fewer descriptors. Additionally, the header must be contained within at
+ * most 3 descriptors.
+ *
+ * To verify this, we walk the headers to find out how many descriptors the
+ * headers require (usually 1). Then we ensure that, for each TSO segment, its
+ * data plus the headers are contained within 8 or fewer descriptors.
+ */
+int
+ice_tso_detect_sparse(struct mbuf *m, struct ether_extracted *ext,
+    bus_dmamap_t map)
 {
-	struct ether_extracted ext;
+	int count, curseg, i, hlen, segsz, seglen, hdrs, maxsegs;
+	bus_dma_segment_t *segs;
+	uint64_t paylen, outlen, nsegs;
+
+	curseg = hdrs = 0;
+
+	hlen = ETHER_HDR_LEN + ext->iphlen + ext->tcphlen;
+	outlen = MIN(9668, MAX(64, m->m_pkthdr.ph_mss));
+	paylen = m->m_pkthdr.len - hlen;
+	nsegs = (paylen + outlen - 1) / outlen;
+
+	segs = map->dm_segs;
+
+	/* First, count the number of descriptors for the header.
+	 * Additionally, make sure it does not span more than 3 segments.
+	 */
+	i = 0;
+	curseg = segs[0].ds_len;
+	while (hlen > 0) {
+		hdrs++;
+		if (hdrs > ICE_MAX_TSO_HDR_SEGS)
+			return (1);
+		if (curseg == 0) {
+			i++;
+			if (i == nsegs)
+				return (1);
+
+			curseg = segs[i].ds_len;
+		}
+		seglen = MIN(curseg, hlen);
+		curseg -= seglen;
+		hlen -= seglen;
+	}
+
+	maxsegs = ICE_MAX_TX_SEGS - hdrs;
+
+	/* We must count the headers, in order to verify that they take up
+	 * 3 or fewer descriptors. However, we don't need to check the data
+	 * if the total segments is small.
+	 */
+	if (nsegs <= maxsegs)
+		return (0);
+
+	count = 0;
+
+	/* Now check the data to make sure that each TSO segment is made up of
+	 * no more than maxsegs descriptors. This ensures that hardware will
+	 * be capable of performing TSO offload.
+	 */
+	while (paylen > 0) {
+		segsz = m->m_pkthdr.ph_mss;
+		while (segsz > 0 && paylen != 0) {
+			count++;
+			if (count > maxsegs)
+				return (1);
+			if (curseg == 0) {
+				i++;
+				if (i == nsegs)
+					return (1);
+				curseg = segs[i].ds_len;
+			}
+			seglen = MIN(curseg, segsz);
+			segsz -= seglen;
+			curseg -= seglen;
+			paylen -= seglen;
+		}
+		count = 0;
+	}
+
+	return (0);
+}
+
+uint64_t
+ice_tx_setup_offload(struct mbuf *m0, struct ether_extracted *ext)
+{
 	uint64_t offload = 0, hlen;
 
 #if NVLAN > 0
 	if (ISSET(m0->m_flags, M_VLANTAG)) {
-		uint64_t vtag = m0->m_pkthdr.ether_vtag;
+		uint64_t vtag = htole16(m0->m_pkthdr.ether_vtag);
 		offload |= (ICE_TX_DESC_CMD_IL2TAG1 << ICE_TXD_QW1_CMD_S) |
 		    (vtag << ICE_TXD_QW1_L2TAG1_S);
 	}
@@ -13514,22 +13753,34 @@ ice_tx_setup_offload(struct mbuf *m0, struct ice_tx_queue *txq,
 	    M_IPV4_CSUM_OUT|M_TCP_CSUM_OUT|M_UDP_CSUM_OUT|M_TCP_TSO))
 		return offload;
 
-	ether_extract_headers(m0, &ext);
-	hlen = ext.iphlen;
+	hlen = ext->iphlen;
 
-	if (ext.ip4) {
-		/* TODO: ipv4 checksum offload */
-		offload |= ICE_TX_DESC_CMD_IIPT_IPV4 << ICE_TXD_QW1_CMD_S;
-	} else if (ext.ip6)
+	if (ext->ip4) {
+		if (ISSET(m0->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT))
+			offload |= ICE_TX_DESC_CMD_IIPT_IPV4_CSUM <<
+			    ICE_TXD_QW1_CMD_S;
+		else
+			offload |= ICE_TX_DESC_CMD_IIPT_IPV4 <<
+			    ICE_TXD_QW1_CMD_S;
+	} else if (ext->ip6)
 		offload |= ICE_TX_DESC_CMD_IIPT_IPV6 << ICE_TXD_QW1_CMD_S;
+	else
+		return offload;
 
 	offload |= ((ETHER_HDR_LEN >> 1) << ICE_TX_DESC_LEN_MACLEN_S) <<
 	    ICE_TXD_QW1_OFFSET_S;
-	if (ext.ip4 || ext.ip6)
-		offload |= ((hlen >> 2) << ICE_TX_DESC_LEN_IPLEN_S) <<
-		    ICE_TXD_QW1_OFFSET_S;
+	offload |= ((hlen >> 2) << ICE_TX_DESC_LEN_IPLEN_S) <<
+	    ICE_TXD_QW1_OFFSET_S;
 
-	/* TODO: enable offloading features */
+	if (ext->tcp && ISSET(m0->m_pkthdr.csum_flags, M_TCP_CSUM_OUT)) {
+		offload |= ICE_TX_DESC_CMD_L4T_EOFT_TCP << ICE_TXD_QW1_CMD_S;
+		offload |= ((uint64_t)(ext->tcphlen >> 2) <<
+		    ICE_TX_DESC_LEN_L4_LEN_S) << ICE_TXD_QW1_OFFSET_S;
+	} else if (ext->udp && ISSET(m0->m_pkthdr.csum_flags, M_UDP_CSUM_OUT)) {
+		offload |= ICE_TX_DESC_CMD_L4T_EOFT_UDP << ICE_TXD_QW1_CMD_S;
+		offload |= ((uint64_t)(sizeof(*ext->udp) >> 2) <<
+		    ICE_TX_DESC_LEN_L4_LEN_S) << ICE_TXD_QW1_OFFSET_S;
+	}
 
 	return offload;
 }
@@ -13553,6 +13804,36 @@ ice_load_mbuf(bus_dma_tag_t dmat, bus_dmamap_t map, struct mbuf *m)
 }
 
 void
+ice_set_tso_context(struct mbuf *m0, struct ice_tx_queue *txq,
+    unsigned int prod, struct ether_extracted *ext)
+{
+	struct ice_tx_desc *ring;
+	struct ice_tx_ctx_desc *txd;
+	uint64_t qword1 = 0, paylen, outlen;
+
+	/*
+	 * The MSS should not be set to a lower value than 64.
+	 */
+	outlen = MAX(64, m0->m_pkthdr.ph_mss);
+	paylen = m0->m_pkthdr.len - ETHER_HDR_LEN - ext->iphlen - ext->tcphlen;
+
+	ring = ICE_DMA_KVA(&txq->tx_desc_mem);
+	txd = (struct ice_tx_ctx_desc *)&ring[prod];
+
+	qword1 |= ICE_TX_DESC_DTYPE_CTX;
+	qword1 |= ICE_TX_CTX_DESC_TSO << ICE_TXD_CTX_QW1_CMD_S;
+	qword1 |= paylen << ICE_TXD_CTX_QW1_TSO_LEN_S;
+	qword1 |= outlen << ICE_TXD_CTX_QW1_MSS_S;
+
+	htolem32(&txd->tunneling_params, 0);
+	htolem16(&txd->l2tag2, 0);
+	htolem16(&txd->rsvd, 0);
+	htolem64(&txd->qw1, qword1);
+
+	tcpstat_add(tcps_outpkttso, (paylen + outlen - 1) / outlen);
+}
+
+void
 ice_start(struct ifqueue *ifq)
 {
 	struct ifnet *ifp = ifq->ifq_if;
@@ -13569,6 +13850,7 @@ ice_start(struct ifqueue *ifq)
 	uint64_t offload;
 	uint64_t paddr;
 	uint64_t seglen;
+	struct ether_extracted ext;
 #if NBPFILTER > 0
 	caddr_t if_bpf;
 #endif
@@ -13601,21 +13883,52 @@ ice_start(struct ifqueue *ifq)
 		if (m == NULL)
 			break;
 
-		offload = ice_tx_setup_offload(m, txq, prod);
+		ether_extract_headers(m, &ext);
+		offload = ice_tx_setup_offload(m, &ext);
+
+		if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO)) {
+			if (ext.tcp == NULL || m->m_pkthdr.ph_mss == 0 ||
+			    m->m_pkthdr.ph_mss > ICE_TXD_CTX_MAX_MSS) {
+				tcpstat_inc(tcps_outbadtso);
+				ifq->ifq_errors++;
+				m_freem(m);
+				continue;
+			}
+		}
 
 		txm = &txq->tx_map[prod];
 		map = txm->txm_map;
-#if 0
-		if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO)) {
-			prod++;
-			prod &= mask;
-			free--;
-		}
-#endif
+
 		if (ice_load_mbuf(sc->sc_dmat, map, m) != 0) {
 			ifq->ifq_errors++;
 			m_freem(m);
 			continue;
+		}
+
+		if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO)) {
+			if (ice_tso_detect_sparse(m, &ext, map)) {
+				bus_dmamap_unload(sc->sc_dmat, map);
+				if (m_defrag(m, M_DONTWAIT) != 0 ||
+				    bus_dmamap_load_mbuf(sc->sc_dmat, map, m,
+				    BUS_DMA_STREAMING | BUS_DMA_NOWAIT) != 0) {
+					tcpstat_inc(tcps_outbadtso);
+					ifq->ifq_errors++;
+					m_freem(m);
+					continue;
+				}
+				if (ice_tso_detect_sparse(m, &ext, map)) {
+					bus_dmamap_unload(sc->sc_dmat, map);
+					tcpstat_inc(tcps_outbadtso);
+					ifq->ifq_errors++;
+					m_freem(m);
+					continue;
+				}
+			}
+
+			ice_set_tso_context(m, txq, prod, &ext);
+			prod++;
+			prod &= mask;
+			free--;
 		}
 
 		bus_dmamap_sync(sc->sc_dmat, map, 0,
@@ -13845,7 +14158,7 @@ ice_get_phy_type_low(struct ice_softc *sc, uint64_t phy_type_low)
 		return IFM_100G_DR;
 #endif
 	default:
-		printf("%s: unhandled low PHY type 0x%llx\n",
+		DPRINTF("%s: unhandled low PHY type 0x%llx\n",
 		    sc->sc_dev.dv_xname, phy_type_low);
 		return IFM_INST_ANY;
 	}
@@ -13877,7 +14190,7 @@ ice_get_phy_type_high(struct ice_softc *sc, uint64_t phy_type_high)
 		return IFM_100G_AUI2;
 #endif
 	default:
-		printf("%s: unhandled high PHY type 0x%llx\n",
+		DPRINTF("%s: unhandled high PHY type 0x%llx\n",
 		    sc->sc_dev.dv_xname, phy_type_high);
 		return IFM_INST_ANY;
 	}
@@ -13907,10 +14220,14 @@ ice_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 		media = ice_get_phy_type_low(sc, li->phy_type_low);
 		if (media != IFM_INST_ANY)
 			ifmr->ifm_active |= media;
+		else
+			ifmr->ifm_active |= IFM_ETHER;
 	} else if (li->phy_type_high) {
 		media = ice_get_phy_type_high(sc, li->phy_type_high);
 		if (media != IFM_INST_ANY)
 			ifmr->ifm_active |= media;
+		else
+			ifmr->ifm_active |= IFM_ETHER;
 	}
 
 	/* Report flow control status as well */
@@ -14041,6 +14358,30 @@ ice_is_fw_health_report_supported(struct ice_hw *hw)
 }
 
 /**
+ * ice_disable_unsupported_features - Disable features not enabled by OS
+ * @bitmap: the feature bitmap
+ *
+ * Check for OS support of various driver features. Clear the feature bit for
+ * any feature which is not enabled by the OS. This should be called early
+ * during driver attach after setting up the feature bitmap.
+ */
+static inline void
+ice_disable_unsupported_features(ice_bitmap_t *bitmap)
+{
+	/* Not supported by FreeBSD driver. */
+	ice_clear_bit(ICE_FEATURE_SRIOV, bitmap);
+
+	/* Not applicable to OpenBSD. */
+	ice_clear_bit(ICE_FEATURE_NETMAP, bitmap);
+	ice_clear_bit(ICE_FEATURE_RDMA, bitmap);
+
+	/* Features not (yet?) supported by the OpenBSD driver. */
+	ice_clear_bit(ICE_FEATURE_DCB, bitmap);
+	ice_clear_bit(ICE_FEATURE_TEMP_SENSOR, bitmap);
+	ice_clear_bit(ICE_FEATURE_TX_BALANCE, bitmap);
+}
+
+/**
  * ice_init_device_features - Init device driver features
  * @sc: driver softc structure
  *
@@ -14083,14 +14424,13 @@ ice_init_device_features(struct ice_softc *sc)
 		else
 			ice_fwlog_unregister(hw);
 	}
-#if 0
 	/* Disable capabilities not supported by the OS */
 	ice_disable_unsupported_features(sc->feat_cap);
 
 	/* RSS is always enabled for iflib */
 	if (ice_is_bit_set(sc->feat_cap, ICE_FEATURE_RSS))
 		ice_set_bit(ICE_FEATURE_RSS, sc->feat_en);
-
+#if 0
 	/* Disable features based on sysctl settings */
 	if (!ice_tx_balance_en)
 		ice_clear_bit(ICE_FEATURE_TX_BALANCE, sc->feat_cap);
@@ -14170,14 +14510,219 @@ ice_send_version(struct ice_softc *sc)
 	return (0);
 }
 
-void
+int
 ice_reinit_hw(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
+	enum ice_fw_modes fw_mode;
+	enum ice_status status;
+	int err;
 
-	ice_deinit_hw(hw);
+	fw_mode = ice_get_fw_mode(hw);
+	if (fw_mode == ICE_FW_MODE_REC) {
+		printf("%s: firmware is in recovery mode\n",
+		    sc->sc_dev.dv_xname);
+#if 0
+		err = ice_attach_pre_recovery_mode(sc);
+		if (err)
+			goto free_pci_mapping;
+#endif
+		return ENODEV;
+	}
 
-	printf("%s: not implemented\n", __func__);
+	/* Initialize the hw data structure */
+	status = ice_init_hw(hw);
+	if (status) {
+		if (status == ICE_ERR_FW_API_VER) {
+			printf("%s: incompatible firmware API version\n",
+			    sc->sc_dev.dv_xname);
+#if 0
+			/* Enter recovery mode, so that the driver remains
+			 * loaded. This way, if the system administrator
+			 * cannot update the driver, they may still attempt to
+			 * downgrade the NVM.
+			 */
+			err = ice_attach_pre_recovery_mode(sc);
+			if (err)
+				goto free_pci_mapping;
+#endif
+			err = ENOTSUP;
+			goto deinit_hw;
+		} else {
+			printf("%s: could not initialize hardware, "
+			    "status %s aq_err %s\n",
+			    sc->sc_dev.dv_xname, ice_status_str(status),
+			    ice_aq_str(hw->adminq.sq_last_status));
+			err = EIO;
+			goto deinit_hw;
+		}
+	}
+
+	ice_init_device_features(sc);
+
+	/* Keep flag set by default */
+	ice_set_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN);
+
+	/* Notify firmware of the device driver version */
+	err = ice_send_version(sc);
+deinit_hw:
+	if (err)
+		ice_deinit_hw(hw);
+	return err;	
+}
+
+/**
+ * ice_get_set_tx_topo - get or set tx topology
+ * @hw: pointer to the HW struct
+ * @buf: pointer to tx topology buffer
+ * @buf_size: buffer size
+ * @cd: pointer to command details structure or NULL
+ * @flags: pointer to descriptor flags
+ * @set: 0-get, 1-set topology
+ *
+ * The function will get or set tx topology
+ */
+enum ice_status
+ice_get_set_tx_topo(struct ice_hw *hw, uint8_t *buf, uint16_t buf_size,
+		    struct ice_sq_cd *cd, uint8_t *flags, bool set)
+{
+	struct ice_aqc_get_set_tx_topo *cmd;
+	struct ice_aq_desc desc;
+	enum ice_status status;
+
+	cmd = &desc.params.get_set_tx_topo;
+	if (set) {
+		ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_tx_topo);
+		cmd->set_flags = ICE_AQC_TX_TOPO_FLAGS_ISSUED;
+		/* requested to update a new topology, not a default topolgy */
+		if (buf)
+			cmd->set_flags |= ICE_AQC_TX_TOPO_FLAGS_SRC_RAM |
+					  ICE_AQC_TX_TOPO_FLAGS_LOAD_NEW;
+	} else {
+		ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_get_tx_topo);
+		cmd->get_flags = ICE_AQC_TX_TOPO_GET_RAM;
+	}
+	desc.flags |= htole16(ICE_AQ_FLAG_RD);
+	status = ice_aq_send_cmd(hw, &desc, buf, buf_size, cd);
+	if (status)
+		return status;
+	/* read the return flag values (first byte) for get operation */
+	if (!set && flags)
+		*flags = desc.params.get_set_tx_topo.set_flags;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_verify_pkg - verify package
+ * @pkg: pointer to the package buffer
+ * @len: size of the package buffer
+ *
+ * Verifies various attributes of the package file, including length, format
+ * version, and the requirement of at least one segment.
+ */
+enum ice_ddp_state
+ice_verify_pkg(struct ice_pkg_hdr *pkg, uint32_t len)
+{
+	uint32_t seg_count;
+	uint32_t i;
+
+	if (len < ice_struct_size(pkg, seg_offset, 1))
+		return ICE_DDP_PKG_INVALID_FILE;
+
+	if (pkg->pkg_format_ver.major != ICE_PKG_FMT_VER_MAJ ||
+	    pkg->pkg_format_ver.minor != ICE_PKG_FMT_VER_MNR ||
+	    pkg->pkg_format_ver.update != ICE_PKG_FMT_VER_UPD ||
+	    pkg->pkg_format_ver.draft != ICE_PKG_FMT_VER_DFT)
+		return ICE_DDP_PKG_INVALID_FILE;
+
+	/* pkg must have at least one segment */
+	seg_count = le32toh(pkg->seg_count);
+	if (seg_count < 1)
+		return ICE_DDP_PKG_INVALID_FILE;
+
+	/* make sure segment array fits in package length */
+	if (len < ice_struct_size(pkg, seg_offset, seg_count))
+		return ICE_DDP_PKG_INVALID_FILE;
+
+	/* all segments must fit within length */
+	for (i = 0; i < seg_count; i++) {
+		uint32_t off = le32toh(pkg->seg_offset[i]);
+		struct ice_generic_seg_hdr *seg;
+
+		/* segment header must fit */
+		if (len < off + sizeof(*seg))
+			return ICE_DDP_PKG_INVALID_FILE;
+
+		seg = (struct ice_generic_seg_hdr *)((uint8_t *)pkg + off);
+
+		/* segment body must fit */
+		if (len < off + le32toh(seg->seg_size))
+			return ICE_DDP_PKG_INVALID_FILE;
+	}
+
+	return ICE_DDP_PKG_SUCCESS;
+}
+
+/**
+ * ice_find_seg_in_pkg
+ * @hw: pointer to the hardware structure
+ * @seg_type: the segment type to search for (i.e., SEGMENT_TYPE_CPK)
+ * @pkg_hdr: pointer to the package header to be searched
+ *
+ * This function searches a package file for a particular segment type. On
+ * success it returns a pointer to the segment header, otherwise it will
+ * return NULL.
+ */
+struct ice_generic_seg_hdr *
+ice_find_seg_in_pkg(struct ice_hw *hw, uint32_t seg_type,
+		    struct ice_pkg_hdr *pkg_hdr)
+{
+	uint32_t i;
+
+	DNPRINTF(ICE_DBG_PKG, "Package format version: %d.%d.%d.%d\n",
+		  pkg_hdr->pkg_format_ver.major, pkg_hdr->pkg_format_ver.minor,
+		  pkg_hdr->pkg_format_ver.update,
+		  pkg_hdr->pkg_format_ver.draft);
+
+	/* Search all package segments for the requested segment type */
+	for (i = 0; i < le32toh(pkg_hdr->seg_count); i++) {
+		struct ice_generic_seg_hdr *seg;
+
+		seg = (struct ice_generic_seg_hdr *)
+			((uint8_t *)pkg_hdr + le32toh(pkg_hdr->seg_offset[i]));
+
+		if (le32toh(seg->seg_type) == seg_type)
+			return seg;
+	}
+
+	return NULL;
+}
+
+/**
+ * ice_pkg_val_buf
+ * @buf: pointer to the ice buffer
+ *
+ * This helper function validates a buffer's header.
+ */
+struct ice_buf_hdr *
+ice_pkg_val_buf(struct ice_buf *buf)
+{
+	struct ice_buf_hdr *hdr;
+	uint16_t section_count;
+	uint16_t data_end;
+
+	hdr = (struct ice_buf_hdr *)buf->buf;
+	/* verify data */
+	section_count = le16toh(hdr->section_count);
+	if (section_count < ICE_MIN_S_COUNT || section_count > ICE_MAX_S_COUNT)
+		return NULL;
+
+	data_end = le16toh(hdr->data_end);
+	if (data_end < ICE_MIN_S_DATA_END || data_end > ICE_MAX_S_DATA_END)
+		return NULL;
+
+	return hdr;
 }
 
 /**
@@ -14190,29 +14735,30 @@ ice_reinit_hw(struct ice_softc *sc)
  * if available.
  */
 enum ice_status
-ice_cfg_tx_topo(struct ice_hw *hw, uint8_t *buf, uint32_t len)
+ice_cfg_tx_topo(struct ice_softc *sc, uint8_t *buf, uint32_t len)
 {
-#if 0
-	u8 *current_topo, *new_topo = NULL;
+	struct ice_hw *hw = &sc->hw;
+	uint8_t *current_topo, *new_topo = NULL;
 	struct ice_run_time_cfg_seg *seg;
 	struct ice_buf_hdr *section;
 	struct ice_pkg_hdr *pkg_hdr;
 	enum ice_ddp_state state;
-	u16 i, size = 0, offset;
+	uint16_t i, size = 0, offset;
 	enum ice_status status;
-	u32 reg = 0;
-	u8 flags;
+	uint32_t reg = 0;
+	uint8_t flags;
 
 	if (!buf || !len)
 		return ICE_ERR_PARAM;
 
 	/* Does FW support new Tx topology mode ? */
 	if (!hw->func_caps.common_cap.tx_sched_topo_comp_mode_en) {
-		ice_debug(hw, ICE_DBG_INIT, "FW doesn't support compatibility mode\n");
+		DNPRINTF(ICE_DBG_INIT,
+		    "FW doesn't support compatibility mode\n");
 		return ICE_ERR_NOT_SUPPORTED;
 	}
 
-	current_topo = (u8 *)ice_malloc(hw, ICE_AQ_MAX_BUF_LEN);
+	current_topo = (uint8_t *)ice_malloc(hw, ICE_AQ_MAX_BUF_LEN);
 	if (!current_topo)
 		return ICE_ERR_NO_MEMORY;
 
@@ -14222,14 +14768,14 @@ ice_cfg_tx_topo(struct ice_hw *hw, uint8_t *buf, uint32_t len)
 	ice_free(hw, current_topo);
 
 	if (status) {
-		ice_debug(hw, ICE_DBG_INIT, "Get current topology is failed\n");
+		DNPRINTF(ICE_DBG_INIT, "Get current topology is failed\n");
 		return status;
 	}
 
 	/* Is default topology already applied ? */
 	if (!(flags & ICE_AQC_TX_TOPO_FLAGS_LOAD_NEW) &&
 	    hw->num_tx_sched_layers == 9) {
-		ice_debug(hw, ICE_DBG_INIT, "Loaded default topology\n");
+		DNPRINTF(ICE_DBG_INIT, "Loaded default topology\n");
 		/* Already default topology is loaded */
 		return ICE_ERR_ALREADY_EXISTS;
 	}
@@ -14237,14 +14783,15 @@ ice_cfg_tx_topo(struct ice_hw *hw, uint8_t *buf, uint32_t len)
 	/* Is new topology already applied ? */
 	if ((flags & ICE_AQC_TX_TOPO_FLAGS_LOAD_NEW) &&
 	    hw->num_tx_sched_layers == 5) {
-		ice_debug(hw, ICE_DBG_INIT, "Loaded new topology\n");
+		DNPRINTF(ICE_DBG_INIT, "Loaded new topology\n");
 		/* Already new topology is loaded */
 		return ICE_ERR_ALREADY_EXISTS;
 	}
 
 	/* Is set topology issued already ? */
 	if (flags & ICE_AQC_TX_TOPO_FLAGS_ISSUED) {
-		ice_debug(hw, ICE_DBG_INIT, "Update tx topology was done by another PF\n");
+		DNPRINTF(ICE_DBG_INIT,
+		    "Update tx topology was done by another PF\n");
 		/* add a small delay before exiting */
 		for (i = 0; i < 20; i++)
 			ice_msec_delay(100, true);
@@ -14254,15 +14801,15 @@ ice_cfg_tx_topo(struct ice_hw *hw, uint8_t *buf, uint32_t len)
 	/* Change the topology from new to default (5 to 9) */
 	if (!(flags & ICE_AQC_TX_TOPO_FLAGS_LOAD_NEW) &&
 	    hw->num_tx_sched_layers == 5) {
-		ice_debug(hw, ICE_DBG_INIT, "Change topology from 5 to 9 layers\n");
+		DNPRINTF(ICE_DBG_INIT, "Change topology from 5 to 9 layers\n");
 		goto update_topo;
 	}
 
 	pkg_hdr = (struct ice_pkg_hdr *)buf;
 	state = ice_verify_pkg(pkg_hdr, len);
 	if (state) {
-		ice_debug(hw, ICE_DBG_INIT, "failed to verify pkg (err: %d)\n",
-			  state);
+		printf("%s: failed to verify firmware pkg (err: %d)\n",
+		    sc->sc_dev.dv_xname, state);
 		return ICE_ERR_CFG;
 	}
 
@@ -14270,39 +14817,42 @@ ice_cfg_tx_topo(struct ice_hw *hw, uint8_t *buf, uint32_t len)
 	seg = (struct ice_run_time_cfg_seg *)
 		ice_find_seg_in_pkg(hw, SEGMENT_TYPE_ICE_RUN_TIME_CFG, pkg_hdr);
 	if (!seg) {
-		ice_debug(hw, ICE_DBG_INIT, "5 layer topology segment is missing\n");
+		DNPRINTF(ICE_DBG_INIT, "5 layer topology segment is missing\n");
 		return ICE_ERR_CFG;
 	}
 
-	if (LE32_TO_CPU(seg->buf_table.buf_count) < ICE_MIN_S_COUNT) {
-		ice_debug(hw, ICE_DBG_INIT, "5 layer topology segment count(%d) is wrong\n",
-			  seg->buf_table.buf_count);
+	if (le32toh(seg->buf_table.buf_count) < ICE_MIN_S_COUNT) {
+		DNPRINTF(ICE_DBG_INIT,
+		    "5 layer topology segment count(%d) is wrong\n",
+		    seg->buf_table.buf_count);
 		return ICE_ERR_CFG;
 	}
 
 	section = ice_pkg_val_buf(seg->buf_table.buf_array);
 
-	if (!section || LE32_TO_CPU(section->section_entry[0].type) !=
+	if (!section || le32toh(section->section_entry[0].type) !=
 		ICE_SID_TX_5_LAYER_TOPO) {
-		ice_debug(hw, ICE_DBG_INIT, "5 layer topology section type is wrong\n");
+		DNPRINTF(ICE_DBG_INIT,
+		    "5 layer topology section type is wrong\n");
 		return ICE_ERR_CFG;
 	}
 
-	size = LE16_TO_CPU(section->section_entry[0].size);
-	offset = LE16_TO_CPU(section->section_entry[0].offset);
+	size = le16toh(section->section_entry[0].size);
+	offset = le16toh(section->section_entry[0].offset);
 	if (size < ICE_MIN_S_SZ || size > ICE_MAX_S_SZ) {
-		ice_debug(hw, ICE_DBG_INIT, "5 layer topology section size is wrong\n");
+		DNPRINTF(ICE_DBG_INIT,
+		    "5 layer topology section size is wrong\n");
 		return ICE_ERR_CFG;
 	}
 
 	/* make sure the section fits in the buffer */
 	if (offset + size > ICE_PKG_BUF_SIZE) {
-		ice_debug(hw, ICE_DBG_INIT, "5 layer topology buffer > 4K\n");
+		DNPRINTF(ICE_DBG_INIT, "5 layer topology buffer > 4K\n");
 		return ICE_ERR_CFG;
 	}
 
 	/* Get the new topology buffer */
-	new_topo = ((u8 *)section) + offset;
+	new_topo = ((uint8_t *)section) + offset;
 
 update_topo:
 	/* acquire global lock to make sure that set topology issued
@@ -14311,15 +14861,16 @@ update_topo:
 	status = ice_acquire_res(hw, ICE_GLOBAL_CFG_LOCK_RES_ID, ICE_RES_WRITE,
 				 ICE_GLOBAL_CFG_LOCK_TIMEOUT);
 	if (status) {
-		ice_debug(hw, ICE_DBG_INIT, "Failed to acquire global lock\n");
+		DNPRINTF(ICE_DBG_INIT, "Failed to acquire global lock\n");
 		return status;
 	}
 
 	/* check reset was triggered already or not */
-	reg = rd32(hw, GLGEN_RSTAT);
+	reg = ICE_READ(hw, GLGEN_RSTAT);
 	if (reg & GLGEN_RSTAT_DEVSTATE_M) {
 		/* Reset is in progress, re-init the hw again */
-		ice_debug(hw, ICE_DBG_INIT, "Reset is in progress. layer topology might be applied already\n");
+		DNPRINTF(ICE_DBG_INIT, "Reset is in progress. layer "
+		    "topology might be applied already\n");
 		ice_check_reset(hw);
 		return ICE_SUCCESS;
 	}
@@ -14327,7 +14878,7 @@ update_topo:
 	/* set new topology */
 	status = ice_get_set_tx_topo(hw, new_topo, size, NULL, NULL, true);
 	if (status) {
-		ice_debug(hw, ICE_DBG_INIT, "Set tx topology is failed\n");
+		DNPRINTF(ICE_DBG_INIT, "Set tx topology is failed\n");
 		return status;
 	}
 
@@ -14339,9 +14890,6 @@ update_topo:
 	 * required for release
 	 */
 	return ICE_SUCCESS;
-#else
-	return ICE_ERR_NOT_IMPL;
-#endif
 }
 
 /**
@@ -14419,11 +14967,9 @@ ice_active_pkg_version_str(struct ice_hw *hw, char *buf, size_t bufsize)
 void
 ice_os_pkg_version_str(struct ice_hw *hw, char *buf, size_t bufsize)
 {
-	char name_buf[ICE_PKG_NAME_SIZE];
-
-	/* If the OS DDP package info is empty, use "None" */
+	/* If the OS DDP package info is empty, use "" */
 	if (pkg_ver_empty(&hw->pkg_ver, hw->pkg_name)) {
-		snprintf(buf, bufsize, "None");
+		buf[0] = '\0';
 		return;
 	}
 
@@ -14432,10 +14978,7 @@ ice_os_pkg_version_str(struct ice_hw *hw, char *buf, size_t bufsize)
 	 * value from an external source, strlcpy() into a new buffer to
 	 * make sure.
 	 */
-	strlcpy(name_buf, (char *)hw->pkg_name, bufsize);
-
-	snprintf(buf, bufsize, "%s version %u.%u.%u.%u",
-	    name_buf,
+	snprintf(buf, bufsize, "%u.%u.%u.%u",
 	    hw->pkg_ver.major,
 	    hw->pkg_ver.minor,
 	    hw->pkg_ver.update,
@@ -14638,208 +15181,1152 @@ ice_log_pkg_init(struct ice_softc *sc, enum ice_ddp_state pkg_status)
 }
 
 /**
- * ice_copy_and_init_pkg - initialize/download a copy of the package
+ * ice_has_signing_seg - determine if package has a signing segment
  * @hw: pointer to the hardware structure
- * @buf: pointer to the package buffer
- * @len: size of the package buffer
- *
- * This function copies the package buffer, and then calls ice_init_pkg() to
- * initialize the copied package contents.
- *
- * The copying is necessary if the package buffer supplied is constant, or if
- * the memory may disappear shortly after calling this function.
- *
- * If the package buffer resides in the data segment and can be modified, the
- * caller is free to use ice_init_pkg() instead of ice_copy_and_init_pkg().
- *
- * However, if the package buffer needs to be copied first, such as when being
- * read from a file, the caller should use ice_copy_and_init_pkg().
- *
- * This function will first copy the package buffer, before calling
- * ice_init_pkg(). The caller is free to immediately destroy the original
- * package buffer, as the new copy will be managed by this function and
- * related routines.
+ * @pkg_hdr: pointer to the driver's package hdr
  */
-enum ice_ddp_state
-ice_copy_and_init_pkg(struct ice_hw *hw, const uint8_t *buf, uint32_t len)
+bool
+ice_has_signing_seg(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr)
 {
-#if 0
-	enum ice_ddp_state state;
-	u8 *buf_copy;
+	struct ice_generic_seg_hdr *seg_hdr;
 
-	if (!buf || !len)
-		return ICE_DDP_PKG_ERR;
+	seg_hdr = (struct ice_generic_seg_hdr *)
+		ice_find_seg_in_pkg(hw, SEGMENT_TYPE_SIGNING, pkg_hdr);
 
-	buf_copy = (u8 *)ice_memdup(hw, buf, len, ICE_NONDMA_TO_NONDMA);
-
-	state = ice_init_pkg(hw, buf_copy, len);
-	if (!ice_is_init_pkg_successful(state)) {
-		/* Free the copy, since we failed to initialize the package */
-		ice_free(hw, buf_copy);
-	} else {
-		/* Track the copied pkg so we can free it later */
-		hw->pkg_copy = buf_copy;
-		hw->pkg_size = len;
-	}
-	return state;
-#else
-	return ICE_DDP_PKG_ERR;
-#endif
+	return seg_hdr ? true : false;
 }
 
 /**
- * ice_load_pkg_file - Load the DDP package file using firmware_get
- * @sc: device private softc
- *
- * Use firmware_get to load the DDP package memory and then request that
- * firmware download the package contents and program the relevant hardware
- * bits.
- *
- * This function makes a copy of the DDP package memory which is tracked in
- * the ice_hw structure. The copy will be managed and released by
- * ice_deinit_hw(). This allows the firmware reference to be immediately
- * released using firmware_put.
+ * ice_get_pkg_segment_id - get correct package segment id, based on device
+ * @mac_type: MAC type of the device
  */
-enum ice_status
-ice_load_pkg_file(struct ice_softc *sc)
+uint32_t
+ice_get_pkg_segment_id(enum ice_mac_type mac_type)
 {
-	struct ice_hw *hw = &sc->hw;
-	enum ice_ddp_state state;
-	uint8_t *pkg;
-	size_t pkg_size;
-	enum ice_status status = ICE_SUCCESS;
-	uint8_t cached_layer_count;
-	const char *fwname = "ice-ddp";
-	int err;
+	uint32_t seg_id;
 
-	/*
-	 * XXX At present this driver always runs in safe mode.
-	 * Do not attempt to load firmware yet.
-	 */
-	status = ICE_ERR_NOT_IMPL;
-	goto err_load_pkg;
-
-	err = loadfirmware(fwname, &pkg, &pkg_size);
-	if (err) {
-		printf("%s: could not read firmware %s (error %d); "
-		    "entering safe mode\n", sc->sc_dev.dv_xname, fwname, err);
-		status = ICE_ERR_CFG;
-		goto err_load_pkg;
+	switch (mac_type) {
+	case ICE_MAC_GENERIC:
+	case ICE_MAC_GENERIC_3K:
+	case ICE_MAC_GENERIC_3K_E825:
+	default:
+		seg_id = SEGMENT_TYPE_ICE_E810;
+		break;
 	}
 
-	/* Check for topology change */
-	if (ice_is_bit_set(sc->feat_cap, ICE_FEATURE_TX_BALANCE)) {
-		cached_layer_count = hw->num_tx_sched_layers;
-		status = ice_cfg_tx_topo(&sc->hw, pkg, pkg_size);
-		/* Success indicates a change was made */
-		if (status == ICE_SUCCESS) {
-			/* 9 -> 5 */
-			if (cached_layer_count == 9)
-				DPRINTF("%s: Transmit balancing feature "
-				    "enabled\n", __func__);
-			else
-				DPRINTF("%s: Transmit balancing feature "
-				    "disabled\n", __func__);
-			ice_set_bit(ICE_FEATURE_TX_BALANCE, sc->feat_en);
-			free(pkg, M_DEVBUF, pkg_size);
-			return (status);
-		} else if (status == ICE_ERR_CFG) {
-			/* DDP does not support transmit balancing */
-			DPRINTF("%s: DDP package does not support transmit balancing "
-			    "feature - please update to the latest DDP package and "
-			    "try again\n", __func__);
+	return seg_id;
+}
+
+/**
+ * ice_get_pkg_sign_type - get package segment sign type, based on device
+ * @mac_type: MAC type of the device
+ */
+uint32_t
+ice_get_pkg_sign_type(enum ice_mac_type mac_type)
+{
+	uint32_t sign_type;
+
+	switch (mac_type) {
+	case ICE_MAC_GENERIC_3K:
+		sign_type = SEGMENT_SIGN_TYPE_RSA3K;
+		break;
+	case ICE_MAC_GENERIC_3K_E825:
+		sign_type = SEGMENT_SIGN_TYPE_RSA3K_E825;
+		break;
+	case ICE_MAC_GENERIC:
+	default:
+		sign_type = SEGMENT_SIGN_TYPE_RSA2K;
+		break;
+	}
+
+	return sign_type;
+}
+
+/**
+ * ice_get_signing_req - get correct package requirements, based on device
+ * @hw: pointer to the hardware structure
+ */
+void
+ice_get_signing_req(struct ice_hw *hw)
+{
+	hw->pkg_seg_id = ice_get_pkg_segment_id(hw->mac_type);
+	hw->pkg_sign_type = ice_get_pkg_sign_type(hw->mac_type);
+}
+
+/**
+ * ice_get_pkg_seg_by_idx
+ * @pkg_hdr: pointer to the package header to be searched
+ * @idx: index of segment
+ */
+struct ice_generic_seg_hdr *
+ice_get_pkg_seg_by_idx(struct ice_pkg_hdr *pkg_hdr, uint32_t idx)
+{
+	struct ice_generic_seg_hdr *seg = NULL;
+
+	if (idx < le32toh(pkg_hdr->seg_count))
+		seg = (struct ice_generic_seg_hdr *)
+			((uint8_t *)pkg_hdr +
+			 le32toh(pkg_hdr->seg_offset[idx]));
+
+	return seg;
+}
+/**
+ * ice_is_signing_seg_at_idx - determine if segment is a signing segment
+ * @pkg_hdr: pointer to package header
+ * @idx: segment index
+ */
+bool
+ice_is_signing_seg_at_idx(struct ice_pkg_hdr *pkg_hdr, uint32_t idx)
+{
+	struct ice_generic_seg_hdr *seg;
+	bool retval = false;
+
+	seg = ice_get_pkg_seg_by_idx(pkg_hdr, idx);
+	if (seg)
+		retval = le32toh(seg->seg_type) == SEGMENT_TYPE_SIGNING;
+
+	return retval;
+}
+
+/**
+ * ice_is_signing_seg_type_at_idx
+ * @pkg_hdr: pointer to package header
+ * @idx: segment index
+ * @seg_id: segment id that is expected
+ * @sign_type: signing type
+ *
+ * Determine if a segment is a signing segment of the correct type
+ */
+bool
+ice_is_signing_seg_type_at_idx(struct ice_pkg_hdr *pkg_hdr, uint32_t idx,
+    uint32_t seg_id, uint32_t sign_type)
+{
+	bool result = false;
+
+	if (ice_is_signing_seg_at_idx(pkg_hdr, idx)) {
+		struct ice_sign_seg *seg;
+
+		seg = (struct ice_sign_seg *)ice_get_pkg_seg_by_idx(pkg_hdr,
+								    idx);
+		if (seg && le32toh(seg->seg_id) == seg_id &&
+		    le32toh(seg->sign_type) == sign_type)
+			result = true;
+	}
+
+	return result;
+}
+
+/**
+ * ice_match_signing_seg - determine if a matching signing segment exists
+ * @pkg_hdr: pointer to package header
+ * @seg_id: segment id that is expected
+ * @sign_type: signing type
+ */
+bool
+ice_match_signing_seg(struct ice_pkg_hdr *pkg_hdr, uint32_t seg_id,
+    uint32_t sign_type)
+{
+	bool match = false;
+	uint32_t i;
+
+	for (i = 0; i < le32toh(pkg_hdr->seg_count); i++) {
+		if (ice_is_signing_seg_type_at_idx(pkg_hdr, i, seg_id,
+						   sign_type)) {
+			match = true;
+			break;
 		}
 	}
 
-	/* Copy and download the pkg contents */
-	state = ice_copy_and_init_pkg(hw, (const uint8_t *)pkg, pkg_size);
-
-	/* Release the firmware reference */
-	free(pkg, M_DEVBUF, pkg_size);
-
-	/* Check the active DDP package version and log a message */
-	ice_log_pkg_init(sc, state);
-
-	/* Place the driver into safe mode */
-	if (ice_is_init_pkg_successful(state))
-		return (ICE_ERR_ALREADY_EXISTS);
-
-err_load_pkg:
-	ice_zero_bitmap(sc->feat_cap, ICE_FEATURE_COUNT);
-	ice_zero_bitmap(sc->feat_en, ICE_FEATURE_COUNT);
-	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
-	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
-
-	return (status);
+	return match;
 }
 
 /**
- * ice_aq_set_event_mask
- * @hw: pointer to the HW struct
- * @port_num: port number of the physical function
- * @mask: event mask to be set
+ * ice_find_buf_table
+ * @ice_seg: pointer to the ice segment
+ *
+ * Returns the address of the buffer table within the ice segment.
+ */
+struct ice_buf_table *
+ice_find_buf_table(struct ice_seg *ice_seg)
+{
+	struct ice_nvm_table *nvms;
+
+	nvms = (struct ice_nvm_table *)
+		(ice_seg->device_table +
+		 le32toh(ice_seg->device_table_count));
+
+	return (struct ice_buf_table *)
+		(nvms->vers + le32toh(nvms->table_count));
+}
+
+/**
+ * ice_pkg_enum_buf
+ * @ice_seg: pointer to the ice segment (or NULL on subsequent calls)
+ * @state: pointer to the enum state
+ *
+ * This function will enumerate all the buffers in the ice segment. The first
+ * call is made with the ice_seg parameter non-NULL; on subsequent calls,
+ * ice_seg is set to NULL which continues the enumeration. When the function
+ * returns a NULL pointer, then the end of the buffers has been reached, or an
+ * unexpected value has been detected (for example an invalid section count or
+ * an invalid buffer end value).
+ */
+struct ice_buf_hdr *
+ice_pkg_enum_buf(struct ice_seg *ice_seg, struct ice_pkg_enum *state)
+{
+	if (ice_seg) {
+		state->buf_table = ice_find_buf_table(ice_seg);
+		if (!state->buf_table)
+			return NULL;
+
+		state->buf_idx = 0;
+		return ice_pkg_val_buf(state->buf_table->buf_array);
+	}
+
+	if (++state->buf_idx < le32toh(state->buf_table->buf_count))
+		return ice_pkg_val_buf(state->buf_table->buf_array +
+				       state->buf_idx);
+	else
+		return NULL;
+}
+
+/**
+ * ice_pkg_advance_sect
+ * @ice_seg: pointer to the ice segment (or NULL on subsequent calls)
+ * @state: pointer to the enum state
+ *
+ * This helper function will advance the section within the ice segment,
+ * also advancing the buffer if needed.
+ */
+bool
+ice_pkg_advance_sect(struct ice_seg *ice_seg, struct ice_pkg_enum *state)
+{
+	if (!ice_seg && !state->buf)
+		return false;
+
+	if (!ice_seg && state->buf)
+		if (++state->sect_idx < le16toh(state->buf->section_count))
+			return true;
+
+	state->buf = ice_pkg_enum_buf(ice_seg, state);
+	if (!state->buf)
+		return false;
+
+	/* start of new buffer, reset section index */
+	state->sect_idx = 0;
+	return true;
+}
+
+/**
+ * ice_pkg_enum_section
+ * @ice_seg: pointer to the ice segment (or NULL on subsequent calls)
+ * @state: pointer to the enum state
+ * @sect_type: section type to enumerate
+ *
+ * This function will enumerate all the sections of a particular type in the
+ * ice segment. The first call is made with the ice_seg parameter non-NULL;
+ * on subsequent calls, ice_seg is set to NULL which continues the enumeration.
+ * When the function returns a NULL pointer, then the end of the matching
+ * sections has been reached.
+ */
+void *
+ice_pkg_enum_section(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
+		     uint32_t sect_type)
+{
+	uint16_t offset, size;
+
+	if (ice_seg)
+		state->type = sect_type;
+
+	if (!ice_pkg_advance_sect(ice_seg, state))
+		return NULL;
+
+	/* scan for next matching section */
+	while (state->buf->section_entry[state->sect_idx].type !=
+	       htole32(state->type))
+		if (!ice_pkg_advance_sect(NULL, state))
+			return NULL;
+
+	/* validate section */
+	offset = le16toh(state->buf->section_entry[state->sect_idx].offset);
+	if (offset < ICE_MIN_S_OFF || offset > ICE_MAX_S_OFF)
+		return NULL;
+
+	size = le16toh(state->buf->section_entry[state->sect_idx].size);
+	if (size < ICE_MIN_S_SZ || size > ICE_MAX_S_SZ)
+		return NULL;
+
+	/* make sure the section fits in the buffer */
+	if (offset + size > ICE_PKG_BUF_SIZE)
+		return NULL;
+
+	state->sect_type =
+		le32toh(state->buf->section_entry[state->sect_idx].type);
+
+	/* calc pointer to this section */
+	state->sect = ((uint8_t *)state->buf) +
+		le16toh(state->buf->section_entry[state->sect_idx].offset);
+
+	return state->sect;
+}
+
+/**
+ * ice_init_pkg_info
+ * @hw: pointer to the hardware structure
+ * @pkg_hdr: pointer to the driver's package hdr
+ *
+ * Saves off the package details into the HW structure.
+ */
+enum ice_ddp_state
+ice_init_pkg_info(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr)
+{
+	struct ice_generic_seg_hdr *seg_hdr;
+
+	if (!pkg_hdr)
+		return ICE_DDP_PKG_ERR;
+
+	hw->pkg_has_signing_seg = ice_has_signing_seg(hw, pkg_hdr);
+	ice_get_signing_req(hw);
+
+	DNPRINTF(ICE_DBG_INIT, "Pkg using segment id: 0x%08X\n",
+	    hw->pkg_seg_id);
+
+	seg_hdr = (struct ice_generic_seg_hdr *)
+		ice_find_seg_in_pkg(hw, hw->pkg_seg_id, pkg_hdr);
+	if (seg_hdr) {
+		struct ice_meta_sect *meta;
+		struct ice_pkg_enum state;
+
+		memset(&state, 0, sizeof(state));
+
+		/* Get package information from the Metadata Section */
+		meta = (struct ice_meta_sect *)
+			ice_pkg_enum_section((struct ice_seg *)seg_hdr, &state,
+					     ICE_SID_METADATA);
+		if (!meta) {
+			DNPRINTF(ICE_DBG_INIT,
+			    "Did not find ice metadata section in package\n");
+			return ICE_DDP_PKG_INVALID_FILE;
+		}
+
+		hw->pkg_ver = meta->ver;
+		memcpy(hw->pkg_name, meta->name, sizeof(meta->name));
+
+		DNPRINTF(ICE_DBG_PKG, "Pkg: %d.%d.%d.%d, %s\n",
+			  meta->ver.major, meta->ver.minor, meta->ver.update,
+			  meta->ver.draft, meta->name);
+
+		hw->ice_seg_fmt_ver = seg_hdr->seg_format_ver;
+		memcpy(hw->ice_seg_id, seg_hdr->seg_id, sizeof(hw->ice_seg_id));
+
+		DNPRINTF(ICE_DBG_PKG, "Ice Seg: %d.%d.%d.%d, %s\n",
+			  seg_hdr->seg_format_ver.major,
+			  seg_hdr->seg_format_ver.minor,
+			  seg_hdr->seg_format_ver.update,
+			  seg_hdr->seg_format_ver.draft,
+			  seg_hdr->seg_id);
+	} else {
+		DNPRINTF(ICE_DBG_INIT,
+		    "Did not find ice segment in driver package\n");
+		return ICE_DDP_PKG_INVALID_FILE;
+	}
+
+	return ICE_DDP_PKG_SUCCESS;
+}
+
+/**
+ * ice_chk_pkg_version - check package version for compatibility with driver
+ * @pkg_ver: pointer to a version structure to check
+ *
+ * Check to make sure that the package about to be downloaded is compatible with
+ * the driver. To be compatible, the major and minor components of the package
+ * version must match our ICE_PKG_SUPP_VER_MAJ and ICE_PKG_SUPP_VER_MNR
+ * definitions.
+ */
+enum ice_ddp_state
+ice_chk_pkg_version(struct ice_pkg_ver *pkg_ver)
+{
+	if (pkg_ver->major > ICE_PKG_SUPP_VER_MAJ ||
+	    (pkg_ver->major == ICE_PKG_SUPP_VER_MAJ &&
+	     pkg_ver->minor > ICE_PKG_SUPP_VER_MNR))
+		return ICE_DDP_PKG_FILE_VERSION_TOO_HIGH;
+	else if (pkg_ver->major < ICE_PKG_SUPP_VER_MAJ ||
+		 (pkg_ver->major == ICE_PKG_SUPP_VER_MAJ &&
+		  pkg_ver->minor < ICE_PKG_SUPP_VER_MNR))
+		return ICE_DDP_PKG_FILE_VERSION_TOO_LOW;
+
+	return ICE_DDP_PKG_SUCCESS;
+}
+
+/**
+ * ice_aq_get_pkg_info_list
+ * @hw: pointer to the hardware structure
+ * @pkg_info: the buffer which will receive the information list
+ * @buf_size: the size of the pkg_info information buffer
  * @cd: pointer to command details structure or NULL
  *
- * Set event mask (0x0613)
+ * Get Package Info List (0x0C43)
  */
 enum ice_status
-ice_aq_set_event_mask(struct ice_hw *hw, uint8_t port_num, uint16_t mask,
-		      struct ice_sq_cd *cd)
+ice_aq_get_pkg_info_list(struct ice_hw *hw,
+			 struct ice_aqc_get_pkg_info_resp *pkg_info,
+			 uint16_t buf_size, struct ice_sq_cd *cd)
 {
-	struct ice_aqc_set_event_mask *cmd;
 	struct ice_aq_desc desc;
 
-	cmd = &desc.params.set_event_mask;
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_get_pkg_info_list);
 
-	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_event_mask);
+	return ice_aq_send_cmd(hw, &desc, pkg_info, buf_size, cd);
+}
 
-	cmd->lport_num = port_num;
+/**
+ * ice_chk_pkg_compat
+ * @hw: pointer to the hardware structure
+ * @ospkg: pointer to the package hdr
+ * @seg: pointer to the package segment hdr
+ *
+ * This function checks the package version compatibility with driver and NVM
+ */
+enum ice_ddp_state
+ice_chk_pkg_compat(struct ice_hw *hw, struct ice_pkg_hdr *ospkg,
+		   struct ice_seg **seg)
+{
+	struct ice_aqc_get_pkg_info_resp *pkg;
+	enum ice_ddp_state state;
+	uint16_t size;
+	uint32_t i;
 
-	cmd->event_mask = htole16(mask);
+	/* Check package version compatibility */
+	state = ice_chk_pkg_version(&hw->pkg_ver);
+	if (state) {
+		DNPRINTF(ICE_DBG_INIT, "Package version check failed.\n");
+		return state;
+	}
+
+	/* find ICE segment in given package */
+	*seg = (struct ice_seg *)ice_find_seg_in_pkg(hw, hw->pkg_seg_id,
+						     ospkg);
+	if (!*seg) {
+		DNPRINTF(ICE_DBG_INIT, "no ice segment in package.\n");
+		return ICE_DDP_PKG_INVALID_FILE;
+	}
+
+	/* Check if FW is compatible with the OS package */
+	size = ice_struct_size(pkg, pkg_info, ICE_PKG_CNT);
+	pkg = (struct ice_aqc_get_pkg_info_resp *)ice_malloc(hw, size);
+	if (!pkg)
+		return ICE_DDP_PKG_ERR;
+
+	if (ice_aq_get_pkg_info_list(hw, pkg, size, NULL)) {
+		state = ICE_DDP_PKG_ERR;
+		goto fw_ddp_compat_free_alloc;
+	}
+
+	for (i = 0; i < le32toh(pkg->count); i++) {
+		/* loop till we find the NVM package */
+		if (!pkg->pkg_info[i].is_in_nvm)
+			continue;
+		if ((*seg)->hdr.seg_format_ver.major !=
+		    pkg->pkg_info[i].ver.major ||
+		    (*seg)->hdr.seg_format_ver.minor >
+		    pkg->pkg_info[i].ver.minor) {
+			state = ICE_DDP_PKG_FW_MISMATCH;
+			DNPRINTF(ICE_DBG_INIT,
+			    "OS package is not compatible with NVM.\n");
+		}
+		/* done processing NVM package so break */
+		break;
+	}
+fw_ddp_compat_free_alloc:
+	ice_free(hw, pkg);
+	return state;
+}
+
+/**
+ * ice_pkg_enum_entry
+ * @ice_seg: pointer to the ice segment (or NULL on subsequent calls)
+ * @state: pointer to the enum state
+ * @sect_type: section type to enumerate
+ * @offset: pointer to variable that receives the offset in the table (optional)
+ * @handler: function that handles access to the entries into the section type
+ *
+ * This function will enumerate all the entries in particular section type in
+ * the ice segment. The first call is made with the ice_seg parameter non-NULL;
+ * on subsequent calls, ice_seg is set to NULL which continues the enumeration.
+ * When the function returns a NULL pointer, then the end of the entries has
+ * been reached.
+ *
+ * Since each section may have a different header and entry size, the handler
+ * function is needed to determine the number and location entries in each
+ * section.
+ *
+ * The offset parameter is optional, but should be used for sections that
+ * contain an offset for each section table. For such cases, the section handler
+ * function must return the appropriate offset + index to give the absolution
+ * offset for each entry. For example, if the base for a section's header
+ * indicates a base offset of 10, and the index for the entry is 2, then
+ * section handler function should set the offset to 10 + 2 = 12.
+ */
+void *
+ice_pkg_enum_entry(struct ice_seg *ice_seg, struct ice_pkg_enum *state,
+    uint32_t sect_type, uint32_t *offset, void *(*handler)(uint32_t sect_type,
+    void *section, uint32_t index, uint32_t *offset))
+{
+	void *entry;
+
+	if (ice_seg) {
+		if (!handler)
+			return NULL;
+
+		if (!ice_pkg_enum_section(ice_seg, state, sect_type))
+			return NULL;
+
+		state->entry_idx = 0;
+		state->handler = handler;
+	} else {
+		state->entry_idx++;
+	}
+
+	if (!state->handler)
+		return NULL;
+
+	/* get entry */
+	entry = state->handler(state->sect_type, state->sect, state->entry_idx,
+			       offset);
+	if (!entry) {
+		/* end of a section, look for another section of this type */
+		if (!ice_pkg_enum_section(NULL, state, 0))
+			return NULL;
+
+		state->entry_idx = 0;
+		entry = state->handler(state->sect_type, state->sect,
+				       state->entry_idx, offset);
+	}
+
+	return entry;
+}
+
+/**
+ * ice_label_enum_handler
+ * @sect_type: section type
+ * @section: pointer to section
+ * @index: index of the label entry to be returned
+ * @offset: pointer to receive absolute offset, always zero for label sections
+ *
+ * This is a callback function that can be passed to ice_pkg_enum_entry.
+ * Handles enumeration of individual label entries.
+ */
+void *
+ice_label_enum_handler(uint32_t sect_type, void *section, uint32_t index,
+		       uint32_t *offset)
+{
+	struct ice_label_section *labels;
+
+	if (!section)
+		return NULL;
+
+	if (index > ICE_MAX_LABELS_IN_BUF)
+		return NULL;
+
+	if (offset)
+		*offset = 0;
+
+	labels = (struct ice_label_section *)section;
+	if (index >= le16toh(labels->count))
+		return NULL;
+
+	return labels->label + index;
+}
+
+/**
+ * ice_enum_labels
+ * @ice_seg: pointer to the ice segment (NULL on subsequent calls)
+ * @type: the section type that will contain the label (0 on subsequent calls)
+ * @state: ice_pkg_enum structure that will hold the state of the enumeration
+ * @value: pointer to a value that will return the label's value if found
+ *
+ * Enumerates a list of labels in the package. The caller will call
+ * ice_enum_labels(ice_seg, type, ...) to start the enumeration, then call
+ * ice_enum_labels(NULL, 0, ...) to continue. When the function returns a NULL
+ * the end of the list has been reached.
+ */
+char *
+ice_enum_labels(struct ice_seg *ice_seg, uint32_t type,
+    struct ice_pkg_enum *state, uint16_t *value)
+{
+	struct ice_label *label;
+
+	/* Check for valid label section on first call */
+	if (type && !(type >= ICE_SID_LBL_FIRST && type <= ICE_SID_LBL_LAST))
+		return NULL;
+
+	label = (struct ice_label *)ice_pkg_enum_entry(ice_seg, state, type,
+	    NULL, ice_label_enum_handler);
+	if (!label)
+		return NULL;
+
+	*value = le16toh(label->value);
+	return label->name;
+}
+
+/**
+ * ice_boost_tcam_handler
+ * @sect_type: section type
+ * @section: pointer to section
+ * @index: index of the boost TCAM entry to be returned
+ * @offset: pointer to receive absolute offset, always 0 for boost TCAM sections
+ *
+ * This is a callback function that can be passed to ice_pkg_enum_entry.
+ * Handles enumeration of individual boost TCAM entries.
+ */
+void *
+ice_boost_tcam_handler(uint32_t sect_type, void *section, uint32_t index,
+    uint32_t *offset)
+{
+	struct ice_boost_tcam_section *boost;
+
+	if (!section)
+		return NULL;
+
+	if (sect_type != ICE_SID_RXPARSER_BOOST_TCAM)
+		return NULL;
+
+	if (index > ICE_MAX_BST_TCAMS_IN_BUF)
+		return NULL;
+
+	if (offset)
+		*offset = 0;
+
+	boost = (struct ice_boost_tcam_section *)section;
+	if (index >= le16toh(boost->count))
+		return NULL;
+
+	return boost->tcam + index;
+}
+
+/**
+ * ice_find_boost_entry
+ * @ice_seg: pointer to the ice segment (non-NULL)
+ * @addr: Boost TCAM address of entry to search for
+ * @entry: returns pointer to the entry
+ *
+ * Finds a particular Boost TCAM entry and returns a pointer to that entry
+ * if it is found. The ice_seg parameter must not be NULL since the first call
+ * to ice_pkg_enum_entry requires a pointer to an actual ice_segment structure.
+ */
+enum ice_status
+ice_find_boost_entry(struct ice_seg *ice_seg, uint16_t addr,
+		     struct ice_boost_tcam_entry **entry)
+{
+	struct ice_boost_tcam_entry *tcam;
+	struct ice_pkg_enum state;
+
+	memset(&state, 0, sizeof(state));
+
+	if (!ice_seg)
+		return ICE_ERR_PARAM;
+
+	do {
+		tcam = (struct ice_boost_tcam_entry *)
+		       ice_pkg_enum_entry(ice_seg, &state,
+					  ICE_SID_RXPARSER_BOOST_TCAM, NULL,
+					  ice_boost_tcam_handler);
+		if (tcam && le16toh(tcam->addr) == addr) {
+			*entry = tcam;
+			return ICE_SUCCESS;
+		}
+
+		ice_seg = NULL;
+	} while (tcam);
+
+	*entry = NULL;
+	return ICE_ERR_CFG;
+}
+
+static const struct ice_tunnel_type_scan tnls[] = {
+	{ TNL_VXLAN,		"TNL_VXLAN_PF" },
+	{ TNL_GENEVE,		"TNL_GENEVE_PF" },
+	{ TNL_LAST,		"" }
+};
+
+/**
+ * ice_add_tunnel_hint
+ * @hw: pointer to the HW structure
+ * @label_name: label text
+ * @val: value of the tunnel port boost entry
+ */
+void
+ice_add_tunnel_hint(struct ice_hw *hw, char *label_name, uint16_t val)
+{
+	if (hw->tnl.count < ICE_TUNNEL_MAX_ENTRIES) {
+		uint16_t i;
+
+		for (i = 0; tnls[i].type != TNL_LAST; i++) {
+			size_t len = strlen(tnls[i].label_prefix);
+
+			/* Look for matching label start, before continuing */
+			if (strncmp(label_name, tnls[i].label_prefix, len))
+				continue;
+
+			/* Make sure this label matches our PF. Note that the
+			 * PF character ('0' - '7') will be located where our
+			 * prefix string's null terminator is located.
+			 */
+			if ((label_name[len] - '0') == hw->pf_id) {
+				hw->tnl.tbl[hw->tnl.count].type = tnls[i].type;
+				hw->tnl.tbl[hw->tnl.count].valid = false;
+				hw->tnl.tbl[hw->tnl.count].in_use = false;
+				hw->tnl.tbl[hw->tnl.count].marked = false;
+				hw->tnl.tbl[hw->tnl.count].boost_addr = val;
+				hw->tnl.tbl[hw->tnl.count].port = 0;
+				hw->tnl.count++;
+				break;
+			}
+		}
+	}
+}
+
+/**
+ * ice_init_pkg_hints
+ * @hw: pointer to the HW structure
+ * @ice_seg: pointer to the segment of the package scan (non-NULL)
+ *
+ * This function will scan the package and save off relevant information
+ * (hints or metadata) for driver use. The ice_seg parameter must not be NULL
+ * since the first call to ice_enum_labels requires a pointer to an actual
+ * ice_seg structure.
+ */
+void
+ice_init_pkg_hints(struct ice_hw *hw, struct ice_seg *ice_seg)
+{
+	struct ice_pkg_enum state;
+	char *label_name;
+	uint16_t val;
+	int i;
+
+	memset(&hw->tnl, 0, sizeof(hw->tnl));
+	memset(&state, 0, sizeof(state));
+
+	if (!ice_seg)
+		return;
+
+	label_name = ice_enum_labels(ice_seg, ICE_SID_LBL_RXPARSER_TMEM, &state,
+				     &val);
+
+	while (label_name) {
+		if (!strncmp(label_name, ICE_TNL_PRE, strlen(ICE_TNL_PRE)))
+			/* check for a tunnel entry */
+			ice_add_tunnel_hint(hw, label_name, val);
+
+		label_name = ice_enum_labels(NULL, 0, &state, &val);
+	}
+
+	/* Cache the appropriate boost TCAM entry pointers for tunnels */
+	for (i = 0; i < hw->tnl.count; i++) {
+		ice_find_boost_entry(ice_seg, hw->tnl.tbl[i].boost_addr,
+		    &hw->tnl.tbl[i].boost_entry);
+		if (hw->tnl.tbl[i].boost_entry)
+			hw->tnl.tbl[i].valid = true;
+	}
+}
+
+/**
+ * ice_acquire_global_cfg_lock
+ * @hw: pointer to the HW structure
+ * @access: access type (read or write)
+ *
+ * This function will request ownership of the global config lock for reading
+ * or writing of the package. When attempting to obtain write access, the
+ * caller must check for the following two return values:
+ *
+ * ICE_SUCCESS        - Means the caller has acquired the global config lock
+ *                      and can perform writing of the package.
+ * ICE_ERR_AQ_NO_WORK - Indicates another driver has already written the
+ *                      package or has found that no update was necessary; in
+ *                      this case, the caller can just skip performing any
+ *                      update of the package.
+ */
+enum ice_status
+ice_acquire_global_cfg_lock(struct ice_hw *hw,
+			    enum ice_aq_res_access_type access)
+{
+	enum ice_status status;
+
+	status = ice_acquire_res(hw, ICE_GLOBAL_CFG_LOCK_RES_ID, access,
+	    ICE_GLOBAL_CFG_LOCK_TIMEOUT);
+
+	if (status == ICE_ERR_AQ_NO_WORK)
+		DNPRINTF(ICE_DBG_PKG, "Global config lock: No work to do\n");
+
+	return status;
+}
+
+/**
+ * ice_release_global_cfg_lock
+ * @hw: pointer to the HW structure
+ *
+ * This function will release the global config lock.
+ */
+void
+ice_release_global_cfg_lock(struct ice_hw *hw)
+{
+	ice_release_res(hw, ICE_GLOBAL_CFG_LOCK_RES_ID);
+}
+
+enum ice_ddp_state
+ice_map_aq_err_to_ddp_state(enum ice_aq_err aq_err)
+{
+	switch (aq_err) {
+	case ICE_AQ_RC_ENOSEC:
+		return ICE_DDP_PKG_NO_SEC_MANIFEST;
+	case ICE_AQ_RC_EBADSIG:
+		return ICE_DDP_PKG_FILE_SIGNATURE_INVALID;
+	case ICE_AQ_RC_ESVN:
+		return ICE_DDP_PKG_SECURE_VERSION_NBR_TOO_LOW;
+	case ICE_AQ_RC_EBADMAN:
+		return ICE_DDP_PKG_MANIFEST_INVALID;
+	case ICE_AQ_RC_EBADBUF:
+		return ICE_DDP_PKG_BUFFER_INVALID;
+	default:
+		return ICE_DDP_PKG_ERR;
+	}
+}
+
+/**
+ * ice_is_buffer_metadata - determine if package buffer is a metadata buffer
+ * @buf: pointer to buffer header
+ */
+bool
+ice_is_buffer_metadata(struct ice_buf_hdr *buf)
+{
+	return !!(le32toh(buf->section_entry[0].type) & ICE_METADATA_BUF);
+}
+
+/**
+ * ice_is_last_download_buffer
+ * @buf: pointer to current buffer header
+ * @idx: index of the buffer in the current sequence
+ * @count: the buffer count in the current sequence
+ *
+ * Note: this routine should only be called if the buffer is not the last buffer
+ */
+bool
+ice_is_last_download_buffer(struct ice_buf_hdr *buf, uint32_t idx,
+    uint32_t count)
+{
+	bool last = ((idx + 1) == count);
+
+	/* A set metadata flag in the next buffer will signal that the current
+	 * buffer will be the last buffer downloaded
+	 */
+	if (!last) {
+		struct ice_buf *next_buf = ((struct ice_buf *)buf) + 1;
+
+		last = ice_is_buffer_metadata((struct ice_buf_hdr *)next_buf);
+	}
+
+	return last;
+}
+
+/**
+ * ice_aq_download_pkg
+ * @hw: pointer to the hardware structure
+ * @pkg_buf: the package buffer to transfer
+ * @buf_size: the size of the package buffer
+ * @last_buf: last buffer indicator
+ * @error_offset: returns error offset
+ * @error_info: returns error information
+ * @cd: pointer to command details structure or NULL
+ *
+ * Download Package (0x0C40)
+ */
+enum ice_status
+ice_aq_download_pkg(struct ice_hw *hw, struct ice_buf_hdr *pkg_buf,
+		    uint16_t buf_size, bool last_buf, uint32_t *error_offset,
+		    uint32_t *error_info, struct ice_sq_cd *cd)
+{
+	struct ice_aqc_download_pkg *cmd;
+	struct ice_aq_desc desc;
+	enum ice_status status;
+
+	if (error_offset)
+		*error_offset = 0;
+	if (error_info)
+		*error_info = 0;
+
+	cmd = &desc.params.download_pkg;
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_download_pkg);
+	desc.flags |= htole16(ICE_AQ_FLAG_RD);
+
+	if (last_buf)
+		cmd->flags |= ICE_AQC_DOWNLOAD_PKG_LAST_BUF;
+
+	status = ice_aq_send_cmd(hw, &desc, pkg_buf, buf_size, cd);
+	if (status == ICE_ERR_AQ_ERROR) {
+		/* Read error from buffer only when the FW returned an error */
+		struct ice_aqc_download_pkg_resp *resp;
+
+		resp = (struct ice_aqc_download_pkg_resp *)pkg_buf;
+		if (error_offset)
+			*error_offset = le32toh(resp->error_offset);
+		if (error_info)
+			*error_info = le32toh(resp->error_info);
+	}
+
+	return status;
+}
+
+/**
+ * ice_dwnld_cfg_bufs_no_lock
+ * @hw: pointer to the hardware structure
+ * @bufs: pointer to an array of buffers
+ * @start: buffer index of first buffer to download
+ * @count: the number of buffers to download
+ * @indicate_last: if true, then set last buffer flag on last buffer download
+ *
+ * Downloads package configuration buffers to the firmware. Metadata buffers
+ * are skipped, and the first metadata buffer found indicates that the rest
+ * of the buffers are all metadata buffers.
+ */
+enum ice_ddp_state
+ice_dwnld_cfg_bufs_no_lock(struct ice_hw *hw, struct ice_buf *bufs,
+    uint32_t start, uint32_t count, bool indicate_last)
+{
+	enum ice_ddp_state state = ICE_DDP_PKG_SUCCESS;
+	struct ice_buf_hdr *bh;
+	enum ice_aq_err err;
+	uint32_t offset, info, i;
+
+	if (!bufs || !count)
+		return ICE_DDP_PKG_ERR;
+
+	/* If the first buffer's first section has its metadata bit set
+	 * then there are no buffers to be downloaded, and the operation is
+	 * considered a success.
+	 */
+	bh = (struct ice_buf_hdr *)(bufs + start);
+	if (le32toh(bh->section_entry[0].type) & ICE_METADATA_BUF)
+		return ICE_DDP_PKG_SUCCESS;
+
+	for (i = 0; i < count; i++) {
+		enum ice_status status;
+		bool last = false;
+
+		bh = (struct ice_buf_hdr *)(bufs + start + i);
+
+		if (indicate_last)
+			last = ice_is_last_download_buffer(bh, i, count);
+
+		status = ice_aq_download_pkg(hw, bh, ICE_PKG_BUF_SIZE, last,
+					     &offset, &info, NULL);
+
+		/* Save AQ status from download package */
+		if (status) {
+			DNPRINTF(ICE_DBG_PKG,
+			    "Pkg download failed: err %d off %d inf %d\n",
+			    status, offset, info);
+			err = hw->adminq.sq_last_status;
+			state = ice_map_aq_err_to_ddp_state(err);
+			break;
+		}
+
+		if (last)
+			break;
+	}
+
+	return state;
+}
+
+/**
+ * ice_download_pkg_sig_seg - download a signature segment
+ * @hw: pointer to the hardware structure
+ * @seg: pointer to signature segment
+ */
+enum ice_ddp_state
+ice_download_pkg_sig_seg(struct ice_hw *hw, struct ice_sign_seg *seg)
+{
+	enum ice_ddp_state state;
+
+	state = ice_dwnld_cfg_bufs_no_lock(hw, seg->buf_tbl.buf_array, 0,
+	    le32toh(seg->buf_tbl.buf_count), false);
+
+	return state;
+}
+
+/**
+ * ice_download_pkg_config_seg - download a config segment
+ * @hw: pointer to the hardware structure
+ * @pkg_hdr: pointer to package header
+ * @idx: segment index
+ * @start: starting buffer
+ * @count: buffer count
+ *
+ * Note: idx must reference a ICE segment
+ */
+enum ice_ddp_state
+ice_download_pkg_config_seg(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr,
+    uint32_t idx, uint32_t start, uint32_t count)
+{
+	struct ice_buf_table *bufs;
+	struct ice_seg *seg;
+	uint32_t buf_count;
+
+	seg = (struct ice_seg *)ice_get_pkg_seg_by_idx(pkg_hdr, idx);
+	if (!seg)
+		return ICE_DDP_PKG_ERR;
+
+	bufs = ice_find_buf_table(seg);
+	buf_count = le32toh(bufs->buf_count);
+
+	if (start >= buf_count || start + count > buf_count)
+		return ICE_DDP_PKG_ERR;
+
+	return ice_dwnld_cfg_bufs_no_lock(hw, bufs->buf_array, start, count,
+	    true);
+}
+
+/**
+ * ice_dwnld_sign_and_cfg_segs - download a signing segment and config segment
+ * @hw: pointer to the hardware structure
+ * @pkg_hdr: pointer to package header
+ * @idx: segment index (must be a signature segment)
+ *
+ * Note: idx must reference a signature segment
+ */
+enum ice_ddp_state
+ice_dwnld_sign_and_cfg_segs(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr,
+    uint32_t idx)
+{
+	enum ice_ddp_state state;
+	struct ice_sign_seg *seg;
+	uint32_t conf_idx;
+	uint32_t start;
+	uint32_t count;
+
+	seg = (struct ice_sign_seg *)ice_get_pkg_seg_by_idx(pkg_hdr, idx);
+	if (!seg)
+		return ICE_DDP_PKG_ERR;
+
+	conf_idx = le32toh(seg->signed_seg_idx);
+	start = le32toh(seg->signed_buf_start);
+	count = le32toh(seg->signed_buf_count);
+
+	state = ice_download_pkg_sig_seg(hw, seg);
+	if (state)
+		return state;
+
+	return ice_download_pkg_config_seg(hw, pkg_hdr, conf_idx, start, count);
+}
+
+/**
+ * ice_aq_set_port_params - set physical port parameters
+ * @pi: pointer to the port info struct
+ * @bad_frame_vsi: defines the VSI to which bad frames are forwarded
+ * @save_bad_pac: if set packets with errors are forwarded to the bad frames VSI
+ * @pad_short_pac: if set transmit packets smaller than 60 bytes are padded
+ * @double_vlan: if set double VLAN is enabled
+ * @cd: pointer to command details structure or NULL
+ *
+ * Set Physical port parameters (0x0203)
+ */
+enum ice_status
+ice_aq_set_port_params(struct ice_port_info *pi, uint16_t bad_frame_vsi,
+		       bool save_bad_pac, bool pad_short_pac, bool double_vlan,
+		       struct ice_sq_cd *cd)
+{
+	struct ice_aqc_set_port_params *cmd;
+	struct ice_hw *hw = pi->hw;
+	struct ice_aq_desc desc;
+	uint16_t cmd_flags = 0;
+
+	cmd = &desc.params.set_port_params;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_port_params);
+	cmd->bad_frame_vsi = htole16(bad_frame_vsi);
+	if (save_bad_pac)
+		cmd_flags |= ICE_AQC_SET_P_PARAMS_SAVE_BAD_PACKETS;
+	if (pad_short_pac)
+		cmd_flags |= ICE_AQC_SET_P_PARAMS_PAD_SHORT_PACKETS;
+	if (double_vlan)
+		cmd_flags |= ICE_AQC_SET_P_PARAMS_DOUBLE_VLAN_ENA;
+	cmd->cmd_flags = htole16(cmd_flags);
+
 	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
 }
 
 /**
- * ice_init_link_events - Initialize Link Status Events mask
- * @sc: the device softc
+ * ice_aq_set_vlan_mode - set the VLAN mode of the device
+ * @hw: pointer to the HW structure
+ * @set_params: requested VLAN mode configuration
  *
- * Initialize the Link Status Events mask to disable notification of link
- * events we don't care about in software. Also request that link status
- * events be enabled.
+ * Set VLAN Mode Parameters (0x020C)
  */
-int
-ice_init_link_events(struct ice_softc *sc)
+enum ice_status
+ice_aq_set_vlan_mode(struct ice_hw *hw,
+		     struct ice_aqc_set_vlan_mode *set_params)
 {
-	struct ice_hw *hw = &sc->hw;
+	uint8_t rdma_packet, mng_vlan_prot_id;
+	struct ice_aq_desc desc;
+
+	if (!set_params)
+		return ICE_ERR_PARAM;
+
+	if (set_params->l2tag_prio_tagging > ICE_AQ_VLAN_PRIO_TAG_MAX)
+		return ICE_ERR_PARAM;
+
+	rdma_packet = set_params->rdma_packet;
+	if (rdma_packet != ICE_AQ_SVM_VLAN_RDMA_PKT_FLAG_SETTING &&
+	    rdma_packet != ICE_AQ_DVM_VLAN_RDMA_PKT_FLAG_SETTING)
+		return ICE_ERR_PARAM;
+
+	mng_vlan_prot_id = set_params->mng_vlan_prot_id;
+	if (mng_vlan_prot_id != ICE_AQ_VLAN_MNG_PROTOCOL_ID_OUTER &&
+	    mng_vlan_prot_id != ICE_AQ_VLAN_MNG_PROTOCOL_ID_INNER)
+		return ICE_ERR_PARAM;
+
+	ice_fill_dflt_direct_cmd_desc(&desc,
+				      ice_aqc_opc_set_vlan_mode_parameters);
+	desc.flags |= htole16(ICE_AQ_FLAG_RD);
+
+	return ice_aq_send_cmd(hw, &desc, set_params, sizeof(*set_params),
+			       NULL);
+}
+
+/**
+ * ice_set_svm - set single VLAN mode
+ * @hw: pointer to the HW structure
+ */
+enum ice_status
+ice_set_svm(struct ice_hw *hw)
+{
+	struct ice_aqc_set_vlan_mode *set_params;
 	enum ice_status status;
-	uint16_t wanted_events;
 
-	/* Set the bits for the events that we want to be notified by */
-	wanted_events = (ICE_AQ_LINK_EVENT_UPDOWN |
-			 ICE_AQ_LINK_EVENT_MEDIA_NA |
-			 ICE_AQ_LINK_EVENT_MODULE_QUAL_FAIL);
-
-	/* request that every event except the wanted events be masked */
-	status = ice_aq_set_event_mask(hw, hw->port_info->lport, ~wanted_events, NULL);
+	status = ice_aq_set_port_params(hw->port_info, 0,
+	    false, false, false, NULL);
 	if (status) {
-		printf("%s: Failed to set link status event mask, "
-		    "err %s aq_err %s\n", sc->sc_dev.dv_xname,
-		    ice_status_str(status),
-		    ice_aq_str(hw->adminq.sq_last_status));
-		return (EIO);
+		DNPRINTF(ICE_DBG_INIT,
+		    "Failed to set port parameters for single VLAN mode\n");
+		return status;
 	}
 
-	/* Request link info with the LSE bit set to enable link status events */
-	status = ice_aq_get_link_info(hw->port_info, true, NULL, NULL);
-	if (status) {
-		printf("%s: Failed to enable link status events, "
-		    "err %s aq_err %s\n", sc->sc_dev.dv_xname,
-		    ice_status_str(status),
-		    ice_aq_str(hw->adminq.sq_last_status));
-		return (EIO);
-	}
+	set_params = (struct ice_aqc_set_vlan_mode *)
+		ice_malloc(hw, sizeof(*set_params));
+	if (!set_params)
+		return ICE_ERR_NO_MEMORY;
 
-	return (0);
+	/* default configuration for SVM configurations */
+	set_params->l2tag_prio_tagging = ICE_AQ_VLAN_PRIO_TAG_INNER_CTAG;
+	set_params->rdma_packet = ICE_AQ_SVM_VLAN_RDMA_PKT_FLAG_SETTING;
+	set_params->mng_vlan_prot_id = ICE_AQ_VLAN_MNG_PROTOCOL_ID_INNER;
+
+	status = ice_aq_set_vlan_mode(hw, set_params);
+	if (status)
+		DNPRINTF(ICE_DBG_INIT,
+		    "Failed to configure port in single VLAN mode\n");
+
+	ice_free(hw, set_params);
+	return status;
 }
 
 /**
@@ -14988,116 +16475,6 @@ ice_is_dvm_supported(struct ice_hw *hw)
 	return true;
 }
 
-/**
- * ice_aq_set_port_params - set physical port parameters
- * @pi: pointer to the port info struct
- * @bad_frame_vsi: defines the VSI to which bad frames are forwarded
- * @save_bad_pac: if set packets with errors are forwarded to the bad frames VSI
- * @pad_short_pac: if set transmit packets smaller than 60 bytes are padded
- * @double_vlan: if set double VLAN is enabled
- * @cd: pointer to command details structure or NULL
- *
- * Set Physical port parameters (0x0203)
- */
-enum ice_status
-ice_aq_set_port_params(struct ice_port_info *pi, uint16_t bad_frame_vsi,
-		       bool save_bad_pac, bool pad_short_pac, bool double_vlan,
-		       struct ice_sq_cd *cd)
-{
-	struct ice_aqc_set_port_params *cmd;
-	struct ice_hw *hw = pi->hw;
-	struct ice_aq_desc desc;
-	uint16_t cmd_flags = 0;
-
-	cmd = &desc.params.set_port_params;
-
-	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_port_params);
-	cmd->bad_frame_vsi = htole16(bad_frame_vsi);
-	if (save_bad_pac)
-		cmd_flags |= ICE_AQC_SET_P_PARAMS_SAVE_BAD_PACKETS;
-	if (pad_short_pac)
-		cmd_flags |= ICE_AQC_SET_P_PARAMS_PAD_SHORT_PACKETS;
-	if (double_vlan)
-		cmd_flags |= ICE_AQC_SET_P_PARAMS_DOUBLE_VLAN_ENA;
-	cmd->cmd_flags = htole16(cmd_flags);
-
-	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
-}
-
-/**
- * ice_aq_set_vlan_mode - set the VLAN mode of the device
- * @hw: pointer to the HW structure
- * @set_params: requested VLAN mode configuration
- *
- * Set VLAN Mode Parameters (0x020C)
- */
-enum ice_status
-ice_aq_set_vlan_mode(struct ice_hw *hw,
-		     struct ice_aqc_set_vlan_mode *set_params)
-{
-	uint8_t rdma_packet, mng_vlan_prot_id;
-	struct ice_aq_desc desc;
-
-	if (!set_params)
-		return ICE_ERR_PARAM;
-
-	if (set_params->l2tag_prio_tagging > ICE_AQ_VLAN_PRIO_TAG_MAX)
-		return ICE_ERR_PARAM;
-
-	rdma_packet = set_params->rdma_packet;
-	if (rdma_packet != ICE_AQ_SVM_VLAN_RDMA_PKT_FLAG_SETTING &&
-	    rdma_packet != ICE_AQ_DVM_VLAN_RDMA_PKT_FLAG_SETTING)
-		return ICE_ERR_PARAM;
-
-	mng_vlan_prot_id = set_params->mng_vlan_prot_id;
-	if (mng_vlan_prot_id != ICE_AQ_VLAN_MNG_PROTOCOL_ID_OUTER &&
-	    mng_vlan_prot_id != ICE_AQ_VLAN_MNG_PROTOCOL_ID_INNER)
-		return ICE_ERR_PARAM;
-
-	ice_fill_dflt_direct_cmd_desc(&desc,
-				      ice_aqc_opc_set_vlan_mode_parameters);
-	desc.flags |= htole16(ICE_AQ_FLAG_RD);
-
-	return ice_aq_send_cmd(hw, &desc, set_params, sizeof(*set_params),
-			       NULL);
-}
-
-/**
- * ice_set_svm - set single VLAN mode
- * @hw: pointer to the HW structure
- */
-enum ice_status
-ice_set_svm(struct ice_hw *hw)
-{
-	struct ice_aqc_set_vlan_mode *set_params;
-	enum ice_status status;
-
-	status = ice_aq_set_port_params(hw->port_info, 0,
-	    false, false, false, NULL);
-	if (status) {
-		DNPRINTF(ICE_DBG_INIT,
-		    "Failed to set port parameters for single VLAN mode\n");
-		return status;
-	}
-
-	set_params = (struct ice_aqc_set_vlan_mode *)
-		ice_malloc(hw, sizeof(*set_params));
-	if (!set_params)
-		return ICE_ERR_NO_MEMORY;
-
-	/* default configuration for SVM configurations */
-	set_params->l2tag_prio_tagging = ICE_AQ_VLAN_PRIO_TAG_INNER_CTAG;
-	set_params->rdma_packet = ICE_AQ_SVM_VLAN_RDMA_PKT_FLAG_SETTING;
-	set_params->mng_vlan_prot_id = ICE_AQ_VLAN_MNG_PROTOCOL_ID_INNER;
-
-	status = ice_aq_set_vlan_mode(hw, set_params);
-	if (status)
-		DNPRINTF(ICE_DBG_INIT,
-		    "Failed to configure port in single VLAN mode\n");
-
-	ice_free(hw, set_params);
-	return status;
-}
 
 /**
  * ice_set_vlan_mode
@@ -15110,6 +16487,1229 @@ ice_set_vlan_mode(struct ice_hw *hw)
 		return ICE_SUCCESS;
 
 	return ice_set_svm(hw);
+}
+
+/**
+ * ice_post_dwnld_pkg_actions - perform post download package actions
+ * @hw: pointer to the hardware structure
+ */
+enum ice_ddp_state
+ice_post_dwnld_pkg_actions(struct ice_hw *hw)
+{
+	enum ice_ddp_state state = ICE_DDP_PKG_SUCCESS;
+	enum ice_status status;
+
+	status = ice_set_vlan_mode(hw);
+	if (status) {
+		DNPRINTF(ICE_DBG_PKG, "Failed to set VLAN mode: err %d\n",
+		    status);
+		state = ICE_DDP_PKG_ERR;
+	}
+
+	return state;
+}
+
+/**
+ * ice_download_pkg_with_sig_seg - download package using signature segments
+ * @hw: pointer to the hardware structure
+ * @pkg_hdr: pointer to package header
+ */
+enum ice_ddp_state
+ice_download_pkg_with_sig_seg(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr)
+{
+	enum ice_aq_err aq_err = hw->adminq.sq_last_status;
+	enum ice_ddp_state state = ICE_DDP_PKG_ERR;
+	enum ice_status status;
+	uint32_t i;
+
+	DNPRINTF(ICE_DBG_INIT, "Segment ID %d\n", hw->pkg_seg_id);
+	DNPRINTF(ICE_DBG_INIT, "Signature type %d\n", hw->pkg_sign_type);
+
+	status = ice_acquire_global_cfg_lock(hw, ICE_RES_WRITE);
+	if (status) {
+		if (status == ICE_ERR_AQ_NO_WORK)
+			state = ICE_DDP_PKG_ALREADY_LOADED;
+		else
+			state = ice_map_aq_err_to_ddp_state(aq_err);
+		return state;
+	}
+
+	for (i = 0; i < le32toh(pkg_hdr->seg_count); i++) {
+		if (!ice_is_signing_seg_type_at_idx(pkg_hdr, i, hw->pkg_seg_id,
+						    hw->pkg_sign_type))
+			continue;
+
+		state = ice_dwnld_sign_and_cfg_segs(hw, pkg_hdr, i);
+		if (state)
+			break;
+	}
+
+	if (!state)
+		state = ice_post_dwnld_pkg_actions(hw);
+
+	ice_release_global_cfg_lock(hw);
+
+	return state;
+}
+
+/**
+ * ice_dwnld_cfg_bufs
+ * @hw: pointer to the hardware structure
+ * @bufs: pointer to an array of buffers
+ * @count: the number of buffers in the array
+ *
+ * Obtains global config lock and downloads the package configuration buffers
+ * to the firmware.
+ */
+enum ice_ddp_state
+ice_dwnld_cfg_bufs(struct ice_hw *hw, struct ice_buf *bufs, uint32_t count)
+{
+	enum ice_ddp_state state = ICE_DDP_PKG_SUCCESS;
+	enum ice_status status;
+	struct ice_buf_hdr *bh;
+
+	if (!bufs || !count)
+		return ICE_DDP_PKG_ERR;
+
+	/* If the first buffer's first section has its metadata bit set
+	 * then there are no buffers to be downloaded, and the operation is
+	 * considered a success.
+	 */
+	bh = (struct ice_buf_hdr *)bufs;
+	if (le32toh(bh->section_entry[0].type) & ICE_METADATA_BUF)
+		return ICE_DDP_PKG_SUCCESS;
+
+	status = ice_acquire_global_cfg_lock(hw, ICE_RES_WRITE);
+	if (status) {
+		if (status == ICE_ERR_AQ_NO_WORK)
+			return ICE_DDP_PKG_ALREADY_LOADED;
+		return ice_map_aq_err_to_ddp_state(hw->adminq.sq_last_status);
+	}
+
+	state = ice_dwnld_cfg_bufs_no_lock(hw, bufs, 0, count, true);
+	if (!state)
+		state = ice_post_dwnld_pkg_actions(hw);
+
+	ice_release_global_cfg_lock(hw);
+
+	return state;
+}
+/**
+ * ice_download_pkg_without_sig_seg
+ * @hw: pointer to the hardware structure
+ * @ice_seg: pointer to the segment of the package to be downloaded
+ *
+ * Handles the download of a complete package without signature segment.
+ */
+enum ice_ddp_state
+ice_download_pkg_without_sig_seg(struct ice_hw *hw, struct ice_seg *ice_seg)
+{
+	struct ice_buf_table *ice_buf_tbl;
+
+	DNPRINTF(ICE_DBG_PKG, "Segment format version: %d.%d.%d.%d\n",
+	    ice_seg->hdr.seg_format_ver.major,
+	    ice_seg->hdr.seg_format_ver.minor,
+	    ice_seg->hdr.seg_format_ver.update,
+	    ice_seg->hdr.seg_format_ver.draft);
+
+	DNPRINTF(ICE_DBG_PKG, "Seg: type 0x%X, size %d, name %s\n",
+	    le32toh(ice_seg->hdr.seg_type),
+	    le32toh(ice_seg->hdr.seg_size), ice_seg->hdr.seg_id);
+
+	ice_buf_tbl = ice_find_buf_table(ice_seg);
+
+	DNPRINTF(ICE_DBG_PKG, "Seg buf count: %d\n",
+	    le32toh(ice_buf_tbl->buf_count));
+
+	return ice_dwnld_cfg_bufs(hw, ice_buf_tbl->buf_array,
+	    le32toh(ice_buf_tbl->buf_count));
+}
+
+/**
+ * ice_aq_is_dvm_ena - query FW to check if double VLAN mode is enabled
+ * @hw: pointer to the HW structure
+ *
+ * Returns true if the hardware/firmware is configured in double VLAN mode,
+ * else return false signaling that the hardware/firmware is configured in
+ * single VLAN mode.
+ *
+ * Also, return false if this call fails for any reason (i.e. firmware doesn't
+ * support this AQ call).
+ */
+bool
+ice_aq_is_dvm_ena(struct ice_hw *hw)
+{
+	struct ice_aqc_get_vlan_mode get_params = { 0 };
+	enum ice_status status;
+
+	status = ice_aq_get_vlan_mode(hw, &get_params);
+	if (status) {
+		DNPRINTF(ICE_DBG_AQ, "Failed to get VLAN mode, status %d\n",
+		    status);
+		return false;
+	}
+
+	return (get_params.vlan_mode & ICE_AQ_VLAN_MODE_DVM_ENA);
+}
+
+/**
+ * ice_cache_vlan_mode - cache VLAN mode after DDP is downloaded
+ * @hw: pointer to the HW structure
+ *
+ * This is only called after downloading the DDP and after the global
+ * configuration lock has been released because all ports on a device need to
+ * cache the VLAN mode.
+ */
+void
+ice_cache_vlan_mode(struct ice_hw *hw)
+{
+	hw->dvm_ena = ice_aq_is_dvm_ena(hw) ? true : false;
+}
+
+/**
+ * ice_post_pkg_dwnld_vlan_mode_cfg - configure VLAN mode after DDP download
+ * @hw: pointer to the HW structure
+ *
+ * This function is meant to configure any VLAN mode specific functionality
+ * after the global configuration lock has been released and the DDP has been
+ * downloaded.
+ *
+ * Since only one PF downloads the DDP and configures the VLAN mode there needs
+ * to be a way to configure the other PFs after the DDP has been downloaded and
+ * the global configuration lock has been released. All such code should go in
+ * this function.
+ */
+void
+ice_post_pkg_dwnld_vlan_mode_cfg(struct ice_hw *hw)
+{
+	ice_cache_vlan_mode(hw);
+}
+
+/**
+ * ice_download_pkg
+ * @hw: pointer to the hardware structure
+ * @pkg_hdr: pointer to package header
+ * @ice_seg: pointer to the segment of the package to be downloaded
+ *
+ * Handles the download of a complete package.
+ */
+enum ice_ddp_state
+ice_download_pkg(struct ice_hw *hw, struct ice_pkg_hdr *pkg_hdr,
+		 struct ice_seg *ice_seg)
+{
+	enum ice_ddp_state state;
+
+	if (hw->pkg_has_signing_seg)
+		state = ice_download_pkg_with_sig_seg(hw, pkg_hdr);
+	else
+		state = ice_download_pkg_without_sig_seg(hw, ice_seg);
+
+	ice_post_pkg_dwnld_vlan_mode_cfg(hw);
+
+	return state;
+}
+
+/**
+ * ice_get_pkg_info
+ * @hw: pointer to the hardware structure
+ *
+ * Store details of the package currently loaded in HW into the HW structure.
+ */
+enum ice_ddp_state
+ice_get_pkg_info(struct ice_hw *hw)
+{
+	enum ice_ddp_state state = ICE_DDP_PKG_SUCCESS;
+	struct ice_aqc_get_pkg_info_resp *pkg_info;
+	uint16_t size;
+	uint32_t i;
+
+	size = ice_struct_size(pkg_info, pkg_info, ICE_PKG_CNT);
+	pkg_info = (struct ice_aqc_get_pkg_info_resp *)ice_malloc(hw, size);
+	if (!pkg_info)
+		return ICE_DDP_PKG_ERR;
+
+	if (ice_aq_get_pkg_info_list(hw, pkg_info, size, NULL)) {
+		state = ICE_DDP_PKG_ERR;
+		goto init_pkg_free_alloc;
+	}
+
+	for (i = 0; i < le32toh(pkg_info->count); i++) {
+#define ICE_PKG_FLAG_COUNT	4
+		char flags[ICE_PKG_FLAG_COUNT + 1] = { 0 };
+		uint8_t place = 0;
+
+		if (pkg_info->pkg_info[i].is_active) {
+			flags[place++] = 'A';
+			hw->active_pkg_ver = pkg_info->pkg_info[i].ver;
+			hw->active_track_id =
+				le32toh(pkg_info->pkg_info[i].track_id);
+			memcpy(hw->active_pkg_name, pkg_info->pkg_info[i].name,
+				   sizeof(pkg_info->pkg_info[i].name));
+			hw->active_pkg_in_nvm = pkg_info->pkg_info[i].is_in_nvm;
+		}
+		if (pkg_info->pkg_info[i].is_active_at_boot)
+			flags[place++] = 'B';
+		if (pkg_info->pkg_info[i].is_modified)
+			flags[place++] = 'M';
+		if (pkg_info->pkg_info[i].is_in_nvm)
+			flags[place++] = 'N';
+
+		DNPRINTF(ICE_DBG_PKG, "Pkg[%d]: %d.%d.%d.%d,%s,%s\n",
+		    i, pkg_info->pkg_info[i].ver.major,
+		    pkg_info->pkg_info[i].ver.minor, 
+		    pkg_info->pkg_info[i].ver.update,
+		    pkg_info->pkg_info[i].ver.draft,
+		    pkg_info->pkg_info[i].name, flags);
+	}
+
+init_pkg_free_alloc:
+	ice_free(hw, pkg_info);
+
+	return state;
+}
+
+/**
+ * ice_get_ddp_pkg_state - get DDP pkg state after download
+ * @hw: pointer to the HW struct
+ * @already_loaded: indicates if pkg was already loaded onto the device
+ *
+ */
+enum ice_ddp_state
+ice_get_ddp_pkg_state(struct ice_hw *hw, bool already_loaded)
+{
+	if (hw->pkg_ver.major == hw->active_pkg_ver.major &&
+	    hw->pkg_ver.minor == hw->active_pkg_ver.minor &&
+	    hw->pkg_ver.update == hw->active_pkg_ver.update &&
+	    hw->pkg_ver.draft == hw->active_pkg_ver.draft &&
+	    !memcmp(hw->pkg_name, hw->active_pkg_name, sizeof(hw->pkg_name))) {
+		if (already_loaded)
+			return ICE_DDP_PKG_SAME_VERSION_ALREADY_LOADED;
+		else
+			return ICE_DDP_PKG_SUCCESS;
+	} else if (hw->active_pkg_ver.major != ICE_PKG_SUPP_VER_MAJ ||
+		   hw->active_pkg_ver.minor != ICE_PKG_SUPP_VER_MNR) {
+		return ICE_DDP_PKG_ALREADY_LOADED_NOT_SUPPORTED;
+	} else if (hw->active_pkg_ver.major == ICE_PKG_SUPP_VER_MAJ &&
+		   hw->active_pkg_ver.minor == ICE_PKG_SUPP_VER_MNR) {
+		return ICE_DDP_PKG_COMPATIBLE_ALREADY_LOADED;
+	} else {
+		return ICE_DDP_PKG_ERR;
+	}
+}
+
+/**
+ * ice_init_pkg_regs - initialize additional package registers
+ * @hw: pointer to the hardware structure
+ */
+void
+ice_init_pkg_regs(struct ice_hw *hw)
+{
+#define ICE_SW_BLK_INP_MASK_L 0xFFFFFFFF
+#define ICE_SW_BLK_INP_MASK_H 0x0000FFFF
+#define ICE_SW_BLK_IDX	0
+
+	/* setup Switch block input mask, which is 48-bits in two parts */
+	ICE_WRITE(hw, GL_PREEXT_L2_PMASK0(ICE_SW_BLK_IDX),
+	    ICE_SW_BLK_INP_MASK_L);
+	ICE_WRITE(hw, GL_PREEXT_L2_PMASK1(ICE_SW_BLK_IDX),
+	    ICE_SW_BLK_INP_MASK_H);
+}
+
+/**
+ * ice_ptg_alloc_val - Allocates a new packet type group ID by value
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @ptg: the PTG to allocate
+ *
+ * This function allocates a given packet type group ID specified by the PTG
+ * parameter.
+ */
+void
+ice_ptg_alloc_val(struct ice_hw *hw, enum ice_block blk, uint8_t ptg)
+{
+	hw->blk[blk].xlt1.ptg_tbl[ptg].in_use = true;
+}
+
+/**
+ * ice_ptg_find_ptype - Search for packet type group using packet type (ptype)
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @ptype: the ptype to search for
+ * @ptg: pointer to variable that receives the PTG
+ *
+ * This function will search the PTGs for a particular ptype, returning the
+ * PTG ID that contains it through the PTG parameter, with the value of
+ * ICE_DEFAULT_PTG (0) meaning it is part the default PTG.
+ */
+enum ice_status
+ice_ptg_find_ptype(struct ice_hw *hw, enum ice_block blk, uint16_t ptype,
+    uint8_t *ptg)
+{
+	if (ptype >= ICE_XLT1_CNT || !ptg)
+		return ICE_ERR_PARAM;
+
+	*ptg = hw->blk[blk].xlt1.ptypes[ptype].ptg;
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_ptg_remove_ptype - Removes ptype from a particular packet type group
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @ptype: the ptype to remove
+ * @ptg: the PTG to remove the ptype from
+ *
+ * This function will remove the ptype from the specific PTG, and move it to
+ * the default PTG (ICE_DEFAULT_PTG).
+ */
+enum ice_status
+ice_ptg_remove_ptype(struct ice_hw *hw, enum ice_block blk, uint16_t ptype,
+    uint8_t ptg)
+{
+	struct ice_ptg_ptype **ch;
+	struct ice_ptg_ptype *p;
+
+	if (ptype > ICE_XLT1_CNT - 1)
+		return ICE_ERR_PARAM;
+
+	if (!hw->blk[blk].xlt1.ptg_tbl[ptg].in_use)
+		return ICE_ERR_DOES_NOT_EXIST;
+
+	/* Should not happen if .in_use is set, bad config */
+	if (!hw->blk[blk].xlt1.ptg_tbl[ptg].first_ptype)
+		return ICE_ERR_CFG;
+
+	/* find the ptype within this PTG, and bypass the link over it */
+	p = hw->blk[blk].xlt1.ptg_tbl[ptg].first_ptype;
+	ch = &hw->blk[blk].xlt1.ptg_tbl[ptg].first_ptype;
+	while (p) {
+		if (ptype == (p - hw->blk[blk].xlt1.ptypes)) {
+			*ch = p->next_ptype;
+			break;
+		}
+
+		ch = &p->next_ptype;
+		p = p->next_ptype;
+	}
+
+	hw->blk[blk].xlt1.ptypes[ptype].ptg = ICE_DEFAULT_PTG;
+	hw->blk[blk].xlt1.ptypes[ptype].next_ptype = NULL;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_ptg_add_mv_ptype - Adds/moves ptype to a particular packet type group
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @ptype: the ptype to add or move
+ * @ptg: the PTG to add or move the ptype to
+ *
+ * This function will either add or move a ptype to a particular PTG depending
+ * on if the ptype is already part of another group. Note that using a
+ * a destination PTG ID of ICE_DEFAULT_PTG (0) will move the ptype to the
+ * default PTG.
+ */
+enum ice_status
+ice_ptg_add_mv_ptype(struct ice_hw *hw, enum ice_block blk, uint16_t ptype,
+    uint8_t ptg)
+{
+	enum ice_status status;
+	uint8_t original_ptg;
+
+	if (ptype > ICE_XLT1_CNT - 1)
+		return ICE_ERR_PARAM;
+
+	if (!hw->blk[blk].xlt1.ptg_tbl[ptg].in_use && ptg != ICE_DEFAULT_PTG)
+		return ICE_ERR_DOES_NOT_EXIST;
+
+	status = ice_ptg_find_ptype(hw, blk, ptype, &original_ptg);
+	if (status)
+		return status;
+
+	/* Is ptype already in the correct PTG? */
+	if (original_ptg == ptg)
+		return ICE_SUCCESS;
+
+	/* Remove from original PTG and move back to the default PTG */
+	if (original_ptg != ICE_DEFAULT_PTG)
+		ice_ptg_remove_ptype(hw, blk, ptype, original_ptg);
+
+	/* Moving to default PTG? Then we're done with this request */
+	if (ptg == ICE_DEFAULT_PTG)
+		return ICE_SUCCESS;
+
+	/* Add ptype to PTG at beginning of list */
+	hw->blk[blk].xlt1.ptypes[ptype].next_ptype =
+		hw->blk[blk].xlt1.ptg_tbl[ptg].first_ptype;
+	hw->blk[blk].xlt1.ptg_tbl[ptg].first_ptype =
+		&hw->blk[blk].xlt1.ptypes[ptype];
+
+	hw->blk[blk].xlt1.ptypes[ptype].ptg = ptg;
+	hw->blk[blk].xlt1.t[ptype] = ptg;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_init_sw_xlt1_db - init software XLT1 database from HW tables
+ * @hw: pointer to the hardware structure
+ * @blk: the HW block to initialize
+ */
+void
+ice_init_sw_xlt1_db(struct ice_hw *hw, enum ice_block blk)
+{
+	uint16_t pt;
+
+	for (pt = 0; pt < hw->blk[blk].xlt1.count; pt++) {
+		uint8_t ptg;
+
+		ptg = hw->blk[blk].xlt1.t[pt];
+		if (ptg != ICE_DEFAULT_PTG) {
+			ice_ptg_alloc_val(hw, blk, ptg);
+			ice_ptg_add_mv_ptype(hw, blk, pt, ptg);
+		}
+	}
+}
+
+/**
+ * ice_vsig_alloc_val - allocate a new VSIG by value
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @vsig: the VSIG to allocate
+ *
+ * This function will allocate a given VSIG specified by the VSIG parameter.
+ */
+uint16_t
+ice_vsig_alloc_val(struct ice_hw *hw, enum ice_block blk, uint16_t vsig)
+{
+	uint16_t idx = vsig & ICE_VSIG_IDX_M;
+
+	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use) {
+		TAILQ_INIT(&hw->blk[blk].xlt2.vsig_tbl[idx].prop_lst);
+		hw->blk[blk].xlt2.vsig_tbl[idx].in_use = true;
+	}
+
+	return ICE_VSIG_VALUE(idx, hw->pf_id);
+}
+
+/**
+ * ice_vsig_find_vsi - find a VSIG that contains a specified VSI
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @vsi: VSI of interest
+ * @vsig: pointer to receive the VSI group
+ *
+ * This function will lookup the VSI entry in the XLT2 list and return
+ * the VSI group its associated with.
+ */
+enum ice_status
+ice_vsig_find_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
+    uint16_t *vsig)
+{
+	if (!vsig || vsi >= ICE_MAX_VSI)
+		return ICE_ERR_PARAM;
+
+	/* As long as there's a default or valid VSIG associated with the input
+	 * VSI, the functions returns a success. Any handling of VSIG will be
+	 * done by the following add, update or remove functions.
+	 */
+	*vsig = hw->blk[blk].xlt2.vsis[vsi].vsig;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_vsig_remove_vsi - remove VSI from VSIG
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @vsi: VSI to remove
+ * @vsig: VSI group to remove from
+ *
+ * The function will remove the input VSI from its VSI group and move it
+ * to the DEFAULT_VSIG.
+ */
+enum ice_status
+ice_vsig_remove_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
+    uint16_t vsig)
+{
+	struct ice_vsig_vsi **vsi_head, *vsi_cur, *vsi_tgt;
+	uint16_t idx;
+
+	idx = vsig & ICE_VSIG_IDX_M;
+
+	if (vsi >= ICE_MAX_VSI || idx >= ICE_MAX_VSIGS)
+		return ICE_ERR_PARAM;
+
+	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use)
+		return ICE_ERR_DOES_NOT_EXIST;
+
+	/* entry already in default VSIG, don't have to remove */
+	if (idx == ICE_DEFAULT_VSIG)
+		return ICE_SUCCESS;
+
+	vsi_head = &hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi;
+	if (!(*vsi_head))
+		return ICE_ERR_CFG;
+
+	vsi_tgt = &hw->blk[blk].xlt2.vsis[vsi];
+	vsi_cur = (*vsi_head);
+
+	/* iterate the VSI list, skip over the entry to be removed */
+	while (vsi_cur) {
+		if (vsi_tgt == vsi_cur) {
+			(*vsi_head) = vsi_cur->next_vsi;
+			break;
+		}
+		vsi_head = &vsi_cur->next_vsi;
+		vsi_cur = vsi_cur->next_vsi;
+	}
+
+	/* verify if VSI was removed from group list */
+	if (!vsi_cur)
+		return ICE_ERR_DOES_NOT_EXIST;
+
+	vsi_cur->vsig = ICE_DEFAULT_VSIG;
+	vsi_cur->changed = 1;
+	vsi_cur->next_vsi = NULL;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_vsig_add_mv_vsi - add or move a VSI to a VSI group
+ * @hw: pointer to the hardware structure
+ * @blk: HW block
+ * @vsi: VSI to move
+ * @vsig: destination VSI group
+ *
+ * This function will move or add the input VSI to the target VSIG.
+ * The function will find the original VSIG the VSI belongs to and
+ * move the entry to the DEFAULT_VSIG, update the original VSIG and
+ * then move entry to the new VSIG.
+ */
+enum ice_status
+ice_vsig_add_mv_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
+    uint16_t vsig)
+{
+	struct ice_vsig_vsi *tmp;
+	enum ice_status status;
+	uint16_t orig_vsig, idx;
+
+	idx = vsig & ICE_VSIG_IDX_M;
+
+	if (vsi >= ICE_MAX_VSI || idx >= ICE_MAX_VSIGS)
+		return ICE_ERR_PARAM;
+
+	/* if VSIG not in use and VSIG is not default type this VSIG
+	 * doesn't exist.
+	 */
+	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use &&
+	    vsig != ICE_DEFAULT_VSIG)
+		return ICE_ERR_DOES_NOT_EXIST;
+
+	status = ice_vsig_find_vsi(hw, blk, vsi, &orig_vsig);
+	if (status)
+		return status;
+
+	/* no update required if vsigs match */
+	if (orig_vsig == vsig)
+		return ICE_SUCCESS;
+
+	if (orig_vsig != ICE_DEFAULT_VSIG) {
+		/* remove entry from orig_vsig and add to default VSIG */
+		status = ice_vsig_remove_vsi(hw, blk, vsi, orig_vsig);
+		if (status)
+			return status;
+	}
+
+	if (idx == ICE_DEFAULT_VSIG)
+		return ICE_SUCCESS;
+
+	/* Create VSI entry and add VSIG and prop_mask values */
+	hw->blk[blk].xlt2.vsis[vsi].vsig = vsig;
+	hw->blk[blk].xlt2.vsis[vsi].changed = 1;
+
+	/* Add new entry to the head of the VSIG list */
+	tmp = hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi;
+	hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi =
+		&hw->blk[blk].xlt2.vsis[vsi];
+	hw->blk[blk].xlt2.vsis[vsi].next_vsi = tmp;
+	hw->blk[blk].xlt2.t[vsi] = vsig;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_init_sw_xlt2_db - init software XLT2 database from HW tables
+ * @hw: pointer to the hardware structure
+ * @blk: the HW block to initialize
+ */
+void
+ice_init_sw_xlt2_db(struct ice_hw *hw, enum ice_block blk)
+{
+	uint16_t vsi;
+
+	for (vsi = 0; vsi < hw->blk[blk].xlt2.count; vsi++) {
+		uint16_t vsig;
+
+		vsig = hw->blk[blk].xlt2.t[vsi];
+		if (vsig) {
+			ice_vsig_alloc_val(hw, blk, vsig);
+			ice_vsig_add_mv_vsi(hw, blk, vsi, vsig);
+			/* no changes at this time, since this has been
+			 * initialized from the original package
+			 */
+			hw->blk[blk].xlt2.vsis[vsi].changed = 0;
+		}
+	}
+}
+
+/**
+ * ice_init_sw_db - init software database from HW tables
+ * @hw: pointer to the hardware structure
+ */
+void
+ice_init_sw_db(struct ice_hw *hw)
+{
+	uint16_t i;
+
+	for (i = 0; i < ICE_BLK_COUNT; i++) {
+		ice_init_sw_xlt1_db(hw, (enum ice_block)i);
+		ice_init_sw_xlt2_db(hw, (enum ice_block)i);
+	}
+}
+
+/**
+ * ice_fill_tbl - Reads content of a single table type into database
+ * @hw: pointer to the hardware structure
+ * @block_id: Block ID of the table to copy
+ * @sid: Section ID of the table to copy
+ *
+ * Will attempt to read the entire content of a given table of a single block
+ * into the driver database. We assume that the buffer will always
+ * be as large or larger than the data contained in the package. If
+ * this condition is not met, there is most likely an error in the package
+ * contents.
+ */
+void
+ice_fill_tbl(struct ice_hw *hw, enum ice_block block_id, uint32_t sid)
+{
+	uint32_t dst_len, sect_len, offset = 0;
+	struct ice_prof_redir_section *pr;
+	struct ice_prof_id_section *pid;
+	struct ice_xlt1_section *xlt1;
+	struct ice_xlt2_section *xlt2;
+	struct ice_sw_fv_section *es;
+	struct ice_pkg_enum state;
+	uint8_t *src, *dst;
+	void *sect;
+
+	/* if the HW segment pointer is null then the first iteration of
+	 * ice_pkg_enum_section() will fail. In this case the HW tables will
+	 * not be filled and return success.
+	 */
+	if (!hw->seg) {
+		DNPRINTF(ICE_DBG_PKG,
+		    "hw->seg is NULL, tables are not filled\n");
+		return;
+	}
+
+	memset(&state, 0, sizeof(state));
+
+	sect = ice_pkg_enum_section(hw->seg, &state, sid);
+	while (sect) {
+		switch (sid) {
+		case ICE_SID_XLT1_SW:
+		case ICE_SID_XLT1_FD:
+		case ICE_SID_XLT1_RSS:
+		case ICE_SID_XLT1_ACL:
+		case ICE_SID_XLT1_PE:
+			xlt1 = (struct ice_xlt1_section *)sect;
+			src = xlt1->value;
+			sect_len = le16toh(xlt1->count) *
+				sizeof(*hw->blk[block_id].xlt1.t);
+			dst = hw->blk[block_id].xlt1.t;
+			dst_len = hw->blk[block_id].xlt1.count *
+				sizeof(*hw->blk[block_id].xlt1.t);
+			break;
+		case ICE_SID_XLT2_SW:
+		case ICE_SID_XLT2_FD:
+		case ICE_SID_XLT2_RSS:
+		case ICE_SID_XLT2_ACL:
+		case ICE_SID_XLT2_PE:
+			xlt2 = (struct ice_xlt2_section *)sect;
+			src = (uint8_t *)xlt2->value;
+			sect_len = le16toh(xlt2->count) *
+				sizeof(*hw->blk[block_id].xlt2.t);
+			dst = (uint8_t *)hw->blk[block_id].xlt2.t;
+			dst_len = hw->blk[block_id].xlt2.count *
+				sizeof(*hw->blk[block_id].xlt2.t);
+			break;
+		case ICE_SID_PROFID_TCAM_SW:
+		case ICE_SID_PROFID_TCAM_FD:
+		case ICE_SID_PROFID_TCAM_RSS:
+		case ICE_SID_PROFID_TCAM_ACL:
+		case ICE_SID_PROFID_TCAM_PE:
+			pid = (struct ice_prof_id_section *)sect;
+			src = (uint8_t *)pid->entry;
+			sect_len = le16toh(pid->count) *
+				sizeof(*hw->blk[block_id].prof.t);
+			dst = (uint8_t *)hw->blk[block_id].prof.t;
+			dst_len = hw->blk[block_id].prof.count *
+				sizeof(*hw->blk[block_id].prof.t);
+			break;
+		case ICE_SID_PROFID_REDIR_SW:
+		case ICE_SID_PROFID_REDIR_FD:
+		case ICE_SID_PROFID_REDIR_RSS:
+		case ICE_SID_PROFID_REDIR_ACL:
+		case ICE_SID_PROFID_REDIR_PE:
+			pr = (struct ice_prof_redir_section *)sect;
+			src = pr->redir_value;
+			sect_len = le16toh(pr->count) *
+				sizeof(*hw->blk[block_id].prof_redir.t);
+			dst = hw->blk[block_id].prof_redir.t;
+			dst_len = hw->blk[block_id].prof_redir.count *
+				sizeof(*hw->blk[block_id].prof_redir.t);
+			break;
+		case ICE_SID_FLD_VEC_SW:
+		case ICE_SID_FLD_VEC_FD:
+		case ICE_SID_FLD_VEC_RSS:
+		case ICE_SID_FLD_VEC_ACL:
+		case ICE_SID_FLD_VEC_PE:
+			es = (struct ice_sw_fv_section *)sect;
+			src = (uint8_t *)es->fv;
+			sect_len = (uint32_t)(le16toh(es->count) *
+					 hw->blk[block_id].es.fvw) *
+				sizeof(*hw->blk[block_id].es.t);
+			dst = (uint8_t *)hw->blk[block_id].es.t;
+			dst_len = (uint32_t)(hw->blk[block_id].es.count *
+					hw->blk[block_id].es.fvw) *
+				sizeof(*hw->blk[block_id].es.t);
+			break;
+		default:
+			return;
+		}
+
+		/* if the section offset exceeds destination length, terminate
+		 * table fill.
+		 */
+		if (offset > dst_len)
+			return;
+
+		/* if the sum of section size and offset exceed destination size
+		 * then we are out of bounds of the HW table size for that PF.
+		 * Changing section length to fill the remaining table space
+		 * of that PF.
+		 */
+		if ((offset + sect_len) > dst_len)
+			sect_len = dst_len - offset;
+
+		memcpy(dst + offset, src, sect_len);
+		offset += sect_len;
+		sect = ice_pkg_enum_section(NULL, &state, sid);
+	}
+}
+
+/**
+ * ice_fill_blk_tbls - Read package context for tables
+ * @hw: pointer to the hardware structure
+ *
+ * Reads the current package contents and populates the driver
+ * database with the data iteratively for all advanced feature
+ * blocks. Assume that the HW tables have been allocated.
+ */
+void
+ice_fill_blk_tbls(struct ice_hw *hw)
+{
+	uint8_t i;
+
+	for (i = 0; i < ICE_BLK_COUNT; i++) {
+		enum ice_block blk_id = (enum ice_block)i;
+
+		ice_fill_tbl(hw, blk_id, hw->blk[blk_id].xlt1.sid);
+		ice_fill_tbl(hw, blk_id, hw->blk[blk_id].xlt2.sid);
+		ice_fill_tbl(hw, blk_id, hw->blk[blk_id].prof.sid);
+		ice_fill_tbl(hw, blk_id, hw->blk[blk_id].prof_redir.sid);
+		ice_fill_tbl(hw, blk_id, hw->blk[blk_id].es.sid);
+	}
+
+	ice_init_sw_db(hw);
+}
+
+/**
+ * ice_sw_fv_handler
+ * @sect_type: section type
+ * @section: pointer to section
+ * @index: index of the field vector entry to be returned
+ * @offset: ptr to variable that receives the offset in the field vector table
+ *
+ * This is a callback function that can be passed to ice_pkg_enum_entry.
+ * This function treats the given section as of type ice_sw_fv_section and
+ * enumerates offset field. "offset" is an index into the field vector table.
+ */
+void *
+ice_sw_fv_handler(uint32_t sect_type, void *section, uint32_t index,
+    uint32_t *offset)
+{
+	struct ice_sw_fv_section *fv_section =
+		(struct ice_sw_fv_section *)section;
+
+	if (!section || sect_type != ICE_SID_FLD_VEC_SW)
+		return NULL;
+	if (index >= le16toh(fv_section->count))
+		return NULL;
+	if (offset)
+		/* "index" passed in to this function is relative to a given
+		 * 4k block. To get to the true index into the field vector
+		 * table need to add the relative index to the base_offset
+		 * field of this section
+		 */
+		*offset = le16toh(fv_section->base_offset) + index;
+	return fv_section->fv + index;
+}
+
+/**
+ * ice_get_prof_index_max - get the max profile index for used profile
+ * @hw: pointer to the HW struct
+ *
+ * Calling this function will get the max profile index for used profile
+ * and store the index number in struct ice_switch_info *switch_info
+ * in hw for following use.
+ */
+int
+ice_get_prof_index_max(struct ice_hw *hw)
+{
+	uint16_t prof_index = 0, j, max_prof_index = 0;
+	struct ice_pkg_enum state;
+	struct ice_seg *ice_seg;
+	bool flag = false;
+	struct ice_fv *fv;
+	uint32_t offset;
+
+	memset(&state, 0, sizeof(state));
+
+	if (!hw->seg)
+		return ICE_ERR_PARAM;
+
+	ice_seg = hw->seg;
+
+	do {
+		fv = (struct ice_fv *)
+			ice_pkg_enum_entry(ice_seg, &state, ICE_SID_FLD_VEC_SW,
+			    &offset, ice_sw_fv_handler);
+		if (!fv)
+			break;
+		ice_seg = NULL;
+
+		/* in the profile that not be used, the prot_id is set to 0xff
+		 * and the off is set to 0x1ff for all the field vectors.
+		 */
+		for (j = 0; j < hw->blk[ICE_BLK_SW].es.fvw; j++)
+			if (fv->ew[j].prot_id != ICE_PROT_INVALID ||
+			    fv->ew[j].off != ICE_FV_OFFSET_INVAL)
+				flag = true;
+		if (flag && prof_index > max_prof_index)
+			max_prof_index = prof_index;
+
+		prof_index++;
+		flag = false;
+	} while (fv);
+
+	hw->switch_info->max_used_prof_index = max_prof_index;
+
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_init_pkg - initialize/download package
+ * @hw: pointer to the hardware structure
+ * @buf: pointer to the package buffer
+ * @len: size of the package buffer
+ *
+ * This function initializes a package. The package contains HW tables
+ * required to do packet processing. First, the function extracts package
+ * information such as version. Then it finds the ice configuration segment
+ * within the package; this function then saves a copy of the segment pointer
+ * within the supplied package buffer. Next, the function will cache any hints
+ * from the package, followed by downloading the package itself. Note, that if
+ * a previous PF driver has already downloaded the package successfully, then
+ * the current driver will not have to download the package again.
+ *
+ * The local package contents will be used to query default behavior and to
+ * update specific sections of the HW's version of the package (e.g. to update
+ * the parse graph to understand new protocols).
+ *
+ * This function stores a pointer to the package buffer memory, and it is
+ * expected that the supplied buffer will not be freed immediately. If the
+ * package buffer needs to be freed, such as when read from a file, use
+ * ice_copy_and_init_pkg() instead of directly calling ice_init_pkg() in this
+ * case.
+ */
+enum ice_ddp_state
+ice_init_pkg(struct ice_hw *hw, uint8_t *buf, uint32_t len)
+{
+	bool already_loaded = false;
+	enum ice_ddp_state state;
+	struct ice_pkg_hdr *pkg;
+	struct ice_seg *seg;
+
+	if (!buf || !len)
+		return ICE_DDP_PKG_ERR;
+
+	pkg = (struct ice_pkg_hdr *)buf;
+	state = ice_verify_pkg(pkg, len);
+	if (state) {
+		DNPRINTF(ICE_DBG_INIT, "failed to verify pkg (err: %d)\n",
+		    state);
+		return state;
+	}
+
+	/* initialize package info */
+	state = ice_init_pkg_info(hw, pkg);
+	if (state)
+		return state;
+
+	/* For packages with signing segments, must be a matching segment */
+	if (hw->pkg_has_signing_seg)
+		if (!ice_match_signing_seg(pkg, hw->pkg_seg_id,
+					   hw->pkg_sign_type))
+			return ICE_DDP_PKG_ERR;
+
+	/* before downloading the package, check package version for
+	 * compatibility with driver
+	 */
+	state = ice_chk_pkg_compat(hw, pkg, &seg);
+	if (state)
+		return state;
+
+	/* initialize package hints and then download package */
+	ice_init_pkg_hints(hw, seg);
+	state = ice_download_pkg(hw, pkg, seg);
+
+	if (state == ICE_DDP_PKG_ALREADY_LOADED) {
+		DNPRINTF(ICE_DBG_INIT,
+		    "package previously loaded - no work.\n");
+		already_loaded = true;
+	}
+
+	/* Get information on the package currently loaded in HW, then make sure
+	 * the driver is compatible with this version.
+	 */
+	if (!state || state == ICE_DDP_PKG_ALREADY_LOADED) {
+		state = ice_get_pkg_info(hw);
+		if (!state)
+			state = ice_get_ddp_pkg_state(hw, already_loaded);
+	}
+
+	if (ice_is_init_pkg_successful(state)) {
+		hw->seg = seg;
+		/* on successful package download update other required
+		 * registers to support the package and fill HW tables
+		 * with package content.
+		 */
+		ice_init_pkg_regs(hw);
+		ice_fill_blk_tbls(hw);
+		ice_get_prof_index_max(hw);
+	} else {
+		DNPRINTF(ICE_DBG_INIT, "package load failed, %d\n", state);
+	}
+
+	return state;
+}
+
+/**
+ * ice_copy_and_init_pkg - initialize/download a copy of the package
+ * @hw: pointer to the hardware structure
+ * @buf: pointer to the package buffer
+ * @len: size of the package buffer
+ *
+ * This function copies the package buffer, and then calls ice_init_pkg() to
+ * initialize the copied package contents.
+ *
+ * The copying is necessary if the package buffer supplied is constant, or if
+ * the memory may disappear shortly after calling this function.
+ *
+ * If the package buffer resides in the data segment and can be modified, the
+ * caller is free to use ice_init_pkg() instead of ice_copy_and_init_pkg().
+ *
+ * However, if the package buffer needs to be copied first, such as when being
+ * read from a file, the caller should use ice_copy_and_init_pkg().
+ *
+ * This function will first copy the package buffer, before calling
+ * ice_init_pkg(). The caller is free to immediately destroy the original
+ * package buffer, as the new copy will be managed by this function and
+ * related routines.
+ */
+enum ice_ddp_state
+ice_copy_and_init_pkg(struct ice_hw *hw, const uint8_t *buf, uint32_t len)
+{
+	enum ice_ddp_state state;
+	uint8_t *buf_copy;
+
+	if (!buf || !len)
+		return ICE_DDP_PKG_ERR;
+
+	buf_copy = (uint8_t *)ice_memdup(hw, buf, len);
+
+	state = ice_init_pkg(hw, buf_copy, len);
+	if (!ice_is_init_pkg_successful(state)) {
+		/* Free the copy, since we failed to initialize the package */
+		ice_free(hw, buf_copy);
+	} else {
+		/* Track the copied pkg so we can free it later */
+		hw->pkg_copy = buf_copy;
+		hw->pkg_size = len;
+	}
+	return state;
+}
+
+/**
+ * ice_load_pkg_file - Load the DDP package file using firmware_get
+ * @sc: device private softc
+ *
+ * Use firmware_get to load the DDP package memory and then request that
+ * firmware download the package contents and program the relevant hardware
+ * bits.
+ *
+ * This function makes a copy of the DDP package memory which is tracked in
+ * the ice_hw structure. The copy will be managed and released by
+ * ice_deinit_hw(). This allows the firmware reference to be immediately
+ * released using firmware_put.
+ */
+enum ice_status
+ice_load_pkg_file(struct ice_softc *sc)
+{
+	struct ice_hw *hw = &sc->hw;
+	enum ice_ddp_state state;
+	uint8_t *pkg;
+	size_t pkg_size;
+	enum ice_status status = ICE_SUCCESS;
+	uint8_t cached_layer_count;
+	const char *fwname = "ice-ddp";
+	int err;
+
+	err = loadfirmware(fwname, &pkg, &pkg_size);
+	if (err) {
+		printf("%s: could not read firmware %s (error %d); "
+		    "entering safe mode\n", sc->sc_dev.dv_xname, fwname, err);
+		status = ICE_ERR_CFG;
+		goto err_load_pkg;
+	}
+
+	/* Check for topology change */
+	if (ice_is_bit_set(sc->feat_cap, ICE_FEATURE_TX_BALANCE)) {
+		cached_layer_count = hw->num_tx_sched_layers;
+		status = ice_cfg_tx_topo(sc, pkg, pkg_size);
+		/* Success indicates a change was made */
+		if (status == ICE_SUCCESS) {
+			/* 9 -> 5 */
+			if (cached_layer_count == 9)
+				DPRINTF("%s: Transmit balancing feature "
+				    "enabled\n", __func__);
+			else
+				DPRINTF("%s: Transmit balancing feature "
+				    "disabled\n", __func__);
+			ice_set_bit(ICE_FEATURE_TX_BALANCE, sc->feat_en);
+			free(pkg, M_DEVBUF, pkg_size);
+			return (status);
+		} else if (status == ICE_ERR_CFG) {
+			/* DDP does not support transmit balancing */
+			DPRINTF("%s: DDP package does not support transmit "
+			    "balancing feature - please update to the "
+			    "latest DDP package and try again\n", __func__);
+		}
+	}
+
+	/* Copy and download the pkg contents */
+	state = ice_copy_and_init_pkg(hw, (const uint8_t *)pkg, pkg_size);
+
+	/* Release the firmware reference */
+	free(pkg, M_DEVBUF, pkg_size);
+
+	/* Check the active DDP package version and log a message */
+	ice_log_pkg_init(sc, state);
+
+	if (ice_is_init_pkg_successful(state))
+		return (ICE_ERR_ALREADY_EXISTS);
+
+err_load_pkg:
+	/* Place the driver into safe mode */
+	ice_zero_bitmap(sc->feat_cap, ICE_FEATURE_COUNT);
+	ice_zero_bitmap(sc->feat_en, ICE_FEATURE_COUNT);
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
+
+	return (status);
+}
+
+/**
+ * ice_aq_set_event_mask
+ * @hw: pointer to the HW struct
+ * @port_num: port number of the physical function
+ * @mask: event mask to be set
+ * @cd: pointer to command details structure or NULL
+ *
+ * Set event mask (0x0613)
+ */
+enum ice_status
+ice_aq_set_event_mask(struct ice_hw *hw, uint8_t port_num, uint16_t mask,
+		      struct ice_sq_cd *cd)
+{
+	struct ice_aqc_set_event_mask *cmd;
+	struct ice_aq_desc desc;
+
+	cmd = &desc.params.set_event_mask;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_event_mask);
+
+	cmd->lport_num = port_num;
+
+	cmd->event_mask = htole16(mask);
+	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
+}
+
+/**
+ * ice_init_link_events - Initialize Link Status Events mask
+ * @sc: the device softc
+ *
+ * Initialize the Link Status Events mask to disable notification of link
+ * events we don't care about in software. Also request that link status
+ * events be enabled.
+ */
+int
+ice_init_link_events(struct ice_softc *sc)
+{
+	struct ice_hw *hw = &sc->hw;
+	enum ice_status status;
+	uint16_t wanted_events;
+
+	/* Set the bits for the events that we want to be notified by */
+	wanted_events = (ICE_AQ_LINK_EVENT_UPDOWN |
+			 ICE_AQ_LINK_EVENT_MEDIA_NA |
+			 ICE_AQ_LINK_EVENT_MODULE_QUAL_FAIL);
+
+	/* request that every event except the wanted events be masked */
+	status = ice_aq_set_event_mask(hw, hw->port_info->lport, ~wanted_events, NULL);
+	if (status) {
+		printf("%s: Failed to set link status event mask, "
+		    "err %s aq_err %s\n", sc->sc_dev.dv_xname,
+		    ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EIO);
+	}
+
+	/* Request link info with the LSE bit set to enable link status events */
+	status = ice_aq_get_link_info(hw->port_info, true, NULL, NULL);
+	if (status) {
+		printf("%s: Failed to enable link status events, "
+		    "err %s aq_err %s\n", sc->sc_dev.dv_xname,
+		    ice_status_str(status),
+		    ice_aq_str(hw->adminq.sq_last_status));
+		return (EIO);
+	}
+
+	return (0);
 }
 
 /**
@@ -15157,10 +17757,14 @@ void
 ice_print_nvm_version(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
-	static char buf[512];
+	char os_pkg[ICE_PKG_NAME_SIZE];
+	char buf[512];
 
-	printf("%s: %s, address %s\n", sc->sc_dev.dv_xname,
+	ice_os_pkg_version_str(hw, os_pkg, sizeof(os_pkg));
+
+	printf("%s: %s%s%s, address %s\n", sc->sc_dev.dv_xname,
 	    ice_nvm_version_str(hw, buf, sizeof(buf)),
+	    os_pkg[0] ? " ddp " : "", os_pkg[0] ? os_pkg : "",
 	    ether_sprintf(hw->port_info->mac.perm_addr));
 }
 
@@ -15174,41 +17778,29 @@ void
 ice_setup_scctx(struct ice_softc *sc)
 {
 	struct ice_hw *hw = &sc->hw;
-	bool safe_mode, recovery_mode;
+	bool safe_mode, recovery_mode, have_rss;
 	int i;
 
 	safe_mode = ice_is_bit_set(sc->feat_en, ICE_FEATURE_SAFE_MODE);
 	recovery_mode = ice_test_state(&sc->state, ICE_STATE_RECOVERY_MODE);
+	have_rss = ice_is_bit_set(sc->feat_en, ICE_FEATURE_RSS);
 
 	/*
 	 * If the driver loads in Safe mode or Recovery mode, limit iflib to
 	 * a single queue pair.
 	 */
-	if (safe_mode || recovery_mode) {
-		sc->isc_ntxqsets = sc->isc_nrxqsets = 1;
+	if (safe_mode || recovery_mode || !have_rss) {
 		sc->isc_ntxqsets_max = 1;
 		sc->isc_nrxqsets_max = 1;
 	} else {
-		sc->isc_ntxqsets = hw->func_caps.common_cap.rss_table_size;
-		sc->isc_nrxqsets = hw->func_caps.common_cap.rss_table_size;
-
 		sc->isc_ntxqsets_max = hw->func_caps.common_cap.num_txq;
 		sc->isc_nrxqsets_max = hw->func_caps.common_cap.num_rxq;
 	}
-
-	sc->isc_txqsizes[0] = roundup(sc->isc_ntxd[0]
-	    * sizeof(struct ice_tx_desc), DBA_ALIGN);
-	sc->isc_rxqsizes[0] = roundup(sc->isc_nrxd[0]
-	    * sizeof(union ice_32b_rx_flex_desc), DBA_ALIGN);
 
 	sc->isc_tx_nsegments = ICE_MAX_TX_SEGS;
 	sc->isc_tx_tso_segments_max = ICE_MAX_TSO_SEGS;
 	sc->isc_tx_tso_size_max = ICE_TSO_SIZE;
 	sc->isc_tx_tso_segsize_max = ICE_MAX_DMA_SEG_SIZE;
-#if 0
-	sc->isc_msix_bar = pci_msix_table_bar(dev);
-#endif
-	sc->isc_rss_table_size = hw->func_caps.common_cap.rss_table_size;
 #if 0
 	/*
 	 * If the driver loads in recovery mode, disable Tx/Rx functionality
@@ -15218,22 +17810,6 @@ ice_setup_scctx(struct ice_softc *sc)
 	else
 		scctx->isc_txrx = &ice_txrx;
 #endif
-	/*
-	 * If the driver loads in Safe mode or Recovery mode, disable
-	 * advanced features including hardware offloads.
-	 */
-	if (safe_mode || recovery_mode) {
-		sc->isc_capenable = ICE_SAFE_CAPS;
-		sc->isc_tx_csum_flags = 0;
-	} else {
-		sc->isc_capenable = ICE_FULL_CAPS;
-#if 0
-		sc->isc_tx_csum_flags = ICE_CSUM_OFFLOAD;
-#endif
-	}
-
-	sc->isc_capabilities = sc->isc_capenable;
-
 	for (i = 0; i < nitems(sc->isc_ntxd); i++)
 		sc->isc_ntxd[i] = ICE_DEFAULT_DESC_COUNT;
 	for (i = 0; i < nitems(sc->isc_nrxd); i++)
@@ -15567,32 +18143,6 @@ free_tx_qmap:
 	vsi->tx_qmap = NULL;
 
 	return (ENOMEM);
-}
-
-/**
- * ice_vsig_find_vsi - find a VSIG that contains a specified VSI
- * @hw: pointer to the hardware structure
- * @blk: HW block
- * @vsi: VSI of interest
- * @vsig: pointer to receive the VSI group
- *
- * This function will lookup the VSI entry in the XLT2 list and return
- * the VSI group its associated with.
- */
-enum ice_status
-ice_vsig_find_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
-    uint16_t *vsig)
-{
-	if (!vsig || vsi >= ICE_MAX_VSI)
-		return ICE_ERR_PARAM;
-
-	/* As long as there's a default or valid VSIG associated with the input
-	 * VSI, the functions returns a success. Any handling of VSIG will be
-	 * done by the following add, update or remove functions.
-	 */
-	*vsig = hw->blk[blk].xlt2.vsis[vsi].vsig;
-
-	return ICE_SUCCESS;
 }
 
 /**
@@ -16411,127 +18961,6 @@ ice_rem_prof_from_list(struct ice_hw *hw, struct ice_vsig_prof_head *lst,
 }
 
 /**
- * ice_vsig_remove_vsi - remove VSI from VSIG
- * @hw: pointer to the hardware structure
- * @blk: HW block
- * @vsi: VSI to remove
- * @vsig: VSI group to remove from
- *
- * The function will remove the input VSI from its VSI group and move it
- * to the DEFAULT_VSIG.
- */
-enum ice_status
-ice_vsig_remove_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
-    uint16_t vsig)
-{
-	struct ice_vsig_vsi **vsi_head, *vsi_cur, *vsi_tgt;
-	uint16_t idx;
-
-	idx = vsig & ICE_VSIG_IDX_M;
-
-	if (vsi >= ICE_MAX_VSI || idx >= ICE_MAX_VSIGS)
-		return ICE_ERR_PARAM;
-
-	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use)
-		return ICE_ERR_DOES_NOT_EXIST;
-
-	/* entry already in default VSIG, don't have to remove */
-	if (idx == ICE_DEFAULT_VSIG)
-		return ICE_SUCCESS;
-
-	vsi_head = &hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi;
-	if (!(*vsi_head))
-		return ICE_ERR_CFG;
-
-	vsi_tgt = &hw->blk[blk].xlt2.vsis[vsi];
-	vsi_cur = (*vsi_head);
-
-	/* iterate the VSI list, skip over the entry to be removed */
-	while (vsi_cur) {
-		if (vsi_tgt == vsi_cur) {
-			(*vsi_head) = vsi_cur->next_vsi;
-			break;
-		}
-		vsi_head = &vsi_cur->next_vsi;
-		vsi_cur = vsi_cur->next_vsi;
-	}
-
-	/* verify if VSI was removed from group list */
-	if (!vsi_cur)
-		return ICE_ERR_DOES_NOT_EXIST;
-
-	vsi_cur->vsig = ICE_DEFAULT_VSIG;
-	vsi_cur->changed = 1;
-	vsi_cur->next_vsi = NULL;
-
-	return ICE_SUCCESS;
-}
-
-/**
- * ice_vsig_add_mv_vsi - add or move a VSI to a VSI group
- * @hw: pointer to the hardware structure
- * @blk: HW block
- * @vsi: VSI to move
- * @vsig: destination VSI group
- *
- * This function will move or add the input VSI to the target VSIG.
- * The function will find the original VSIG the VSI belongs to and
- * move the entry to the DEFAULT_VSIG, update the original VSIG and
- * then move entry to the new VSIG.
- */
-enum ice_status
-ice_vsig_add_mv_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
-    uint16_t vsig)
-{
-	struct ice_vsig_vsi *tmp;
-	enum ice_status status;
-	uint16_t orig_vsig, idx;
-
-	idx = vsig & ICE_VSIG_IDX_M;
-
-	if (vsi >= ICE_MAX_VSI || idx >= ICE_MAX_VSIGS)
-		return ICE_ERR_PARAM;
-
-	/* if VSIG not in use and VSIG is not default type this VSIG
-	 * doesn't exist.
-	 */
-	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use &&
-	    vsig != ICE_DEFAULT_VSIG)
-		return ICE_ERR_DOES_NOT_EXIST;
-
-	status = ice_vsig_find_vsi(hw, blk, vsi, &orig_vsig);
-	if (status)
-		return status;
-
-	/* no update required if vsigs match */
-	if (orig_vsig == vsig)
-		return ICE_SUCCESS;
-
-	if (orig_vsig != ICE_DEFAULT_VSIG) {
-		/* remove entry from orig_vsig and add to default VSIG */
-		status = ice_vsig_remove_vsi(hw, blk, vsi, orig_vsig);
-		if (status)
-			return status;
-	}
-
-	if (idx == ICE_DEFAULT_VSIG)
-		return ICE_SUCCESS;
-
-	/* Create VSI entry and add VSIG and prop_mask values */
-	hw->blk[blk].xlt2.vsis[vsi].vsig = vsig;
-	hw->blk[blk].xlt2.vsis[vsi].changed = 1;
-
-	/* Add new entry to the head of the VSIG list */
-	tmp = hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi;
-	hw->blk[blk].xlt2.vsig_tbl[idx].first_vsi =
-		&hw->blk[blk].xlt2.vsis[vsi];
-	hw->blk[blk].xlt2.vsis[vsi].next_vsi = tmp;
-	hw->blk[blk].xlt2.t[vsi] = vsig;
-
-	return ICE_SUCCESS;
-}
-
-/**
  * ice_move_vsi - move VSI to another VSIG
  * @hw: pointer to the HW struct
  * @blk: hardware block
@@ -16568,27 +18997,6 @@ ice_move_vsi(struct ice_hw *hw, enum ice_block blk, uint16_t vsi, uint16_t vsig,
 	TAILQ_INSERT_HEAD(chg, p, list_entry);
 
 	return ICE_SUCCESS;
-}
-
-/**
- * ice_vsig_alloc_val - allocate a new VSIG by value
- * @hw: pointer to the hardware structure
- * @blk: HW block
- * @vsig: the VSIG to allocate
- *
- * This function will allocate a given VSIG specified by the VSIG parameter.
- */
-uint16_t
-ice_vsig_alloc_val(struct ice_hw *hw, enum ice_block blk, uint16_t vsig)
-{
-	uint16_t idx = vsig & ICE_VSIG_IDX_M;
-
-	if (!hw->blk[blk].xlt2.vsig_tbl[idx].in_use) {
-		TAILQ_INIT(&hw->blk[blk].xlt2.vsig_tbl[idx].prop_lst);
-		hw->blk[blk].xlt2.vsig_tbl[idx].in_use = true;
-	}
-
-	return ICE_VSIG_VALUE(idx, hw->pf_id);
 }
 
 /**
@@ -16813,6 +19221,520 @@ ice_create_vsig_from_lst(struct ice_hw *hw, enum ice_block blk, uint16_t vsi,
 }
 
 /**
+ * ice_pkg_buf_alloc
+ * @hw: pointer to the HW structure
+ *
+ * Allocates a package buffer and returns a pointer to the buffer header.
+ * Note: all package contents must be in Little Endian form.
+ */
+struct ice_buf_build *
+ice_pkg_buf_alloc(struct ice_hw *hw)
+{
+	struct ice_buf_build *bld;
+	struct ice_buf_hdr *buf;
+
+	bld = (struct ice_buf_build *)ice_malloc(hw, sizeof(*bld));
+	if (!bld)
+		return NULL;
+
+	buf = (struct ice_buf_hdr *)bld;
+	buf->data_end = htole16(offsetof(struct ice_buf_hdr, section_entry));
+	return bld;
+}
+
+/*
+ * Define a macro that will align a pointer to point to the next memory address
+ * that falls on the given power of 2 (i.e., 2, 4, 8, 16, 32, 64...). For
+ * example, given the variable pointer = 0x1006, then after the following call:
+ *
+ *      pointer = ICE_ALIGN(pointer, 4)
+ *
+ * ... the value of pointer would equal 0x1008, since 0x1008 is the next
+ * address after 0x1006 which is divisible by 4.
+ */
+#define ICE_ALIGN(ptr, align)	(((ptr) + ((align) - 1)) & ~((align) - 1))
+
+/**
+ * ice_pkg_buf_alloc_section
+ * @bld: pointer to pkg build (allocated by ice_pkg_buf_alloc())
+ * @type: the section type value
+ * @size: the size of the section to reserve (in bytes)
+ *
+ * Reserves memory in the buffer for a section's content and updates the
+ * buffers' status accordingly. This routine returns a pointer to the first
+ * byte of the section start within the buffer, which is used to fill in the
+ * section contents.
+ * Note: all package contents must be in Little Endian form.
+ */
+void *
+ice_pkg_buf_alloc_section(struct ice_buf_build *bld, uint32_t type,
+    uint16_t size)
+{
+	struct ice_buf_hdr *buf;
+	uint16_t sect_count;
+	uint16_t data_end;
+
+	if (!bld || !type || !size)
+		return NULL;
+
+	buf = (struct ice_buf_hdr *)&bld->buf;
+
+	/* check for enough space left in buffer */
+	data_end = le16toh(buf->data_end);
+
+	/* section start must align on 4 byte boundary */
+	data_end = ICE_ALIGN(data_end, 4);
+
+	if ((data_end + size) > ICE_MAX_S_DATA_END)
+		return NULL;
+
+	/* check for more available section table entries */
+	sect_count = le16toh(buf->section_count);
+	if (sect_count < bld->reserved_section_table_entries) {
+		void *section_ptr = ((uint8_t *)buf) + data_end;
+
+		buf->section_entry[sect_count].offset = htole16(data_end);
+		buf->section_entry[sect_count].size = htole16(size);
+		buf->section_entry[sect_count].type = htole32(type);
+
+		data_end += size;
+		buf->data_end = htole16(data_end);
+
+		buf->section_count = htole16(sect_count + 1);
+		return section_ptr;
+	}
+
+	/* no free section table entries */
+	return NULL;
+}
+
+/**
+ * ice_pkg_buf_reserve_section
+ * @bld: pointer to pkg build (allocated by ice_pkg_buf_alloc())
+ * @count: the number of sections to reserve
+ *
+ * Reserves one or more section table entries in a package buffer. This routine
+ * can be called multiple times as long as they are made before calling
+ * ice_pkg_buf_alloc_section(). Once ice_pkg_buf_alloc_section()
+ * is called once, the number of sections that can be allocated will not be able
+ * to be increased; not using all reserved sections is fine, but this will
+ * result in some wasted space in the buffer.
+ * Note: all package contents must be in Little Endian form.
+ */
+int
+ice_pkg_buf_reserve_section(struct ice_buf_build *bld, uint16_t count)
+{
+	struct ice_buf_hdr *buf;
+	uint16_t section_count;
+	uint16_t data_end;
+
+	if (!bld)
+		return ICE_ERR_PARAM;
+
+	buf = (struct ice_buf_hdr *)&bld->buf;
+
+	/* already an active section, can't increase table size */
+	section_count = le16toh(buf->section_count);
+	if (section_count > 0)
+		return ICE_ERR_CFG;
+
+	if (bld->reserved_section_table_entries + count > ICE_MAX_S_COUNT)
+		return ICE_ERR_CFG;
+	bld->reserved_section_table_entries += count;
+
+	data_end = le16toh(buf->data_end) +
+		FLEX_ARRAY_SIZE(buf, section_entry, count);
+	buf->data_end = htole16(data_end);
+
+	return 0;
+}
+
+/**
+ * ice_pkg_buf_get_active_sections
+ * @bld: pointer to pkg build (allocated by ice_pkg_buf_alloc())
+ *
+ * Returns the number of active sections. Before using the package buffer
+ * in an update package command, the caller should make sure that there is at
+ * least one active section - otherwise, the buffer is not legal and should
+ * not be used.
+ * Note: all package contents must be in Little Endian form.
+ */
+uint16_t
+ice_pkg_buf_get_active_sections(struct ice_buf_build *bld)
+{
+	struct ice_buf_hdr *buf;
+
+	if (!bld)
+		return 0;
+
+	buf = (struct ice_buf_hdr *)&bld->buf;
+	return le16toh(buf->section_count);
+}
+
+/**
+ * ice_pkg_buf
+ * @bld: pointer to pkg build (allocated by ice_pkg_buf_alloc())
+ *
+ * Return a pointer to the buffer's header
+ */
+struct ice_buf *
+ice_pkg_buf(struct ice_buf_build *bld)
+{
+	if (bld)
+		return &bld->buf;
+
+	return NULL;
+}
+
+static const uint32_t ice_sect_lkup[ICE_BLK_COUNT][ICE_SECT_COUNT] = {
+	/* SWITCH */
+	{
+		ICE_SID_XLT0_SW,
+		ICE_SID_XLT_KEY_BUILDER_SW,
+		ICE_SID_XLT1_SW,
+		ICE_SID_XLT2_SW,
+		ICE_SID_PROFID_TCAM_SW,
+		ICE_SID_PROFID_REDIR_SW,
+		ICE_SID_FLD_VEC_SW,
+		ICE_SID_CDID_KEY_BUILDER_SW,
+		ICE_SID_CDID_REDIR_SW
+	},
+
+	/* ACL */
+	{
+		ICE_SID_XLT0_ACL,
+		ICE_SID_XLT_KEY_BUILDER_ACL,
+		ICE_SID_XLT1_ACL,
+		ICE_SID_XLT2_ACL,
+		ICE_SID_PROFID_TCAM_ACL,
+		ICE_SID_PROFID_REDIR_ACL,
+		ICE_SID_FLD_VEC_ACL,
+		ICE_SID_CDID_KEY_BUILDER_ACL,
+		ICE_SID_CDID_REDIR_ACL
+	},
+
+	/* FD */
+	{
+		ICE_SID_XLT0_FD,
+		ICE_SID_XLT_KEY_BUILDER_FD,
+		ICE_SID_XLT1_FD,
+		ICE_SID_XLT2_FD,
+		ICE_SID_PROFID_TCAM_FD,
+		ICE_SID_PROFID_REDIR_FD,
+		ICE_SID_FLD_VEC_FD,
+		ICE_SID_CDID_KEY_BUILDER_FD,
+		ICE_SID_CDID_REDIR_FD
+	},
+
+	/* RSS */
+	{
+		ICE_SID_XLT0_RSS,
+		ICE_SID_XLT_KEY_BUILDER_RSS,
+		ICE_SID_XLT1_RSS,
+		ICE_SID_XLT2_RSS,
+		ICE_SID_PROFID_TCAM_RSS,
+		ICE_SID_PROFID_REDIR_RSS,
+		ICE_SID_FLD_VEC_RSS,
+		ICE_SID_CDID_KEY_BUILDER_RSS,
+		ICE_SID_CDID_REDIR_RSS
+	},
+
+	/* PE */
+	{
+		ICE_SID_XLT0_PE,
+		ICE_SID_XLT_KEY_BUILDER_PE,
+		ICE_SID_XLT1_PE,
+		ICE_SID_XLT2_PE,
+		ICE_SID_PROFID_TCAM_PE,
+		ICE_SID_PROFID_REDIR_PE,
+		ICE_SID_FLD_VEC_PE,
+		ICE_SID_CDID_KEY_BUILDER_PE,
+		ICE_SID_CDID_REDIR_PE
+	}
+};
+
+/**
+ * ice_sect_id - returns section ID
+ * @blk: block type
+ * @sect: section type
+ *
+ * This helper function returns the proper section ID given a block type and a
+ * section type.
+ */
+uint32_t
+ice_sect_id(enum ice_block blk, enum ice_sect sect)
+{
+	return ice_sect_lkup[blk][sect];
+}
+
+/**
+ * ice_prof_bld_es - build profile ID extraction sequence changes
+ * @hw: pointer to the HW struct
+ * @blk: hardware block
+ * @bld: the update package buffer build to add to
+ * @chgs: the list of changes to make in hardware
+ */
+int
+ice_prof_bld_es(struct ice_hw *hw, enum ice_block blk,
+		struct ice_buf_build *bld, struct ice_chs_chg_head *chgs)
+{
+	uint16_t vec_size = hw->blk[blk].es.fvw * sizeof(struct ice_fv_word);
+	struct ice_chs_chg *tmp;
+	uint16_t off;
+	struct ice_pkg_es *p;
+	uint32_t id;
+
+	TAILQ_FOREACH(tmp, chgs, list_entry) {
+		if (tmp->type != ICE_PTG_ES_ADD || !tmp->add_prof)
+			continue;
+
+		off = tmp->prof_id * hw->blk[blk].es.fvw;
+		id = ice_sect_id(blk, ICE_VEC_TBL);
+		p = (struct ice_pkg_es *)ice_pkg_buf_alloc_section(bld, id,
+		    ice_struct_size(p, es, 1) + vec_size - sizeof(p->es[0]));
+		if (!p)
+			return ICE_ERR_MAX_LIMIT;
+
+		p->count = htole16(1);
+		p->offset = htole16(tmp->prof_id);
+		memcpy(p->es, &hw->blk[blk].es.t[off], vec_size);
+	}
+
+	return 0;
+}
+
+/**
+ * ice_prof_bld_tcam - build profile ID TCAM changes
+ * @hw: pointer to the HW struct
+ * @blk: hardware block
+ * @bld: the update package buffer build to add to
+ * @chgs: the list of changes to make in hardware
+ */
+int
+ice_prof_bld_tcam(struct ice_hw *hw, enum ice_block blk,
+    struct ice_buf_build *bld, struct ice_chs_chg_head *chgs)
+{
+	struct ice_chs_chg *tmp;
+	struct ice_prof_id_section *p;
+	uint32_t id;
+
+	TAILQ_FOREACH(tmp, chgs, list_entry) {
+		if (tmp->type != ICE_TCAM_ADD || !tmp->add_tcam_idx)
+			continue;
+
+		id = ice_sect_id(blk, ICE_PROF_TCAM);
+		p = (struct ice_prof_id_section *)ice_pkg_buf_alloc_section(
+		    bld, id, ice_struct_size(p, entry, 1));
+		if (!p)
+			return ICE_ERR_MAX_LIMIT;
+
+		p->count = htole16(1);
+		p->entry[0].addr = htole16(tmp->tcam_idx);
+		p->entry[0].prof_id = tmp->prof_id;
+
+		memcpy(p->entry[0].key,
+		    &hw->blk[blk].prof.t[tmp->tcam_idx].key,
+		    sizeof(hw->blk[blk].prof.t->key));
+	}
+
+	return 0;
+}
+
+/**
+ * ice_prof_bld_xlt1 - build XLT1 changes
+ * @blk: hardware block
+ * @bld: the update package buffer build to add to
+ * @chgs: the list of changes to make in hardware
+ */
+int
+ice_prof_bld_xlt1(enum ice_block blk, struct ice_buf_build *bld,
+		  struct ice_chs_chg_head *chgs)
+{
+	struct ice_chs_chg *tmp;
+	struct ice_xlt1_section *p;
+	uint32_t id;
+
+	TAILQ_FOREACH(tmp, chgs, list_entry) {
+		if (tmp->type != ICE_PTG_ES_ADD || !tmp->add_ptg)
+			continue;
+
+		id = ice_sect_id(blk, ICE_XLT1);
+		p = (struct ice_xlt1_section *)ice_pkg_buf_alloc_section(bld,
+		    id, ice_struct_size(p, value, 1));
+		if (!p)
+			return ICE_ERR_MAX_LIMIT;
+
+		p->count = htole16(1);
+		p->offset = htole16(tmp->ptype);
+		p->value[0] = tmp->ptg;
+	}
+
+	return 0;
+}
+
+/**
+ * ice_prof_bld_xlt2 - build XLT2 changes
+ * @blk: hardware block
+ * @bld: the update package buffer build to add to
+ * @chgs: the list of changes to make in hardware
+ */
+int
+ice_prof_bld_xlt2(enum ice_block blk, struct ice_buf_build *bld,
+		  struct ice_chs_chg_head *chgs)
+{
+	struct ice_chs_chg *tmp;
+	struct ice_xlt2_section *p;
+	uint32_t id;
+
+	TAILQ_FOREACH(tmp, chgs, list_entry) {
+		if (tmp->type != ICE_VSIG_ADD &&
+		    tmp->type != ICE_VSI_MOVE &&
+		    tmp->type != ICE_VSIG_REM)
+			continue;
+
+		id = ice_sect_id(blk, ICE_XLT2);
+		p = (struct ice_xlt2_section *)ice_pkg_buf_alloc_section(bld,
+		    id, ice_struct_size(p, value, 1));
+		if (!p)
+			return ICE_ERR_MAX_LIMIT;
+
+		p->count = htole16(1);
+		p->offset = htole16(tmp->vsi);
+		p->value[0] = htole16(tmp->vsig);
+	}
+
+	return 0;
+}
+
+/**
+ * ice_aq_update_pkg
+ * @hw: pointer to the hardware structure
+ * @pkg_buf: the package cmd buffer
+ * @buf_size: the size of the package cmd buffer
+ * @last_buf: last buffer indicator
+ * @error_offset: returns error offset
+ * @error_info: returns error information
+ * @cd: pointer to command details structure or NULL
+ *
+ * Update Package (0x0C42)
+ */
+int
+ice_aq_update_pkg(struct ice_hw *hw, struct ice_buf_hdr *pkg_buf,
+    uint16_t buf_size, bool last_buf, uint32_t *error_offset,
+    uint32_t *error_info, struct ice_sq_cd *cd)
+{
+	struct ice_aqc_download_pkg *cmd;
+	struct ice_aq_desc desc;
+	int status;
+
+	if (error_offset)
+		*error_offset = 0;
+	if (error_info)
+		*error_info = 0;
+
+	cmd = &desc.params.download_pkg;
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_update_pkg);
+	desc.flags |= htole16(ICE_AQ_FLAG_RD);
+
+	if (last_buf)
+		cmd->flags |= ICE_AQC_DOWNLOAD_PKG_LAST_BUF;
+
+	status = ice_aq_send_cmd(hw, &desc, pkg_buf, buf_size, cd);
+	if (status == ICE_ERR_AQ_ERROR) {
+		/* Read error from buffer only when the FW returned an error */
+		struct ice_aqc_download_pkg_resp *resp;
+
+		resp = (struct ice_aqc_download_pkg_resp *)pkg_buf;
+		if (error_offset)
+			*error_offset = le32toh(resp->error_offset);
+		if (error_info)
+			*error_info = le32toh(resp->error_info);
+	}
+
+	return status;
+}
+
+/**
+ * ice_update_pkg_no_lock
+ * @hw: pointer to the hardware structure
+ * @bufs: pointer to an array of buffers
+ * @count: the number of buffers in the array
+ */
+int
+ice_update_pkg_no_lock(struct ice_hw *hw, struct ice_buf *bufs, uint32_t count)
+{
+	int status = 0;
+	uint32_t i;
+
+	for (i = 0; i < count; i++) {
+		struct ice_buf_hdr *bh = (struct ice_buf_hdr *)(bufs + i);
+		bool last = ((i + 1) == count);
+		uint32_t offset, info;
+
+		status = ice_aq_update_pkg(hw, bh, le16toh(bh->data_end),
+		    last, &offset, &info, NULL);
+		if (status) {
+			DNPRINTF(ICE_DBG_PKG,
+			    "Update pkg failed: err %d off %d inf %d\n",
+			    status, offset, info);
+			break;
+		}
+	}
+
+	return status;
+}
+
+/**
+ * ice_acquire_change_lock
+ * @hw: pointer to the HW structure
+ * @access: access type (read or write)
+ *
+ * This function will request ownership of the change lock.
+ */
+int
+ice_acquire_change_lock(struct ice_hw *hw, enum ice_aq_res_access_type access)
+{
+	return ice_acquire_res(hw, ICE_CHANGE_LOCK_RES_ID, access,
+	    ICE_CHANGE_LOCK_TIMEOUT);
+}
+
+/**
+ * ice_release_change_lock
+ * @hw: pointer to the HW structure
+ *
+ * This function will release the change lock using the proper Admin Command.
+ */
+void
+ice_release_change_lock(struct ice_hw *hw)
+{
+	ice_release_res(hw, ICE_CHANGE_LOCK_RES_ID);
+}
+
+/**
+ * ice_update_pkg
+ * @hw: pointer to the hardware structure
+ * @bufs: pointer to an array of buffers
+ * @count: the number of buffers in the array
+ *
+ * Obtains change lock and updates package.
+ */
+int
+ice_update_pkg(struct ice_hw *hw, struct ice_buf *bufs, uint32_t count)
+{
+	int status;
+
+	status = ice_acquire_change_lock(hw, ICE_RES_WRITE);
+	if (status)
+		return status;
+
+	status = ice_update_pkg_no_lock(hw, bufs, count);
+
+	ice_release_change_lock(hw);
+
+	return status;
+}
+
+/**
  * ice_upd_prof_hw - update hardware using the change list
  * @hw: pointer to the HW struct
  * @blk: hardware block
@@ -16822,7 +19744,6 @@ enum ice_status
 ice_upd_prof_hw(struct ice_hw *hw, enum ice_block blk,
 		struct ice_chs_chg_head *chgs)
 {
-#if 0
 	struct ice_buf_build *b;
 	struct ice_chs_chg *tmp;
 	enum ice_status status;
@@ -16834,7 +19755,7 @@ ice_upd_prof_hw(struct ice_hw *hw, enum ice_block blk,
 	uint16_t sects;
 
 	/* count number of sections we need */
-	TAILQ_FOREACH(p, chgs, list_entry) {
+	TAILQ_FOREACH(tmp, chgs, list_entry) {
 		switch (tmp->type) {
 		case ICE_PTG_ES_ADD:
 			if (tmp->add_ptg)
@@ -16906,15 +19827,11 @@ ice_upd_prof_hw(struct ice_hw *hw, enum ice_block blk,
 	/* update package */
 	status = ice_update_pkg(hw, ice_pkg_buf(b), 1);
 	if (status == ICE_ERR_AQ_ERROR)
-		ice_debug(hw, ICE_DBG_INIT, "Unable to update HW profile\n");
+		DNPRINTF(ICE_DBG_INIT, "Unable to update HW profile\n");
 
 error_tmp:
-	ice_pkg_buf_free(hw, b);
+	ice_free(hw, b);
 	return status;
-#else
-	printf("%s: not implemented\n", __func__);
-	return ICE_ERR_NOT_IMPL;
-#endif
 }
 
 /**
@@ -17889,7 +20806,7 @@ ice_free_vsi_qmaps(struct ice_vsi *vsi)
 		ice_resmgr_release_map(&sc->tx_qmgr, vsi->tx_qmap,
 		    vsi->num_tx_queues);
 		free(vsi->tx_qmap, M_DEVBUF,
-		    vsi->num_tx_queues * sizeof(uint16_t));
+		    sc->isc_ntxqsets_max * sizeof(uint16_t));
 		vsi->tx_qmap = NULL;
 	}
 
@@ -17897,7 +20814,7 @@ ice_free_vsi_qmaps(struct ice_vsi *vsi)
 		ice_resmgr_release_map(&sc->rx_qmgr, vsi->rx_qmap,
 		     vsi->num_rx_queues);
 		free(vsi->rx_qmap, M_DEVBUF,
-		    vsi->num_rx_queues * sizeof(uint16_t));
+		    sc->isc_nrxqsets_max * sizeof(uint16_t));
 		vsi->rx_qmap = NULL;
 	}
 }
@@ -22030,28 +24947,6 @@ ice_alloc_prof_id(struct ice_hw *hw, enum ice_block blk, uint8_t *prof_id)
 }
 
 /**
- * ice_ptg_find_ptype - Search for packet type group using packet type (ptype)
- * @hw: pointer to the hardware structure
- * @blk: HW block
- * @ptype: the ptype to search for
- * @ptg: pointer to variable that receives the PTG
- *
- * This function will search the PTGs for a particular ptype, returning the
- * PTG ID that contains it through the PTG parameter, with the value of
- * ICE_DEFAULT_PTG (0) meaning it is part the default PTG.
- */
-enum ice_status
-ice_ptg_find_ptype(struct ice_hw *hw, enum ice_block blk, uint16_t ptype,
-    uint8_t *ptg)
-{
-	if (ptype >= ICE_XLT1_CNT || !ptg)
-		return ICE_ERR_PARAM;
-
-	*ptg = hw->blk[blk].xlt1.ptypes[ptype].ptg;
-	return ICE_SUCCESS;
-}
-
-/**
  * ice_add_prof - add profile
  * @hw: pointer to the HW struct
  * @blk: hardware block
@@ -23288,6 +26183,36 @@ ice_config_rss(struct ice_vsi *vsi)
 }
 
 /**
+ * ice_transition_safe_mode - Transition to safe mode
+ * @sc: the device private softc
+ *
+ * Called when the driver attempts to reload the DDP package during a device
+ * reset, and the new download fails. If so, we must transition to safe mode
+ * at run time.
+ *
+ * @remark although safe mode normally allocates only a single queue, we can't
+ * change the number of queues dynamically when using iflib. Due to this, we
+ * do not attempt to reduce the number of queues.
+ */
+void
+ice_transition_safe_mode(struct ice_softc *sc)
+{
+	/* Indicate that we are in Safe mode */
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_cap);
+	ice_set_bit(ICE_FEATURE_SAFE_MODE, sc->feat_en);
+#if 0
+	ice_rdma_pf_detach(sc);
+#endif
+	ice_clear_bit(ICE_FEATURE_RDMA, sc->feat_cap);
+
+	ice_clear_bit(ICE_FEATURE_SRIOV, sc->feat_en);
+	ice_clear_bit(ICE_FEATURE_SRIOV, sc->feat_cap);
+
+	ice_clear_bit(ICE_FEATURE_RSS, sc->feat_cap);
+	ice_clear_bit(ICE_FEATURE_RSS, sc->feat_en);
+}
+
+/**
  * ice_rebuild - Rebuild driver state post reset
  * @sc: The device private softc
  *
@@ -23397,7 +26322,6 @@ ice_rebuild(struct ice_softc *sc)
 
 	/* If we previously loaded the package, it needs to be reloaded now */
 	if (!ice_is_bit_set(sc->feat_en, ICE_FEATURE_SAFE_MODE)) {
-#if 0
 		enum ice_ddp_state pkg_state;
 
 		pkg_state = ice_init_pkg(hw, hw->pkg_copy, hw->pkg_size);
@@ -23405,7 +26329,6 @@ ice_rebuild(struct ice_softc *sc)
 			ice_log_pkg_init(sc, pkg_state);
 			ice_transition_safe_mode(sc);
 		}
-#endif
 	}
 
 	ice_reset_pf_stats(sc);
@@ -26130,10 +29053,94 @@ ice_intr0(void *xsc)
 #define ICE_RX_FLEX_NIC(desc, field) \
 	(((struct ice_32b_rx_flex_desc_nic *)desc)->field)
 
+/**
+ * ice_rx_checksum - verify hardware checksum is valid or not
+ * @status0: descriptor status data
+ * @ptype: packet type
+ *
+ * Determine whether the hardware indicated that the Rx checksum is valid. If
+ * so, update the checksum flags and data, informing the stack of the status
+ * of the checksum so that it does not spend time verifying it manually.
+ */
 void
-ice_rx_checksum(struct mbuf *m, uint16_t status0)
+ice_rx_checksum(struct mbuf *m, uint16_t status0, uint16_t ptype)
 {
-	/* TODO */
+	const uint16_t l3_error = (BIT(ICE_RX_FLEX_DESC_STATUS0_XSUM_IPE_S) |
+	    BIT(ICE_RX_FLEX_DESC_STATUS0_XSUM_EIPE_S));
+	const uint16_t l4_error = (BIT(ICE_RX_FLEX_DESC_STATUS0_XSUM_L4E_S) |
+	    BIT(ICE_RX_FLEX_DESC_STATUS0_XSUM_EUDPE_S));
+	const uint16_t xsum_errors = (l3_error | l4_error |
+	    BIT(ICE_RX_FLEX_DESC_STATUS0_IPV6EXADD_S));
+	struct ice_rx_ptype_decoded decoded;
+	int is_ipv4, is_ipv6;
+
+	/* No L3 or L4 checksum was calculated */
+	if (!(status0 & BIT(ICE_RX_FLEX_DESC_STATUS0_L3L4P_S)))
+		return;
+
+	decoded = ice_decode_rx_desc_ptype(ptype);
+
+	if (!(decoded.known && decoded.outer_ip))
+		return;
+
+	is_ipv4 = (decoded.outer_ip == ICE_RX_PTYPE_OUTER_IP) &&
+	    (decoded.outer_ip_ver == ICE_RX_PTYPE_OUTER_IPV4);
+	is_ipv6 = (decoded.outer_ip == ICE_RX_PTYPE_OUTER_IP) &&
+	    (decoded.outer_ip_ver == ICE_RX_PTYPE_OUTER_IPV6);
+
+	/* No checksum errors were reported */
+	if (!(status0 & xsum_errors)) {
+		if (is_ipv4)
+			m->m_pkthdr.csum_flags |= M_IPV4_CSUM_IN_OK;
+
+		switch (decoded.inner_prot) {
+		case ICE_RX_PTYPE_INNER_PROT_TCP:
+			m->m_pkthdr.csum_flags |= M_TCP_CSUM_IN_OK;
+			break;
+		case ICE_RX_PTYPE_INNER_PROT_UDP:
+			m->m_pkthdr.csum_flags |= M_UDP_CSUM_IN_OK;
+			break;
+		default:
+			break;
+		}
+
+		return;
+	}
+
+	/*
+	 * Certain IPv6 extension headers impact the validity of L4 checksums.
+	 * If one of these headers exist, hardware will set the IPV6EXADD bit
+	 * in the descriptor. If the bit is set then pretend like hardware
+	 * didn't checksum this packet.
+	 */
+	if (is_ipv6 && (status0 & BIT(ICE_RX_FLEX_DESC_STATUS0_IPV6EXADD_S)))
+		return;
+
+	/*
+	 * At this point, status0 must have at least one of the l3_error or
+	 * l4_error bits set.
+	 */
+	if (status0 & l3_error) {
+		if (is_ipv4)
+			m->m_pkthdr.csum_flags |= M_IPV4_CSUM_IN_BAD;
+
+		/* don't bother reporting L4 errors if we got an L3 error */
+		return;
+	} else if (is_ipv4)
+		m->m_pkthdr.csum_flags |= M_IPV4_CSUM_IN_OK;
+
+	if (status0 & l4_error) {
+		switch (decoded.inner_prot) {
+		case ICE_RX_PTYPE_INNER_PROT_TCP:
+			m->m_pkthdr.csum_flags |= M_TCP_CSUM_IN_BAD;
+			break;
+		case ICE_RX_PTYPE_INNER_PROT_UDP:
+			m->m_pkthdr.csum_flags |= M_UDP_CSUM_IN_BAD;
+			break;
+		default:
+			break;
+		}
+	}
 }
 
 int
@@ -26145,9 +29152,10 @@ ice_rxeof(struct ice_softc *sc, struct ice_rx_queue *rxq)
 	struct ice_rx_map *rxm;
 	bus_dmamap_t map;
 	unsigned int cons, prod;
+	struct mbuf_list mltcp = MBUF_LIST_INITIALIZER();
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct mbuf *m;
-	uint16_t status0;
+	uint16_t status0, ptype;
 	unsigned int eop;
 	unsigned int len;
 	unsigned int mask;
@@ -26223,8 +29231,19 @@ ice_rxeof(struct ice_softc *sc, struct ice_rx_queue *rxq)
 				m->m_pkthdr.csum_flags |= M_FLOWID;
 			}
 
-			ice_rx_checksum(m, status0);
-			ml_enqueue(&ml, m);
+			/* Get packet type and set checksum flags */
+			ptype = le16toh(cur->wb.ptype_flex_flags0) &
+				ICE_RX_FLEX_DESC_PTYPE_M;
+			ice_rx_checksum(m, status0, ptype);
+
+#ifndef SMALL_KERNEL
+			if (ISSET(ifp->if_xflags, IFXF_LRO) &&
+			    (ptype == ICE_RX_FLEX_DECS_PTYPE_MAC_IPV4_TCP ||
+			     ptype == ICE_RX_FLEX_DECS_PTYPE_MAC_IPV6_TCP))
+				tcp_softlro_glue(&mltcp, m, ifp);
+			else
+#endif
+				ml_enqueue(&ml, m);
 
 			rxq->rxq_m_head = NULL;
 			rxq->rxq_m_tail = &rxq->rxq_m_head;
@@ -26237,8 +29256,15 @@ ice_rxeof(struct ice_softc *sc, struct ice_rx_queue *rxq)
 	} while (cons != prod);
 
 	if (done) {
+		int livelocked = 0;
+
 		rxq->rxq_cons = cons;
+		if (ifiq_input(ifiq, &mltcp))
+			livelocked = 1;
 		if (ifiq_input(ifiq, &ml))
+			livelocked = 1;
+
+		if (livelocked)
 			if_rxr_livelocked(&rxq->rxq_acct);
 		ice_rxfill(sc, rxq);
 	}
@@ -26306,7 +29332,7 @@ ice_txeof(struct ice_softc *sc, struct ice_tx_queue *txq)
 
 	//ixl_enable(sc, txr->txr_msix);
 
-	if (ifq_is_oactive(ifq))
+	if (done && ifq_is_oactive(ifq))
 		ifq_restart(ifq);
 
 	return (done);
@@ -26338,9 +29364,6 @@ ice_intr_vector(void *ivp)
 /**
  * ice_allocate_msix - Allocate MSI-X vectors for the interface
  * @sc: the device private softc
- *
- * @post on success this function must set the following scctx parameters:
- * isc_vectors, isc_nrxqsets, isc_ntxqsets, and isc_intr.
  *
  * @returns zero on success or an error code on failure.
  */
@@ -26376,10 +29399,6 @@ ice_allocate_msix(struct ice_softc *sc)
 			}
 		}
 	}
-
-	sc->isc_vectors = sc->sc_nvectors;
-	sc->isc_nrxqsets = sc->sc_nqueues;
-	sc->isc_ntxqsets = sc->sc_nqueues;
 
 	return 0;
 
@@ -26482,8 +29501,8 @@ ice_tx_queues_alloc(struct ice_softc *sc)
 
 		for (j = 0; j < sc->isc_ntxd[i]; j++) {
 			map = &txq->tx_map[j];
-			if (bus_dmamap_create(sc->sc_dmat, ICE_MAX_FRAME_SIZE, 1,
-			    ICE_MAX_FRAME_SIZE, 0,
+			if (bus_dmamap_create(sc->sc_dmat, MAXMCLBYTES,
+			    ICE_MAX_TX_SEGS, ICE_MAX_DMA_SEG_SIZE, 0,
 			    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
 			    &map->txm_map) != 0) {
 				printf("%s: could not allocate Tx DMA map\n",
@@ -27245,8 +30264,10 @@ ice_attach_hook(struct device *self)
 	 */
 	status = ice_load_pkg_file(sc);
 	if (status == ICE_SUCCESS) {
-		ice_reinit_hw(sc);
-		return;
+		ice_deinit_hw(hw);
+		err = ice_reinit_hw(sc);
+		if (err)
+			return;
 	}
 
 	err = ice_init_link_events(sc);
@@ -27285,8 +30306,7 @@ ice_attach_hook(struct device *self)
 		goto deinit_hw;
 	}
 	sc->sc_nmsix = nmsix;
-	nqueues_max = MIN(hw->func_caps.common_cap.num_rxq,
-	    hw->func_caps.common_cap.num_txq);
+	nqueues_max = MIN(sc->isc_nrxqsets_max, sc->isc_ntxqsets_max);
 	sc->sc_intrmap = intrmap_create(&sc->sc_dev, sc->sc_nmsix - 1,
 	    nqueues_max, INTRMAP_POWEROF2);
 	nqueues = intrmap_count(sc->sc_intrmap);
@@ -27298,7 +30318,7 @@ ice_attach_hook(struct device *self)
 	    sc->sc_nqueues, sc->sc_nqueues > 1 ? "s" : "");
 
 	/* Initialize the Tx queue manager */
-	err = ice_resmgr_init(&sc->tx_qmgr, hw->func_caps.common_cap.num_txq);
+	err = ice_resmgr_init(&sc->tx_qmgr, sc->sc_nqueues);
 	if (err) {
 		printf("%s: Unable to initialize Tx queue manager: err %d\n",
 		    sc->sc_dev.dv_xname, err);
@@ -27306,7 +30326,7 @@ ice_attach_hook(struct device *self)
 	}
 
 	/* Initialize the Rx queue manager */
-	err = ice_resmgr_init(&sc->rx_qmgr, hw->func_caps.common_cap.num_rxq);
+	err = ice_resmgr_init(&sc->rx_qmgr, sc->sc_nqueues);
 	if (err) {
 		printf("%s: Unable to initialize Rx queue manager: %d\n",
 		    sc->sc_dev.dv_xname, err);
@@ -27389,6 +30409,43 @@ ice_attach_hook(struct device *self)
 
 	ice_get_and_print_bus_info(sc);
 #endif
+
+	/*
+	 * At this point we are committed to attaching the driver.
+	 * Network stack needs to be wired up before ice_update_link_status()
+	 * calls if_link_state_change().
+	 */
+	ifp->if_softc = sc;
+	strlcpy(ifp->if_xname, sc->sc_dev.dv_xname, IFNAMSIZ);
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
+	ifp->if_xflags = IFXF_MPSAFE;
+	ifp->if_ioctl = ice_ioctl;
+	ifp->if_qstart = ice_start;
+	ifp->if_watchdog = ice_watchdog;
+	ifp->if_hardmtu = ice_hardmtu(hw);
+
+	ifq_init_maxlen(&ifp->if_snd, ICE_DEFAULT_DESC_COUNT);
+
+	ifp->if_capabilities = IFCAP_VLAN_MTU;
+#if NVLAN > 0
+	ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
+#endif
+	ifp->if_capabilities |= IFCAP_CSUM_IPv4 |
+	    IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv4 |
+	    IFCAP_CSUM_TCPv6 | IFCAP_CSUM_UDPv6 |
+	    IFCAP_TSOv4 | IFCAP_TSOv6;
+	ifp->if_capabilities |= IFCAP_LRO;
+#if notyet
+	/* for now tcplro at ice(4) is default off */
+	ifp->if_xflags |= IFXF_LRO;
+#endif
+
+	if_attach(ifp);
+	ether_ifattach(ifp);
+
+	if_attach_queues(ifp, sc->sc_nqueues);
+	if_attach_iqueues(ifp, sc->sc_nqueues);
+
 	ice_set_link_management_mode(sc);
 
 	ice_init_saved_phy_cfg(sc);
@@ -27426,28 +30483,6 @@ ice_attach_hook(struct device *self)
 	if (ice_test_state(&sc->state, ICE_STATE_LINK_ACTIVE_ON_DOWN) &&
 		 !ice_test_state(&sc->state, ICE_STATE_NO_MEDIA))
 		ice_set_state(&sc->state, ICE_STATE_FIRST_INIT_LINK);
-
-	ifp->if_softc = sc;
-	strlcpy(ifp->if_xname, sc->sc_dev.dv_xname, IFNAMSIZ);
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_xflags = IFXF_MPSAFE;
-	ifp->if_ioctl = ice_ioctl;
-	ifp->if_qstart = ice_start;
-	ifp->if_watchdog = ice_watchdog;
-	ifp->if_hardmtu = ice_hardmtu(hw);
-
-	ifq_init_maxlen(&ifp->if_snd, ICE_DEFAULT_DESC_COUNT);
-
-	ifp->if_capabilities = IFCAP_VLAN_MTU;
-#if NVLAN > 0
-	ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
-#endif
-
-	if_attach(ifp);
-	ether_ifattach(ifp);
-
-	if_attach_queues(ifp, sc->sc_nqueues);
-	if_attach_iqueues(ifp, sc->sc_nqueues);
 
 	/* Setup the MAC address */
 	err = if_setlladdr(ifp, hw->port_info->mac.perm_addr);

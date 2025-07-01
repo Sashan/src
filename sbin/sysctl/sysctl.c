@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.c,v 1.262 2024/09/09 05:36:17 kn Exp $	*/
+/*	$OpenBSD: sysctl.c,v 1.267 2025/06/21 22:08:44 bluhm Exp $	*/
 /*	$NetBSD: sysctl.c,v 1.9 1995/09/30 07:12:50 thorpej Exp $	*/
 
 /*
@@ -75,7 +75,6 @@
 
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
-#include <netinet6/ip6_divert.h>
 
 #include <netmpls/mpls.h>
 
@@ -111,7 +110,6 @@
 struct ctlname topname[] = CTL_NAMES;
 struct ctlname kernname[] = CTL_KERN_NAMES;
 struct ctlname vmname[] = CTL_VM_NAMES;
-struct ctlname fsname[] = CTL_FS_NAMES;
 struct ctlname netname[] = CTL_NET_NAMES;
 struct ctlname hwname[] = CTL_HW_NAMES;
 struct ctlname debugname[CTL_DEBUG_MAXID];
@@ -147,7 +145,7 @@ struct list secondlevel[] = {
 	{ 0, 0 },			/* CTL_UNSPEC */
 	{ kernname, KERN_MAXID },	/* CTL_KERN */
 	{ vmname, VM_MAXID },		/* CTL_VM */
-	{ fsname, FS_MAXID },		/* CTL_FS */
+	{ 0, 0 },			/* was CTL_FS */
 	{ netname, NET_MAXID },		/* CTL_NET */
 	{ 0, CTL_DEBUG_MAXID },		/* CTL_DEBUG */
 	{ hwname, HW_MAXID },		/* CTL_HW */
@@ -201,7 +199,6 @@ int sysctl_link(char *, char **, int *, int, int *);
 int sysctl_bpf(char *, char **, int *, int, int *);
 int sysctl_mpls(char *, char **, int *, int, int *);
 int sysctl_pipex(char *, char **, int *, int, int *);
-int sysctl_fs(char *, char **, int *, int, int *);
 static int sysctl_vfs(char *, char **, int[], int, int *);
 static int sysctl_vfsgen(char *, char **, int[], int, int *);
 int sysctl_bios(char *, char **, int *, int, int *);
@@ -232,8 +229,9 @@ int
 main(int argc, char *argv[])
 {
 	int ch, lvl1;
+	const char *conffile = NULL;
 
-	while ((ch = getopt(argc, argv, "Aanqw")) != -1) {
+	while ((ch = getopt(argc, argv, "Aaf:nqw")) != -1) {
 		switch (ch) {
 
 		case 'A':
@@ -242,6 +240,10 @@ main(int argc, char *argv[])
 
 		case 'a':
 			aflag = 1;
+			break;
+
+		case 'f':
+			conffile = optarg;
 			break;
 
 		case 'n':
@@ -269,16 +271,40 @@ main(int argc, char *argv[])
 		err(1,"unveil %s", _PATH_DEVDB);
 	if (unveil("/dev", "r") == -1 && errno != ENOENT)
 		err(1, "unveil /dev");
+	if (conffile != NULL)
+		if (unveil(conffile, "r") == -1 && errno != ENOENT)
+			err(1, "unveil %s", conffile);
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
 
-	if (argc == 0 || (Aflag || aflag)) {
+	if ((argc == 0 && conffile == NULL) || (Aflag || aflag)) {
 		debuginit();
 		vfsinit();
 		for (lvl1 = 1; lvl1 < CTL_MAXID; lvl1++)
 			listall(topname[lvl1].ctl_name, &secondlevel[lvl1]);
 		return (0);
 	}
+
+	if (conffile != NULL) {
+		FILE *fp;
+		char *line = NULL, *lp;
+		size_t sz = 0;
+
+		if ((fp = fopen(conffile, "r")) == NULL)
+			err(1, "fopen");
+
+		while (getline(&line, &sz, fp) != -1) {
+			lp = line + strspn(line, " \t");
+			line[strcspn(line, " \t\n#")] = '\0';
+
+			if (lp[0] != '\0')
+				parse(line, 1);
+		}
+
+		free(line);
+		fclose(fp);
+	}
+
 	for (; *argv != NULL; ++argv)
 		parse(*argv, 1);
 	return (0);
@@ -672,8 +698,7 @@ parse(char *string, int flags)
 				special |= HEX;
 
 			if ((mib[2] == IPPROTO_IPV6 && mib[3] == IPV6CTL_MRTMFC) ||
-			    (mib[2] == IPPROTO_IPV6 && mib[3] == IPV6CTL_MRTMIF) ||
-			    (mib[2] == IPPROTO_DIVERT && mib[3] == DIVERT6CTL_STATS)) {
+			    (mib[2] == IPPROTO_IPV6 && mib[3] == IPV6CTL_MRTMIF)) {
 				if (flags == 0)
 					return;
 				warnx("use netstat to view %s information",
@@ -778,12 +803,6 @@ parse(char *string, int flags)
 		}
 #endif
 		break;
-
-	case CTL_FS:
-		len = sysctl_fs(string, &bufp, mib, flags, &type);
-		if (len >= 0)
-			break;
-		return;
 
 	case CTL_VFS:
 		if (mib[1])
@@ -1400,28 +1419,6 @@ sysctl_vfs(char *string, char **bufpp, int mib[], int flags, int *typep)
 	mib[1] = vfs_typenums[mib[1]];
 	mib[2] = indx;
 	*typep = lp->list[indx].ctl_type;
-	return (3);
-}
-
-struct ctlname posixname[] = CTL_FS_POSIX_NAMES;
-struct list fslist = { posixname, FS_POSIX_MAXID };
-
-/*
- * handle file system requests
- */
-int
-sysctl_fs(char *string, char **bufpp, int mib[], int flags, int *typep)
-{
-	int indx;
-
-	if (*bufpp == NULL) {
-		listall(string, &fslist);
-		return (-1);
-	}
-	if ((indx = findname(string, "third", bufpp, &fslist)) == -1)
-		return (-1);
-	mib[2] = indx;
-	*typep = fslist.list[indx].ctl_type;
 	return (3);
 }
 
@@ -2170,7 +2167,6 @@ sysctl_inet(char *string, char **bufpp, int mib[], int flags, int *typep)
 struct ctlname inet6name[] = CTL_IPV6PROTO_NAMES;
 struct ctlname ip6name[] = IPV6CTL_NAMES;
 struct ctlname icmp6name[] = ICMPV6CTL_NAMES;
-struct ctlname divert6name[] = DIVERT6CTL_NAMES;
 struct list inet6list = { inet6name, IPV6PROTO_MAXID };
 struct list inet6vars[] = {
 /*0*/	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 },
@@ -2251,7 +2247,7 @@ struct list inet6vars[] = {
 	{ 0, 0 },
 	{ 0, 0 },
 	{ 0, 0 },
-	{ divert6name, DIVERT6CTL_MAXID },
+	{ 0, 0 },
 };
 
 /*
@@ -2974,6 +2970,6 @@ void
 usage(void)
 {
 	(void)fprintf(stderr,
-	    "usage: sysctl [-Aanq] [name[=value] ...]\n");
+	    "usage: sysctl [-Aanq] [-f file] [name[=value] ...]\n");
 	exit(1);
 }

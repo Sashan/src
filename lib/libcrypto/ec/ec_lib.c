@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_lib.c,v 1.116 2025/01/25 13:13:57 tb Exp $ */
+/* $OpenBSD: ec_lib.c,v 1.125 2025/05/24 08:25:58 jsing Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -68,12 +68,12 @@
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
-#include <openssl/err.h>
 #include <openssl/objects.h>
 #include <openssl/opensslv.h>
 
 #include "bn_local.h"
 #include "ec_local.h"
+#include "err_local.h"
 
 EC_GROUP *
 EC_GROUP_new(const EC_METHOD *meth)
@@ -117,7 +117,6 @@ EC_GROUP_new(const EC_METHOD *meth)
 
 	return NULL;
 }
-LCRYPTO_ALIAS(EC_GROUP_new);
 
 void
 EC_GROUP_free(EC_GROUP *group)
@@ -147,7 +146,7 @@ EC_GROUP_clear_free(EC_GROUP *group)
 }
 LCRYPTO_ALIAS(EC_GROUP_clear_free);
 
-int
+static int
 EC_GROUP_copy(EC_GROUP *dst, const EC_GROUP *src)
 {
 	if (dst->meth != src->meth) {
@@ -198,7 +197,6 @@ EC_GROUP_copy(EC_GROUP *dst, const EC_GROUP *src)
 
 	return 1;
 }
-LCRYPTO_ALIAS(EC_GROUP_copy);
 
 EC_GROUP *
 EC_GROUP_dup(const EC_GROUP *in_group)
@@ -896,11 +894,7 @@ EC_POINT_set_to_infinity(const EC_GROUP *group, EC_POINT *point)
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
 		return 0;
 	}
-
-	BN_zero(point->Z);
-	point->Z_is_one = 0;
-
-	return 1;
+	return point->meth->point_set_to_infinity(group, point);
 }
 LCRYPTO_ALIAS(EC_POINT_set_to_infinity);
 
@@ -1202,8 +1196,7 @@ EC_POINT_is_at_infinity(const EC_GROUP *group, const EC_POINT *point)
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
 		return 0;
 	}
-
-	return BN_is_zero(point->Z);
+	return point->meth->point_is_at_infinity(group, point);
 }
 LCRYPTO_ALIAS(EC_POINT_is_at_infinity);
 
@@ -1321,6 +1314,11 @@ EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
 		goto err;
 	}
 
+	if (g_scalar != NULL && group->generator == NULL) {
+		ECerror(EC_R_UNDEFINED_GENERATOR);
+		goto err;
+	}
+
 	if (g_scalar != NULL && point == NULL && p_scalar == NULL) {
 		/*
 		 * In this case we want to compute g_scalar * GeneratorPoint:
@@ -1330,8 +1328,8 @@ EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
 		 * secret. This is why we ignore if BN_FLG_CONSTTIME is actually
 		 * set and we always call the constant time version.
 		 */
-		ret = group->meth->mul_single_ct(group, r, g_scalar,
-		    group->generator, ctx);
+		ret = group->meth->mul_single_ct(group, r,
+		    g_scalar, group->generator, ctx);
 	} else if (g_scalar == NULL && point != NULL && p_scalar != NULL) {
 		/*
 		 * In this case we want to compute p_scalar * GenericPoint:
@@ -1349,8 +1347,8 @@ EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
 		 * this codepath is reached most prominently by ECDSA signature
 		 * verification. So we call the non-ct version.
 		 */
-		ret = group->meth->mul_double_nonct(group, r, g_scalar,
-		    p_scalar, point, ctx);
+		ret = group->meth->mul_double_nonct(group, r,
+		    g_scalar, group->generator, p_scalar, point, ctx);
 	} else {
 		/* Anything else is an error. */
 		ECerror(ERR_R_EC_LIB);
@@ -1364,84 +1362,3 @@ EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
 	return ret;
 }
 LCRYPTO_ALIAS(EC_POINT_mul);
-
-/*
- * XXX - remove everything below in the next bump
- */
-
-int
-EC_POINT_set_Jprojective_coordinates_GFp(const EC_GROUP *group, EC_POINT *point,
-    const BIGNUM *x, const BIGNUM *y, const BIGNUM *z, BN_CTX *ctx)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_POINT_set_Jprojective_coordinates_GFp);
-
-int
-EC_POINT_get_Jprojective_coordinates_GFp(const EC_GROUP *group,
-    const EC_POINT *point, BIGNUM *x, BIGNUM *y, BIGNUM *z, BN_CTX *ctx)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_POINT_get_Jprojective_coordinates_GFp);
-
-int
-EC_POINTs_make_affine(const EC_GROUP *group, size_t num, EC_POINT *points[],
-    BN_CTX *ctx_in)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_POINTs_make_affine);
-
-int
-EC_POINTs_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *scalar,
-    size_t num, const EC_POINT *points[], const BIGNUM *scalars[],
-    BN_CTX *ctx_in)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_POINTs_mul);
-
-const EC_METHOD *
-EC_GROUP_method_of(const EC_GROUP *group)
-{
-	ECerror(ERR_R_DISABLED);
-	return NULL;
-}
-LCRYPTO_ALIAS(EC_GROUP_method_of);
-
-int
-EC_METHOD_get_field_type(const EC_METHOD *meth)
-{
-	ECerror(ERR_R_DISABLED);
-	return NID_undef;
-}
-LCRYPTO_ALIAS(EC_METHOD_get_field_type);
-
-const EC_METHOD *
-EC_POINT_method_of(const EC_POINT *point)
-{
-	ECerror(ERR_R_DISABLED);
-	return NULL;
-}
-LCRYPTO_ALIAS(EC_POINT_method_of);
-
-int
-EC_GROUP_precompute_mult(EC_GROUP *group, BN_CTX *ctx_in)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_GROUP_precompute_mult);
-
-int
-EC_GROUP_have_precompute_mult(const EC_GROUP *group)
-{
-	ECerror(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(EC_GROUP_have_precompute_mult);

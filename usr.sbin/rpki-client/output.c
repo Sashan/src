@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.38 2025/01/03 10:14:32 job Exp $ */
+/*	$OpenBSD: output.c,v 1.40 2025/04/03 14:29:44 tb Exp $ */
 /*
  * Copyright (c) 2019 Theo de Raadt <deraadt@openbsd.org>
  *
@@ -64,7 +64,8 @@ static const struct outputs {
 	int	 format;
 	char	*name;
 	int	(*fn)(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 } outputs[] = {
 	{ FORMAT_OPENBGPD, "openbgpd", output_bgpd },
 	{ FORMAT_BIRD, "bird", output_bird },
@@ -124,7 +125,7 @@ prune_as0_tals(struct vrp_tree *vrps)
 
 int
 outputfiles(struct vrp_tree *v, struct brk_tree *b, struct vap_tree *a,
-    struct vsp_tree *p, struct stats *st)
+    struct vsp_tree *p, struct nca_tree *ncas, struct stats *st)
 {
 	int i, rc = 0;
 
@@ -146,7 +147,7 @@ outputfiles(struct vrp_tree *v, struct brk_tree *b, struct vap_tree *a,
 			rc = 1;
 			continue;
 		}
-		if ((*outputs[i].fn)(fout, v, b, a, p, st) != 0) {
+		if ((*outputs[i].fn)(fout, v, b, a, p, ncas, st) != 0) {
 			warn("output for %s format failed", outputs[i].name);
 			fclose(fout);
 			output_cleantmp();
@@ -258,12 +259,13 @@ outputheader(FILE *out, struct stats *st)
 	    "# Processing time %lld seconds (%llds user, %llds system)\n"
 	    "# Route Origin Authorizations: %u (%u failed parse, %u invalid)\n"
 	    "# BGPsec Router Certificates: %u\n"
-	    "# Certificates: %u (%u invalid)\n",
+	    "# Certificates: %u (%u invalid, %u non-functional)\n",
 	    hn, tbuf, (long long)st->elapsed_time.tv_sec,
 	    (long long)st->user_time.tv_sec, (long long)st->system_time.tv_sec,
 	    st->repo_tal_stats.roas, st->repo_tal_stats.roas_fail,
 	    st->repo_tal_stats.roas_invalid, st->repo_tal_stats.brks,
-	    st->repo_tal_stats.certs, st->repo_tal_stats.certs_fail) < 0)
+	    st->repo_tal_stats.certs, st->repo_tal_stats.certs_fail,
+	    st->repo_tal_stats.certs_nonfunc) < 0)
 		return -1;
 
 	if (fprintf(out,

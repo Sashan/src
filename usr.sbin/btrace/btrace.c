@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.95 2025/01/23 11:17:32 mpi Exp $ */
+/*	$OpenBSD: btrace.c,v 1.97 2025/05/18 20:09:58 schwarze Exp $ */
 
 /*
  * Copyright (c) 2019 - 2023 Martin Pieuchot <mpi@openbsd.org>
@@ -62,7 +62,6 @@ char			*read_btfile(const char *, size_t *);
 void			 dtpi_cache(int);
 void			 dtpi_print_list(int);
 const char		*dtpi_func(struct dtioc_probe_info *);
-int			 dtpi_is_unit(const char *);
 struct dtioc_probe_info	*dtpi_get_by_value(const char *, const char *,
 			     const char *);
 
@@ -232,8 +231,8 @@ main(int argc, char *argv[])
 __dead void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-lnv] [-e program | file] [-p file] "
-	    "[argument ...]\n", getprogname());
+	fprintf(stderr, "usage: %s [-lnv] [-p elffile] "
+	    "programfile | -e program [argument ...]\n", getprogname());
 	exit(1);
 }
 

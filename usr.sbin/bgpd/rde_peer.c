@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_peer.c,v 1.46 2025/01/27 15:22:11 claudio Exp $ */
+/*	$OpenBSD: rde_peer.c,v 1.49 2025/06/04 09:11:38 claudio Exp $ */
 
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
@@ -179,6 +179,8 @@ peer_add(uint32_t id, struct peer_config *p_conf, struct filter_head *rules)
 	peer->export_type = peer->conf.export_type;
 	peer->flags = peer->conf.flags;
 	SIMPLEQ_INIT(&peer->imsg_queue);
+	if ((peer->ibufq = ibufq_new()) == NULL)
+		fatal(NULL);
 
 	peer_apply_out_filter(peer, rules);
 
@@ -303,7 +305,7 @@ rde_generate_updates(struct rib_entry *re, struct prefix *newpath,
  */
 struct peer_flush {
 	struct rde_peer *peer;
-	time_t		 staletime;
+	monotime_t	 staletime;
 };
 
 static void
@@ -313,7 +315,7 @@ peer_flush_upcall(struct rib_entry *re, void *arg)
 	struct rde_aspath *asp;
 	struct bgpd_addr addr;
 	struct prefix *p, *np, *rp;
-	time_t staletime = ((struct peer_flush *)arg)->staletime;
+	monotime_t staletime = ((struct peer_flush *)arg)->staletime;
 	uint32_t i;
 	uint8_t prefixlen;
 
@@ -322,7 +324,8 @@ peer_flush_upcall(struct rib_entry *re, void *arg)
 	TAILQ_FOREACH_SAFE(p, &re->prefix_h, entry.list.rib, np) {
 		if (peer != prefix_peer(p))
 			continue;
-		if (staletime && p->lastchange > staletime)
+		if (monotime_valid(staletime) &&
+		    monotime_cmp(p->lastchange, staletime) > 0)
 			continue;
 
 		for (i = RIB_LOC_START; i < rib_size; i++) {
@@ -363,7 +366,7 @@ peer_up(struct rde_peer *peer, struct session_up *sup)
 		 */
 		rib_dump_terminate(peer);
 		peer_imsg_flush(peer);
-		peer_flush(peer, AID_UNSPEC, 0);
+		peer_flush(peer, AID_UNSPEC, monotime_clear());
 		peer->stats.prefix_cnt = 0;
 		peer->state = PEER_DOWN;
 	}
@@ -433,7 +436,7 @@ peer_down(struct rde_peer *peer)
 	peer_imsg_flush(peer);
 
 	/* flush Adj-RIB-In */
-	peer_flush(peer, AID_UNSPEC, 0);
+	peer_flush(peer, AID_UNSPEC, monotime_clear());
 	peer->stats.prefix_cnt = 0;
 }
 
@@ -461,7 +464,7 @@ peer_delete(struct rde_peer *peer)
  * be flushed.
  */
 void
-peer_flush(struct rde_peer *peer, uint8_t aid, time_t staletime)
+peer_flush(struct rde_peer *peer, uint8_t aid, monotime_t staletime)
 {
 	struct peer_flush pf = { peer, staletime };
 
@@ -474,9 +477,9 @@ peer_flush(struct rde_peer *peer, uint8_t aid, time_t staletime)
 	if (aid == AID_UNSPEC) {
 		uint8_t i;
 		for (i = AID_MIN; i < AID_MAX; i++)
-			peer->staletime[i] = 0;
+			peer->staletime[i] = monotime_clear();
 	} else {
-		peer->staletime[aid] = 0;
+		peer->staletime[aid] = monotime_clear();
 	}
 }
 
@@ -488,10 +491,10 @@ peer_flush(struct rde_peer *peer, uint8_t aid, time_t staletime)
 void
 peer_stale(struct rde_peer *peer, uint8_t aid, int flushall)
 {
-	time_t now;
+	monotime_t now;
 
 	/* flush the now even staler routes out */
-	if (peer->staletime[aid])
+	if (monotime_valid(peer->staletime[aid]))
 		peer_flush(peer, aid, peer->staletime[aid]);
 
 	peer->staletime[aid] = now = getmonotime();
@@ -506,11 +509,13 @@ peer_stale(struct rde_peer *peer, uint8_t aid, int flushall)
 	peer_imsg_flush(peer);
 
 	if (flushall)
-		peer_flush(peer, aid, 0);
+		peer_flush(peer, aid, monotime_clear());
 
 	/* make sure new prefixes start on a higher timestamp */
-	while (now >= getmonotime())
-		sleep(1);
+	while (monotime_cmp(now, getmonotime()) >= 0) {
+		struct timespec ts = { .tv_nsec = 1000 * 1000 };
+		nanosleep(&ts, NULL);
+	}
 }
 
 /*
@@ -520,14 +525,18 @@ peer_stale(struct rde_peer *peer, uint8_t aid, int flushall)
 static void
 peer_blast_upcall(struct prefix *p, void *ptr)
 {
+	struct rde_peer		*peer;
+
 	if (p->flags & PREFIX_FLAG_DEAD) {
 		/* ignore dead prefixes, they will go away soon */
 	} else if ((p->flags & PREFIX_FLAG_MASK) == 0) {
+		peer = prefix_peer(p);
 		/* put entries on the update queue if not already on a queue */
 		p->flags |= PREFIX_FLAG_UPDATE;
-		if (RB_INSERT(prefix_tree, &prefix_peer(p)->updates[p->pt->aid],
+		if (RB_INSERT(prefix_tree, &peer->updates[p->pt->aid],
 		    p) != NULL)
 			fatalx("%s: RB tree invariant violated", __func__);
+		peer->stats.pending_update++;
 	}
 }
 
@@ -619,17 +628,19 @@ peer_dump(struct rde_peer *peer, uint8_t aid)
 void
 peer_begin_rrefresh(struct rde_peer *peer, uint8_t aid)
 {
-	time_t now;
+	monotime_t now;
 
 	/* flush the now even staler routes out */
-	if (peer->staletime[aid])
+	if (monotime_valid(peer->staletime[aid]))
 		peer_flush(peer, aid, peer->staletime[aid]);
 
 	peer->staletime[aid] = now = getmonotime();
 
 	/* make sure new prefixes start on a higher timestamp */
-	while (now >= getmonotime())
-		sleep(1);
+	while (monotime_cmp(now, getmonotime()) >= 0) {
+		struct timespec ts = { .tv_nsec = 1000 * 1000 };
+		nanosleep(&ts, NULL);
+	}
 }
 
 void
@@ -643,6 +654,7 @@ peer_reaper(struct rde_peer *peer)
 	if (!prefix_adjout_reaper(peer))
 		return;
 
+	ibufq_free(peer->ibufq);
 	RB_REMOVE(peer_tree, &zombietable, peer);
 	free(peer);
 }
@@ -660,27 +672,12 @@ peer_work_pending(void)
 }
 
 /*
- * move an imsg from src to dst, disconnecting any dynamic memory from src.
- */
-static void
-imsg_move(struct imsg *dst, struct imsg *src)
-{
-	*dst = *src;
-	memset(src, 0, sizeof(*src));
-}
-
-/*
  * push an imsg onto the peer imsg queue.
  */
 void
 peer_imsg_push(struct rde_peer *peer, struct imsg *imsg)
 {
-	struct iq *iq;
-
-	if ((iq = calloc(1, sizeof(*iq))) == NULL)
-		fatal(NULL);
-	imsg_move(&iq->imsg, imsg);
-	SIMPLEQ_INSERT_TAIL(&peer->imsg_queue, iq, entry);
+	imsg_ibufq_push(peer->ibufq, imsg);
 	imsg_pending++;
 }
 
@@ -691,19 +688,15 @@ peer_imsg_push(struct rde_peer *peer, struct imsg *imsg)
 int
 peer_imsg_pop(struct rde_peer *peer, struct imsg *imsg)
 {
-	struct iq *iq;
-
-	iq = SIMPLEQ_FIRST(&peer->imsg_queue);
-	if (iq == NULL)
+	switch (imsg_ibufq_pop(peer->ibufq, imsg)) {
+	case 0:
 		return 0;
-
-	imsg_move(imsg, &iq->imsg);
-
-	SIMPLEQ_REMOVE_HEAD(&peer->imsg_queue, entry);
-	free(iq);
-	imsg_pending--;
-
-	return 1;
+	case 1:
+		imsg_pending--;
+		return 1;
+	default:
+		fatal("imsg_ibufq_pop");
+	}
 }
 
 /*
@@ -712,11 +705,5 @@ peer_imsg_pop(struct rde_peer *peer, struct imsg *imsg)
 void
 peer_imsg_flush(struct rde_peer *peer)
 {
-	struct iq *iq;
-
-	while ((iq = SIMPLEQ_FIRST(&peer->imsg_queue)) != NULL) {
-		SIMPLEQ_REMOVE_HEAD(&peer->imsg_queue, entry);
-		free(iq);
-		imsg_pending--;
-	}
+	ibufq_flush(peer->ibufq);
 }

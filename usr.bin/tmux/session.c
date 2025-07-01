@@ -1,4 +1,4 @@
-/* $OpenBSD: session.c,v 1.98 2024/11/25 08:34:01 nicm Exp $ */
+/* $OpenBSD: session.c,v 1.100 2025/03/30 22:01:55 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -363,7 +363,7 @@ session_detach(struct session *s, struct winlink *wl)
 
 	if (RB_EMPTY(&s->windows))
 		return (1);
-       	return (0);
+	return (0);
 }
 
 /* Return if session has window. */
@@ -752,4 +752,19 @@ session_renumber_windows(struct session *s)
 	/* Free the old winlinks (reducing window references too). */
 	RB_FOREACH_SAFE(wl, winlinks, &old_wins, wl1)
 		winlink_remove(&old_wins, wl);
+}
+
+/* Set the PANE_THEMECHANGED flag for every pane in this session. */
+void
+session_theme_changed(struct session *s)
+{
+	struct window_pane	*wp;
+	struct winlink		*wl;
+
+	if (s != NULL) {
+		RB_FOREACH(wl, winlinks, &s->windows) {
+			TAILQ_FOREACH(wp, &wl->window->panes, entry)
+			    wp->flags |= PANE_THEMECHANGED;
+		}
+	}
 }

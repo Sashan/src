@@ -1,4 +1,4 @@
-/*	$OpenBSD: mlkem_iteration_tests.c,v 1.2 2024/12/26 07:26:45 tb Exp $ */
+/*	$OpenBSD: mlkem_iteration_tests.c,v 1.5 2025/05/20 00:33:41 beck Exp $ */
 /*
  * Copyright (c) 2024 Google Inc.
  * Copyright (c) 2024 Bob Beck <beck@obtuse.com>
@@ -73,7 +73,7 @@ struct iteration_ctx {
 	void *priv;
 	void *pub;
 
-	mlkem_encode_private_key_fn encode_private_key;
+	mlkem_marshal_private_key_fn marshal_private_key;
 	mlkem_encap_external_entropy_fn encap_external_entropy;
 	mlkem_generate_key_external_entropy_fn generate_key_external_entropy;
 	mlkem_public_from_private_fn public_from_private;
@@ -116,8 +116,10 @@ MlkemIterativeTest(struct iteration_ctx *ctx)
 		}
 
 		/* generate ek as encoded_public_key */
-		ctx->generate_key_external_entropy(ctx->encoded_public_key,
-		    ctx->priv, seed);
+		if (!ctx->generate_key_external_entropy(ctx->encoded_public_key,
+		    ctx->priv, seed)) {
+			errx(1, "generate_key_external_entropy");
+		}
 		ctx->public_from_private(ctx->pub, ctx->priv);
 
 		/* hash in ek */
@@ -125,7 +127,7 @@ MlkemIterativeTest(struct iteration_ctx *ctx)
 		    ctx->encoded_public_key_len);
 
 		/* marshal priv to dk as encoded_private_key */
-		if (!ctx->encode_private_key(ctx->priv, &encoded_private_key,
+		if (!ctx->marshal_private_key(ctx->priv, &encoded_private_key,
 		    &encoded_private_key_len))
 			errx(1, "encode private key");
 
@@ -183,7 +185,7 @@ main(void)
 		.priv = &priv768,
 		.pub = &pub768,
 		.encap_external_entropy = mlkem768_encap_external_entropy,
-		.encode_private_key = mlkem768_encode_private_key,
+		.marshal_private_key = mlkem768_marshal_private_key,
 		.generate_key_external_entropy =
 		    mlkem768_generate_key_external_entropy,
 		.public_from_private = mlkem768_public_from_private,
@@ -208,7 +210,7 @@ main(void)
 		.priv = &priv1024,
 		.pub = &pub1024,
 		.encap_external_entropy = mlkem1024_encap_external_entropy,
-		.encode_private_key = mlkem1024_encode_private_key,
+		.marshal_private_key = mlkem1024_marshal_private_key,
 		.generate_key_external_entropy =
 		    mlkem1024_generate_key_external_entropy,
 		.public_from_private = mlkem1024_public_from_private,

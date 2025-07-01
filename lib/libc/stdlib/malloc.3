@@ -30,9 +30,9 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	$OpenBSD: malloc.3,v 1.142 2024/08/03 20:09:24 guenther Exp $
+.\"	$OpenBSD: malloc.3,v 1.147 2025/06/04 00:38:01 yasuoka Exp $
 .\"
-.Dd $Mdocdate: August 3 2024 $
+.Dd $Mdocdate: June 4 2025 $
 .Dt MALLOC 3
 .Os
 .Sh NAME
@@ -69,7 +69,8 @@
 .Fn malloc_conceal "size_t size"
 .Ft void *
 .Fn calloc_conceal "size_t nmemb" "size_t size"
-.Vt char *malloc_options ;
+.Vt const char * const
+.Va malloc_options ;
 .Sh DESCRIPTION
 The standard functions
 .Fn malloc ,
@@ -268,7 +269,15 @@ next checks the environment for a variable called
 and finally looks at the global variable
 .Va malloc_options
 in the program.
-Each is scanned for the flags documented below.
+Since
+.Fn malloc
+might already get called before the beginning of
+.Fn main ,
+either initialize
+.Va malloc_options
+to a string literal at file scope or do not declare it at all.
+.Pp
+Each of the three strings is scanned for the flags documented below.
 Unless otherwise noted uppercase means on, lowercase means off.
 During initialization, flags occurring later modify the behaviour
 that was requested by flags processed earlier.
@@ -363,18 +372,9 @@ Use with
 to get a verbose dump of malloc's internal state.
 .It Cm X
 .Dq xmalloc .
-Rather than return failure,
+Rather than return failure to handle out-of-memory conditions gracefully,
 .Xr abort 3
 the program with a diagnostic message on stderr.
-It is the intention that this option be set at compile time by
-including in the source:
-.Bd -literal -offset indent
-extern char *malloc_options;
-malloc_options = "X";
-.Ed
-.Pp
-Note that this will cause code that is supposed to handle
-out-of-memory conditions gracefully to abort instead.
 .It Cm <
 .Dq Halve the cache size .
 Decrease the size of the free page cache by a factor of two.

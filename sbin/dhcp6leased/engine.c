@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.31 2024/12/24 17:40:06 florian Exp $	*/
+/*	$OpenBSD: engine.c,v 1.33 2025/04/27 16:22:33 florian Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021, 2024 Florian Obser <florian@openbsd.org>
@@ -479,6 +479,11 @@ engine_dispatch_main(int fd, short event, void *bula)
 				fatal(NULL);
 			memcpy(iface_conf, imsg.data, sizeof(struct
 			    iface_conf));
+			if (iface_conf->name[sizeof(iface_conf->name) - 1]
+			    != '\0')
+				fatalx("%s: IMSG_RECONF_IFACE invalid name",
+				    __func__);
+
 			SIMPLEQ_INIT(&iface_conf->iface_ia_list);
 			SIMPLEQ_INSERT_TAIL(&nconf->iface_list,
 			    iface_conf, entry);
@@ -512,6 +517,11 @@ engine_dispatch_main(int fd, short event, void *bula)
 				fatal(NULL);
 			memcpy(iface_pd_conf, imsg.data, sizeof(struct
 			    iface_pd_conf));
+			if (iface_pd_conf->name[sizeof(iface_pd_conf->name) - 1]
+			    != '\0')
+				fatalx("%s: IMSG_RECONF_IFACE_PD invalid name",
+				__func__);
+
 			SIMPLEQ_INSERT_TAIL(&iface_ia_conf->iface_pd_list,
 			    iface_pd_conf, entry);
 			break;
@@ -873,7 +883,7 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 			goto out;
 		}
 
-		if (lease_time < pd->vltime)
+		if (lease_time == 0 || lease_time > pd->vltime)
 			lease_time = pd->vltime;
 
 		log_debug("%s: pltime: %u, vltime: %u, prefix: %s/%u",
@@ -928,9 +938,14 @@ parse_dhcp(struct dhcp6leased_iface *iface, struct imsg_dhcp *dhcp)
 		iface->serverid_len = serverid_len;
 		memcpy(iface->serverid, serverid, SERVERID_SIZE);
 
-		/* XXX handle t1 = 0 or t2 = 0 */
-		iface->t1 = t1;
-		iface->t2 = t2;
+		if (t1 == 0)
+			iface->t1 = lease_time / 2;
+		else
+			iface->t1 = t1;
+		if (t2 == 0)
+		    iface->t2 = lease_time - (lease_time / 8);
+		else
+			iface->t2 = t2;
 		iface->lease_time = lease_time;
 		clock_gettime(CLOCK_MONOTONIC, &iface->request_time);
 		state_transition(iface, IF_BOUND);

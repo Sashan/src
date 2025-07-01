@@ -1006,6 +1006,7 @@
 ./usr/include/net/if_vlan_var.h
 ./usr/include/net/if_wg.h
 ./usr/include/net/ifq.h
+./usr/include/net/lldp.h
 ./usr/include/net/netisr.h
 ./usr/include/net/ofp.h
 ./usr/include/net/pfkeyv2.h
@@ -1076,7 +1077,6 @@
 ./usr/include/netinet6/in6.h
 ./usr/include/netinet6/in6_ifattach.h
 ./usr/include/netinet6/in6_var.h
-./usr/include/netinet6/ip6_divert.h
 ./usr/include/netinet6/ip6_mroute.h
 ./usr/include/netinet6/ip6_var.h
 ./usr/include/netinet6/ip6protosw.h
@@ -1358,6 +1358,7 @@
 ./usr/include/sys/namei.h
 ./usr/include/sys/param.h
 ./usr/include/sys/pciio.h
+./usr/include/sys/pclock.h
 ./usr/include/sys/percpu.h
 ./usr/include/sys/pipe.h
 ./usr/include/sys/pledge.h
@@ -1388,6 +1389,7 @@
 ./usr/include/sys/socket.h
 ./usr/include/sys/socketvar.h
 ./usr/include/sys/sockio.h
+./usr/include/sys/softintr.h
 ./usr/include/sys/specdev.h
 ./usr/include/sys/srp.h
 ./usr/include/sys/stacktrace.h
@@ -1863,10 +1865,10 @@
 ./usr/share/man/man3/CMS_verify_receipt.3
 ./usr/share/man/man3/CONF_modules_free.3
 ./usr/share/man/man3/CONF_modules_load_file.3
-./usr/share/man/man3/CRYPTO_get_mem_functions.3
 ./usr/share/man/man3/CRYPTO_lock.3
 ./usr/share/man/man3/CRYPTO_memcmp.3
 ./usr/share/man/man3/CRYPTO_set_ex_data.3
+./usr/share/man/man3/CRYPTO_set_mem_functions.3
 ./usr/share/man/man3/ChaCha.3
 ./usr/share/man/man3/DES_set_key.3
 ./usr/share/man/man3/DH_generate_key.3
@@ -1892,13 +1894,16 @@
 ./usr/share/man/man3/DTLSv1_listen.3
 ./usr/share/man/man3/ECDH_compute_key.3
 ./usr/share/man/man3/ECDSA_SIG_new.3
-./usr/share/man/man3/EC_GFp_simple_method.3
-./usr/share/man/man3/EC_GROUP_copy.3
-./usr/share/man/man3/EC_GROUP_new.3
+./usr/share/man/man3/EC_GROUP_check.3
+./usr/share/man/man3/EC_GROUP_get_curve_name.3
+./usr/share/man/man3/EC_GROUP_new_by_curve_name.3
+./usr/share/man/man3/EC_GROUP_new_curve_GFp.3
 ./usr/share/man/man3/EC_KEY_METHOD_new.3
 ./usr/share/man/man3/EC_KEY_new.3
 ./usr/share/man/man3/EC_POINT_add.3
+./usr/share/man/man3/EC_POINT_get_affine_coordinates.3
 ./usr/share/man/man3/EC_POINT_new.3
+./usr/share/man/man3/EC_POINT_point2oct.3
 ./usr/share/man/man3/ENGINE_new.3
 ./usr/share/man/man3/ERR.3
 ./usr/share/man/man3/ERR_GET_LIB.3
@@ -1974,7 +1979,6 @@
 ./usr/share/man/man3/MD5.3
 ./usr/share/man/man3/MD5Init.3
 ./usr/share/man/man3/NAME_CONSTRAINTS_new.3
-./usr/share/man/man3/OBJ_NAME_add.3
 ./usr/share/man/man3/OBJ_create.3
 ./usr/share/man/man3/OBJ_find_sigid_algs.3
 ./usr/share/man/man3/OBJ_nid2obj.3
@@ -1991,7 +1995,6 @@
 ./usr/share/man/man3/OPENSSL_config.3
 ./usr/share/man/man3/OPENSSL_init_crypto.3
 ./usr/share/man/man3/OPENSSL_init_ssl.3
-./usr/share/man/man3/OPENSSL_load_builtin_modules.3
 ./usr/share/man/man3/OPENSSL_malloc.3
 ./usr/share/man/man3/OPENSSL_sk_new.3
 ./usr/share/man/man3/OpenSSL_add_all_algorithms.3
@@ -2056,11 +2059,9 @@
 ./usr/share/man/man3/SHA1Init.3
 ./usr/share/man/man3/SHA256Init.3
 ./usr/share/man/man3/SMIME_crlf_copy.3
-./usr/share/man/man3/SMIME_read_ASN1.3
 ./usr/share/man/man3/SMIME_read_CMS.3
 ./usr/share/man/man3/SMIME_read_PKCS7.3
 ./usr/share/man/man3/SMIME_text.3
-./usr/share/man/man3/SMIME_write_ASN1.3
 ./usr/share/man/man3/SMIME_write_CMS.3
 ./usr/share/man/man3/SMIME_write_PKCS7.3
 ./usr/share/man/man3/SSL_CIPHER_get_name.3

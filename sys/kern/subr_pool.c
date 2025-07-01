@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_pool.c,v 1.237 2025/01/04 09:26:01 mvs Exp $	*/
+/*	$OpenBSD: subr_pool.c,v 1.240 2025/06/12 20:37:58 deraadt Exp $	*/
 /*	$NetBSD: subr_pool.c,v 1.61 2001/09/26 07:14:56 chs Exp $	*/
 
 /*-
@@ -424,11 +424,6 @@ pool_init(struct pool *pp, size_t size, u_int align, int ipl, int flags,
 	pp->pr_nitems = 0;
 	pp->pr_nout = 0;
 	pp->pr_hardlimit = UINT_MAX;
-	pp->pr_hardlimit_warning = NULL;
-	pp->pr_hardlimit_ratecap.tv_sec = 0;
-	pp->pr_hardlimit_ratecap.tv_usec = 0;
-	pp->pr_hardlimit_warning_last.tv_sec = 0;
-	pp->pr_hardlimit_warning_last.tv_usec = 0;
 	RBT_INIT(phtree, &pp->pr_phtree);
 
 	/*
@@ -1092,9 +1087,11 @@ pool_sethiwat(struct pool *pp, int n)
 }
 
 int
-pool_sethardlimit(struct pool *pp, u_int n, const char *warnmsg, int ratecap)
+pool_sethardlimit(struct pool *pp, u_int n)
 {
 	int error = 0;
+
+	pl_enter(pp, &pp->pr_lock);
 
 	if (n < pp->pr_nout) {
 		error = EINVAL;
@@ -1102,12 +1099,9 @@ pool_sethardlimit(struct pool *pp, u_int n, const char *warnmsg, int ratecap)
 	}
 
 	pp->pr_hardlimit = n;
-	pp->pr_hardlimit_warning = warnmsg;
-	pp->pr_hardlimit_ratecap.tv_sec = ratecap;
-	pp->pr_hardlimit_warning_last.tv_sec = 0;
-	pp->pr_hardlimit_warning_last.tv_usec = 0;
-
 done:
+	pl_leave(pp, &pp->pr_lock);
+
 	return (error);
 }
 
@@ -1460,6 +1454,7 @@ pool_walk(struct pool *pp, int full,
 }
 #endif
 
+#ifndef SMALL_KERNEL
 /*
  * We have three different sysctls.
  * kern.pool.npools - the number of pools.
@@ -1547,6 +1542,7 @@ sysctl_dopool(int *name, u_int namelen, char *oldp, size_t *oldlenp)
 
 	return (rv);
 }
+#endif /* SMALL_KERNEL */
 
 void
 pool_gc_sched(void *null)

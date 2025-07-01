@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_sec.c,v 1.12 2025/02/14 13:14:13 dlg Exp $ */
+/*	$OpenBSD: if_sec.c,v 1.14 2025/03/04 15:11:30 bluhm Exp $ */
 
 /*
  * Copyright (c) 2022 The University of Queensland
@@ -43,6 +43,7 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_sec.h>
 #include <net/if_types.h>
 #include <net/toeplitz.h>
 
@@ -448,7 +449,8 @@ sec_get(unsigned int unit)
 }
 
 void
-sec_input(struct sec_softc *sc, int af, int proto, struct mbuf *m)
+sec_input(struct sec_softc *sc, int af, int proto, struct mbuf *m,
+    struct netstack *ns)
 {
 	struct ip *iph;
 	int hlen;
@@ -486,7 +488,7 @@ sec_input(struct sec_softc *sc, int af, int proto, struct mbuf *m)
 
 	m->m_pkthdr.ph_family = af;
 
-	if_vinput(&sc->sc_if, m);
+	if_vinput(&sc->sc_if, m, ns);
 }
 
 void

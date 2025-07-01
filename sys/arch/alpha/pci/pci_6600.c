@@ -1,4 +1,4 @@
-/* $OpenBSD: pci_6600.c,v 1.21 2015/07/26 05:09:44 miod Exp $ */
+/* $OpenBSD: pci_6600.c,v 1.23 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pci_6600.c,v 1.5 2000/06/06 00:50:15 thorpej Exp $ */
 
 /*-
@@ -91,8 +91,7 @@ extern void dec_6600_intr_enable(int irq);
 extern void dec_6600_intr_disable(int irq);
 
 void
-pci_6600_pickintr(pcp)
-	struct tsp_config *pcp;
+pci_6600_pickintr(struct tsp_config *pcp)
 {
 	bus_space_tag_t iot = &pcp->pc_iot;
 	pci_chipset_tag_t pc = &pcp->pc_pc;
@@ -101,12 +100,12 @@ pci_6600_pickintr(pcp)
 #endif
 	int i;
 
-        pc->pc_intr_v = pcp;
-        pc->pc_intr_map = dec_6600_intr_map;
-        pc->pc_intr_string = dec_6600_intr_string;
-        pc->pc_intr_line = dec_6600_intr_line;
-        pc->pc_intr_establish = dec_6600_intr_establish;
-        pc->pc_intr_disestablish = dec_6600_intr_disestablish;
+	pc->pc_intr_v = pcp;
+	pc->pc_intr_map = dec_6600_intr_map;
+	pc->pc_intr_string = dec_6600_intr_string;
+	pc->pc_intr_line = dec_6600_intr_line;
+	pc->pc_intr_establish = dec_6600_intr_establish;
+	pc->pc_intr_disestablish = dec_6600_intr_disestablish;
 	pc->pc_pciide_compat_intr_establish = NULL;
 
 	/*
@@ -130,10 +129,8 @@ pci_6600_pickintr(pcp)
 	}
 }
 
-int     
-dec_6600_intr_map(pa, ihp)
-	struct pci_attach_args *pa;
-        pci_intr_handle_t *ihp;
+int
+dec_6600_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	int buspin, line = pa->pa_intrline;
 
@@ -170,9 +167,7 @@ dec_6600_intr_map(pa, ihp)
 }
 
 const char *
-dec_6600_intr_string(acv, ih)
-	void *acv;
-	pci_intr_handle_t ih;
+dec_6600_intr_string(void *acv, pci_intr_handle_t ih)
 {
 
 	static const char irqfmt[] = "dec 6600 irq %ld";
@@ -189,9 +184,7 @@ dec_6600_intr_string(acv, ih)
 }
 
 int
-dec_6600_intr_line(acv, ih)
-	void *acv;
-	pci_intr_handle_t ih;
+dec_6600_intr_line(void *acv, pci_intr_handle_t ih)
 {
 
 #if NSIO
@@ -204,12 +197,8 @@ dec_6600_intr_line(acv, ih)
 }
 
 void *
-dec_6600_intr_establish(acv, ih, level, func, arg, name)
-        void *acv, *arg;
-        pci_intr_handle_t ih;
-        int level;
-        int (*func)(void *);
-	const char *name;
+dec_6600_intr_establish(void *acv, pci_intr_handle_t ih, int level,
+    int (*func)(void *), void *arg, const char *name)
 {
 	void *cookie;
 
@@ -217,7 +206,7 @@ dec_6600_intr_establish(acv, ih, level, func, arg, name)
 	if (DEC_6600_LINE_IS_ISA(ih))
 		return (sio_intr_establish(NULL /*XXX*/,
 		    DEC_6600_LINE_ISA_IRQ(ih), IST_LEVEL, level, func, arg,
-	            name));
+		    name));
 #endif
 
 	if (ih >= PCI_NIRQ)
@@ -236,8 +225,7 @@ dec_6600_intr_establish(acv, ih, level, func, arg, name)
 }
 
 void
-dec_6600_intr_disestablish(acv, cookie)
-        void *acv, *cookie;
+dec_6600_intr_disestablish(void *acv, void *cookie)
 {
 	struct alpha_shared_intrhand *ih = cookie;
 	unsigned int irq = ih->ih_num;
@@ -255,7 +243,7 @@ dec_6600_intr_disestablish(acv, cookie)
 		return;
 	}
 #endif
- 
+
 	s = splhigh();
 
 	alpha_shared_intr_disestablish(dec_6600_pci_intr, cookie);
@@ -265,16 +253,14 @@ dec_6600_intr_disestablish(acv, cookie)
 		    IST_NONE);
 		scb_free(0x900 + SCB_IDXTOVEC(irq));
 	}
- 
+
 	splx(s);
 }
 
 void
-dec_6600_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+dec_6600_iointr(void *arg, unsigned long vec)
 {
-	int irq; 
+	int irq;
 
 	irq = SCB_VECTOIDX(vec - 0x900);
 
@@ -290,8 +276,7 @@ dec_6600_iointr(arg, vec)
 }
 
 void
-dec_6600_intr_enable(irq)
-	int irq;
+dec_6600_intr_enable(int irq)
 {
 	alpha_mb();
 	STQP(TS_C_DIM0) |= 1UL << irq;
@@ -299,8 +284,7 @@ dec_6600_intr_enable(irq)
 }
 
 void
-dec_6600_intr_disable(irq)
-	int irq;
+dec_6600_intr_disable(int irq)
 {
 	alpha_mb();
 	STQP(TS_C_DIM0) &= ~(1UL << irq);
@@ -308,13 +292,8 @@ dec_6600_intr_disable(irq)
 }
 
 void *
-dec_6600_pciide_compat_intr_establish(v, dev, pa, chan, func, arg)
-	void *v;
-	struct device *dev;
-	struct pci_attach_args *pa;
-	int chan;
-	int (*func)(void *);
-	void *arg;
+dec_6600_pciide_compat_intr_establish(void *v, struct device *dev,
+    struct pci_attach_args *pa, int chan, int (*func)(void *), void *arg)
 {
 	pci_chipset_tag_t pc = pa->pa_pc;
 	void *cookie = NULL;
@@ -341,9 +320,7 @@ dec_6600_pciide_compat_intr_establish(v, dev, pa, chan, func, arg)
 }
 
 void
-dec_6600_pciide_compat_intr_disestablish(v, cookie)
-	void *v;
-	void *cookie;
+dec_6600_pciide_compat_intr_disestablish(void *v, void *cookie)
 {
 	sio_intr_disestablish(NULL, cookie);
 }

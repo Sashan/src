@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_ipsp.h,v 1.247 2025/02/14 13:14:13 dlg Exp $	*/
+/*	$OpenBSD: ip_ipsp.h,v 1.249 2025/05/09 19:53:41 mvs Exp $	*/
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr),
@@ -533,7 +533,8 @@ struct xformsw {
 	int	(*xf_init)(struct tdb *, const struct xformsw *,
 		    struct ipsecinit *);
 	int	(*xf_zeroize)(struct tdb *); /* termination */
-	int	(*xf_input)(struct mbuf **, struct tdb *, int, int);
+	int	(*xf_input)(struct mbuf **, struct tdb *, int, int,
+		    struct netstack *);
 	int	(*xf_output)(struct mbuf *, struct tdb *, int, int);
 };
 
@@ -572,9 +573,30 @@ extern int ipsec_exp_first_use;		/* seconds between 1st asso & expire */
 #define IPSEC_FIRSTUSE			IPCTL_IPSEC_FIRSTUSE		/* 24 */
 #define IPSEC_MAXID	25
 
-extern char ipsec_def_enc[];
-extern char ipsec_def_auth[];
-extern char ipsec_def_comp[];
+enum {
+	IPSEC_ENC_AES,
+	IPSEC_ENC_AESCTR,
+	IPSEC_ENC_3DES,
+	IPSEC_ENC_BLOWFISH,
+	IPSEC_ENC_CAST128,
+};
+
+enum {
+	IPSEC_AUTH_HMAC_SHA1,
+	IPSEC_AUTH_HMAC_RIPEMD160,
+	IPSEC_AUTH_MD5,
+	IPSEC_AUTH_SHA2_256,
+	IPSEC_AUTH_SHA2_384,
+	IPSEC_AUTH_SHA2_512,
+};
+
+enum {
+	IPSEC_COMP_DEFLATE,
+};
+
+extern int ipsec_def_enc;
+extern int ipsec_def_auth;
+extern int ipsec_def_comp;
 
 extern TAILQ_HEAD(ipsec_policy_head, ipsec_policy) ipsec_policy_head;
 
@@ -629,17 +651,17 @@ void	tdb_printit(void *, int, int (*)(const char *, ...));
 int	ipe4_attach(void);
 int	ipe4_init(struct tdb *, const struct xformsw *, struct ipsecinit *);
 int	ipe4_zeroize(struct tdb *);
-int	ipe4_input(struct mbuf **, struct tdb *, int, int);
+int	ipe4_input(struct mbuf **, struct tdb *, int, int, struct netstack *);
 
 /* XF_AH */
 int	ah_attach(void);
 int	ah_init(struct tdb *, const struct xformsw *, struct ipsecinit *);
 int	ah_zeroize(struct tdb *);
-int	ah_input(struct mbuf **, struct tdb *, int, int);
+int	ah_input(struct mbuf **, struct tdb *, int, int, struct netstack *);
 int	ah_output(struct mbuf *, struct tdb *, int, int);
 int	ah_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
-int	ah46_input(struct mbuf **, int *, int, int);
+int	ah46_input(struct mbuf **, int *, int, int, struct netstack *);
 void	ah4_ctlinput(int, struct sockaddr *, u_int, void *);
 void	udpencap_ctlinput(int, struct sockaddr *, u_int, void *);
 
@@ -647,28 +669,29 @@ void	udpencap_ctlinput(int, struct sockaddr *, u_int, void *);
 int	esp_attach(void);
 int	esp_init(struct tdb *, const struct xformsw *, struct ipsecinit *);
 int	esp_zeroize(struct tdb *);
-int	esp_input(struct mbuf **, struct tdb *, int, int);
+int	esp_input(struct mbuf **, struct tdb *, int, int, struct netstack *);
 int	esp_output(struct mbuf *, struct tdb *, int, int);
 int	esp_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
-int	esp46_input(struct mbuf **, int *, int, int);
+int	esp46_input(struct mbuf **, int *, int, int, struct netstack *);
 void	esp4_ctlinput(int, struct sockaddr *, u_int, void *);
 
 /* XF_IPCOMP */
 int	ipcomp_attach(void);
 int	ipcomp_init(struct tdb *, const struct xformsw *, struct ipsecinit *);
 int	ipcomp_zeroize(struct tdb *);
-int	ipcomp_input(struct mbuf **, struct tdb *, int, int);
+int	ipcomp_input(struct mbuf **, struct tdb *, int, int, struct netstack *);
 int	ipcomp_output(struct mbuf *, struct tdb *, int, int);
 int	ipcomp_sysctl(int *, u_int, void *, size_t *, void *, size_t);
-int	ipcomp46_input(struct mbuf **, int *, int, int);
+int	ipcomp46_input(struct mbuf **, int *, int, int, struct netstack *);
 
 /* XF_TCPSIGNATURE */
 int	tcp_signature_tdb_attach(void);
 int	tcp_signature_tdb_init(struct tdb *, const struct xformsw *,
 	    struct ipsecinit *);
 int	tcp_signature_tdb_zeroize(struct tdb *);
-int	tcp_signature_tdb_input(struct mbuf **, struct tdb *, int, int);
+int	tcp_signature_tdb_input(struct mbuf **, struct tdb *, int, int,
+	    struct netstack *);
 int	tcp_signature_tdb_output(struct mbuf *, struct tdb *, int, int);
 
 /* Replay window */
@@ -694,9 +717,12 @@ void	ipsp_ids_free(struct ipsec_ids *);
 void	ipsp_init(void);
 void	ipsec_init(void);
 int	ipsec_sysctl(int *, u_int, void *, size_t *, void *, size_t);
-int	ipsec_common_input(struct mbuf **, int, int, int, int, int);
-int	ipsec_common_input_cb(struct mbuf **, struct tdb *, int, int);
-int	ipsec_input_disabled(struct mbuf **, int *, int, int);
+int	ipsec_common_input(struct mbuf **, int, int, int, int, int,
+	    struct netstack *);
+int	ipsec_common_input_cb(struct mbuf **, struct tdb *, int, int,
+	    struct netstack *);
+int	ipsec_input_disabled(struct mbuf **, int *, int, int,
+	    struct netstack *);
 int	ipsec_protoff(struct mbuf *, int, int);
 int	ipsec_delete_policy(struct ipsec_policy *);
 ssize_t	ipsec_hdrsz(struct tdb *);

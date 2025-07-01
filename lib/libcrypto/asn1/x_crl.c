@@ -1,4 +1,4 @@
-/* $OpenBSD: x_crl.c,v 1.45 2024/07/08 14:48:49 beck Exp $ */
+/* $OpenBSD: x_crl.c,v 1.49 2025/05/10 05:54:38 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -61,15 +61,13 @@
 #include <openssl/opensslconf.h>
 
 #include <openssl/asn1t.h>
-#include <openssl/err.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
 #include "asn1_local.h"
+#include "err_local.h"
 #include "x509_local.h"
 
-static int X509_REVOKED_cmp(const X509_REVOKED * const *a,
-    const X509_REVOKED * const *b);
 static void setup_idp(X509_CRL *crl, ISSUING_DIST_POINT *idp);
 
 static const ASN1_TEMPLATE X509_REVOKED_seq_tt[] = {
@@ -101,12 +99,18 @@ const ASN1_ITEM X509_REVOKED_it = {
 };
 LCRYPTO_ALIAS(X509_REVOKED_it);
 
+static int
+X509_REVOKED_cmp(const X509_REVOKED * const *a, const X509_REVOKED * const *b)
+{
+	return ASN1_INTEGER_cmp((*a)->serialNumber, (*b)->serialNumber);
+}
+
 /* The X509_CRL_INFO structure needs a bit of customisation.
  * Since we cache the original encoding the signature wont be affected by
  * reordering of the revoked field.
  */
 static int
-crl_inf_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it, void *exarg)
+crl_info_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it, void *exarg)
 {
 	X509_CRL_INFO *a = (X509_CRL_INFO *)*pval;
 
@@ -126,7 +130,7 @@ crl_inf_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it, void *exarg)
 
 static const ASN1_AUX X509_CRL_INFO_aux = {
 	.flags = ASN1_AFLG_ENCODING,
-	.asn1_cb = crl_inf_cb,
+	.asn1_cb = crl_info_cb,
 	.enc_offset = offsetof(X509_CRL_INFO, enc),
 };
 static const ASN1_TEMPLATE X509_CRL_INFO_seq_tt[] = {
@@ -327,10 +331,8 @@ crl_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it, void *exarg)
 		break;
 
 	case ASN1_OP_FREE_POST:
-		if (crl->akid)
-			AUTHORITY_KEYID_free(crl->akid);
-		if (crl->idp)
-			ISSUING_DIST_POINT_free(crl->idp);
+		AUTHORITY_KEYID_free(crl->akid);
+		ISSUING_DIST_POINT_free(crl->idp);
 		ASN1_INTEGER_free(crl->crl_number);
 		ASN1_INTEGER_free(crl->base_crl_number);
 		sk_GENERAL_NAMES_pop_free(crl->issuers, GENERAL_NAMES_free);
@@ -517,12 +519,6 @@ X509_CRL_dup(X509_CRL *x)
 	return ASN1_item_dup(&X509_CRL_it, x);
 }
 LCRYPTO_ALIAS(X509_CRL_dup);
-
-static int
-X509_REVOKED_cmp(const X509_REVOKED * const *a, const X509_REVOKED * const *b)
-{
-	return(ASN1_INTEGER_cmp((*a)->serialNumber, (*b)->serialNumber));
-}
 
 int
 X509_CRL_add0_revoked(X509_CRL *crl, X509_REVOKED *rev)

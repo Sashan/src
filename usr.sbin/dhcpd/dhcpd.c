@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.c,v 1.60 2024/08/21 09:19:55 florian Exp $ */
+/*	$OpenBSD: dhcpd.c,v 1.63 2025/06/14 12:45:39 kn Exp $ */
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@cvs.openbsd.org>
@@ -71,6 +71,7 @@ struct group root_group;
 u_int16_t server_port;
 u_int16_t client_port;
 
+int rdomain;
 struct passwd *pw;
 int log_priority;
 int pfpipe[2];
@@ -87,7 +88,7 @@ char *leased_tab = NULL;
 int
 main(int argc, char *argv[])
 {
-	int ch, cftest = 0, rdomain = -1, udpsockmode = 0;
+	int ch, cftest = 0, udpsockmode = 0;
 	int debug = 0, verbose = 0;
 	char *sync_iface = NULL;
 	char *sync_baddr = NULL;
@@ -97,6 +98,8 @@ main(int argc, char *argv[])
 
 	log_init(1, LOG_DAEMON);	/* log to stderr until daemonized */
 	log_setverbose(1);
+
+	rdomain = getrtable();
 
 	opterr = 0;
 	while ((ch = getopt(argc, argv, "A:C:L:c:dfl:nu::vY:y:")) != -1)
@@ -197,15 +200,10 @@ main(int argc, char *argv[])
 
 	db_startup();
 	if (!udpsockmode || argc > 0)
-		discover_interfaces(&rdomain);
-
-	if (rdomain != -1)
-		if (setrtable(rdomain) == -1)
-			fatal("setrtable");
+		discover_interfaces();
 
 	if (syncsend || syncrecv) {
-		syncfd = sync_init(sync_iface, sync_baddr, sync_port);
-		if (syncfd == -1)
+		if (sync_init(sync_iface, sync_baddr, sync_port) == -1)
 			err(1, "sync init");
 	}
 
@@ -281,7 +279,7 @@ usage(void)
 	fprintf(stderr, " [-C changed_ip_table]\n");
 	fprintf(stderr, "\t[-c config-file] [-L leased_ip_table]");
 	fprintf(stderr, " [-l lease-file] [-u[bind_address]]\n");
-	fprintf(stderr, "\t[-Y synctarget] [-y synclisten] [if0 [... ifN]]\n");
+	fprintf(stderr, "\t[-Y synctarget] [-y synclisten] [interface ...]\n");
 	exit(1);
 }
 

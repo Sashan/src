@@ -1,4 +1,4 @@
-/* $OpenBSD: tc_3000_300.c,v 1.19 2017/11/02 14:04:24 mpi Exp $ */
+/* $OpenBSD: tc_3000_300.c,v 1.21 2025/06/29 15:55:22 miod Exp $ */
 /* $NetBSD: tc_3000_300.c,v 1.26 2001/07/27 00:25:21 thorpej Exp $ */
 
 /*
@@ -84,7 +84,7 @@ struct tcintr {
 } tc_3000_300_intr[TC_3000_300_NCOOKIES];
 
 void
-tc_3000_300_intr_setup()
+tc_3000_300_intr_setup(void)
 {
 	volatile u_int32_t *imskp;
 	u_long i;
@@ -99,19 +99,15 @@ tc_3000_300_intr_setup()
 	 * Set up interrupt handlers.
 	 */
 	for (i = 0; i < TC_3000_300_NCOOKIES; i++) {
-                tc_3000_300_intr[i].tci_func = tc_3000_300_intrnull;
-                tc_3000_300_intr[i].tci_arg = (void *)i;
-                tc_3000_300_intr[i].tci_level = IPL_HIGH;
+		tc_3000_300_intr[i].tci_func = tc_3000_300_intrnull;
+		tc_3000_300_intr[i].tci_arg = (void *)i;
+		tc_3000_300_intr[i].tci_level = IPL_HIGH;
 	}
 }
 
 void
-tc_3000_300_intr_establish(tcadev, cookie, level, func, arg, name)
-	struct device *tcadev;
-	void *cookie, *arg;
-	int level;
-	int (*func)(void *);
-	const char *name;
+tc_3000_300_intr_establish(struct device *tcadev, void *cookie, int level,
+    int (*func)(void *), void *arg, const char *name)
 {
 	volatile u_int32_t *imskp;
 	u_long dev = (u_long)cookie;
@@ -144,10 +140,8 @@ tc_3000_300_intr_establish(tcadev, cookie, level, func, arg, name)
 }
 
 void
-tc_3000_300_intr_disestablish(tcadev, cookie, name)
-	struct device *tcadev;
-	void *cookie;
-	const char *name;
+tc_3000_300_intr_disestablish(struct device *tcadev, void *cookie,
+    const char *name)
 {
 	volatile u_int32_t *imskp;
 	u_long dev = (u_long)cookie;
@@ -181,8 +175,7 @@ tc_3000_300_intr_disestablish(tcadev, cookie, name)
 }
 
 int
-tc_3000_300_intrnull(val)
-	void *val;
+tc_3000_300_intrnull(void *val)
 {
 
 	panic("tc_3000_300_intrnull: uncaught TC intr for cookie %ld",
@@ -190,9 +183,7 @@ tc_3000_300_intrnull(val)
 }
 
 void
-tc_3000_300_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+tc_3000_300_iointr(void *arg, unsigned long vec)
 {
 	u_int32_t tcir, ioasicir, ioasicimr;
 	int ifound;
@@ -244,7 +235,7 @@ tc_3000_300_iointr(arg, vec)
 		    tcir & TC_3000_300_IR_CXTURBO);
 		CHECKINTR(TC_3000_300_DEV_IOASIC,
 		    (tcir & TC_3000_300_IR_IOASIC) &&
-	            (ioasicir & ~(IOASIC_INTR_300_OPT1|IOASIC_INTR_300_OPT0)));
+		    (ioasicir & ~(IOASIC_INTR_300_OPT1|IOASIC_INTR_300_OPT0)));
 		CHECKINTR(TC_3000_300_DEV_TCDS, tcir & TC_3000_300_IR_TCDS);
 		CHECKINTR(TC_3000_300_DEV_OPT1,
 		    ioasicir & IOASIC_INTR_300_OPT1);
@@ -280,8 +271,7 @@ tc_3000_300_iointr(arg, vec)
  * framebuffer as the output side of the console.
  */
 int
-tc_3000_300_fb_cnattach(turbo_slot)
-	u_int64_t turbo_slot;
+tc_3000_300_fb_cnattach(u_int64_t turbo_slot)
 {
 	u_int32_t output_slot;
 

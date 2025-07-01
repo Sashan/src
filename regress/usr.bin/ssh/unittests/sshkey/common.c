@@ -1,4 +1,4 @@
-/* 	$OpenBSD: common.c,v 1.6 2024/08/15 00:52:23 djm Exp $ */
+/* 	$OpenBSD: common.c,v 1.8 2025/06/16 08:49:27 dtucker Exp $ */
 /*
  * Helpers for key API tests
  *
@@ -17,7 +17,6 @@
 #include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/rsa.h>
-#include <openssl/dsa.h>
 #include <openssl/objects.h>
 
 #include "test_helper.h"
@@ -44,13 +43,13 @@ load_text_file(const char *name)
 {
 	struct sshbuf *ret = load_file(name);
 	const u_char *p;
+	size_t len;
 
 	/* Trim whitespace at EOL */
-	for (p = sshbuf_ptr(ret); sshbuf_len(ret) > 0;) {
-		if (p[sshbuf_len(ret) - 1] == '\r' ||
-		    p[sshbuf_len(ret) - 1] == '\t' ||
-		    p[sshbuf_len(ret) - 1] == ' ' ||
-		    p[sshbuf_len(ret) - 1] == '\n')
+	for (p = sshbuf_ptr(ret); (len = sshbuf_len(ret)) > 0;) {
+		len--;
+		if (p[len] == '\r' || p[len] == '\t' ||
+		    p[len] == ' ' || p[len] == '\n')
 			ASSERT_INT_EQ(sshbuf_consume_end(ret, 1), 0);
 		else
 			break;
@@ -115,37 +114,3 @@ rsa_q(struct sshkey *k)
 	RSA_get0_factors(EVP_PKEY_get0_RSA(k->pkey), NULL, &q);
 	return q;
 }
-
-const BIGNUM *
-dsa_g(struct sshkey *k)
-{
-	const BIGNUM *g = NULL;
-
-	ASSERT_PTR_NE(k, NULL);
-	ASSERT_PTR_NE(k->dsa, NULL);
-	DSA_get0_pqg(k->dsa, NULL, NULL, &g);
-	return g;
-}
-
-const BIGNUM *
-dsa_pub_key(struct sshkey *k)
-{
-	const BIGNUM *pub_key = NULL;
-
-	ASSERT_PTR_NE(k, NULL);
-	ASSERT_PTR_NE(k->dsa, NULL);
-	DSA_get0_key(k->dsa, &pub_key, NULL);
-	return pub_key;
-}
-
-const BIGNUM *
-dsa_priv_key(struct sshkey *k)
-{
-	const BIGNUM *priv_key = NULL;
-
-	ASSERT_PTR_NE(k, NULL);
-	ASSERT_PTR_NE(k->dsa, NULL);
-	DSA_get0_key(k->dsa, NULL, &priv_key);
-	return priv_key;
-}
-

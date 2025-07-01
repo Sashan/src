@@ -1,4 +1,4 @@
-/*	$OpenBSD: glkgpio.c,v 1.7 2024/05/13 01:15:50 jsg Exp $	*/
+/*	$OpenBSD: glkgpio.c,v 1.9 2025/06/16 15:44:35 kettenis Exp $	*/
 /*
  * Copyright (c) 2016 Mark Kettenis
  * Copyright (c) 2019 James Hastings
@@ -40,6 +40,7 @@
 struct glkgpio_intrhand {
 	int (*ih_func)(void *);
 	void *ih_arg;
+	int ih_ipl;
 };
 
 struct glkgpio_softc {
@@ -75,7 +76,7 @@ const char *glkgpio_hids[] = {
 
 int	glkgpio_read_pin(void *, int);
 void	glkgpio_write_pin(void *, int, int);
-void	glkgpio_intr_establish(void *, int, int, int (*)(void *), void *);
+void	glkgpio_intr_establish(void *, int, int, int, int (*)(void *), void *);
 void	glkgpio_intr_enable(void *, int);
 void	glkgpio_intr_disable(void *, int);
 int	glkgpio_intr(void *);
@@ -205,7 +206,7 @@ glkgpio_write_pin(void *cookie, int pin, int value)
 }
 
 void
-glkgpio_intr_establish(void *cookie, int pin, int flags,
+glkgpio_intr_establish(void *cookie, int pin, int flags, int level,
     int (*func)(void *), void *arg)
 {
 	struct glkgpio_softc *sc = cookie;
@@ -215,6 +216,7 @@ glkgpio_intr_establish(void *cookie, int pin, int flags,
 
 	sc->sc_pin_ih[pin].ih_func = func;
 	sc->sc_pin_ih[pin].ih_arg = arg;
+	sc->sc_pin_ih[pin].ih_ipl = level & ~IPL_WAKEUP;
 
 	reg = bus_space_read_4(sc->sc_memt, sc->sc_memh,
 	    GLKGPIO_PAD_CFG0 + pin * 16);
@@ -269,9 +271,10 @@ int
 glkgpio_intr(void *arg)
 {
 	struct glkgpio_softc *sc = arg;
+	struct glkgpio_intrhand *ih;
 	uint32_t status, enable;
 	int rc = 0;
-	int pin;
+	int pin, s;
 
 	for (pin = 0; pin < sc->sc_npins; pin++) {
 		if (pin % 32 == 0) {
@@ -284,8 +287,12 @@ glkgpio_intr(void *arg)
 			status &= enable;
 		}
 		if (status & (1 << (pin % 32))) {
-			if (sc->sc_pin_ih[pin].ih_func)
-				sc->sc_pin_ih[pin].ih_func(sc->sc_pin_ih[pin].ih_arg);
+			ih = &sc->sc_pin_ih[pin];
+			if (ih->ih_func) {
+				s = splraise(ih->ih_ipl);
+				ih->ih_func(ih->ih_arg);
+				splx(s);
+			}
 			rc = 1;
 		}
 	}

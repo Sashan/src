@@ -1,4 +1,4 @@
-/* $OpenBSD: dec_2100_a50.c,v 1.22 2014/05/08 20:46:49 miod Exp $ */
+/* $OpenBSD: dec_2100_a50.c,v 1.24 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: dec_2100_a50.c,v 1.43 2000/05/22 20:13:31 thorpej Exp $ */
 
 /*
@@ -89,7 +89,7 @@ const struct alpha_variation_table dec_2100_a50_variations[] = {
 };
 
 void
-dec_2100_a50_init()
+dec_2100_a50_init(void)
 {
 	u_int64_t variation;
 
@@ -115,7 +115,7 @@ dec_2100_a50_init()
 }
 
 static void
-dec_2100_a50_cons_init()
+dec_2100_a50_cons_init(void)
 {
 	struct ctb *ctb;
 	struct apecs_config *acp;
@@ -127,7 +127,7 @@ dec_2100_a50_cons_init()
 	ctb = (struct ctb *)(((caddr_t)hwrpb) + hwrpb->rpb_ctb_off);
 
 	switch (ctb->ctb_term_type) {
-	case CTB_PRINTERPORT: 
+	case CTB_PRINTERPORT:
 		/* serial console ... */
 		/* XXX */
 		{
@@ -176,9 +176,7 @@ dec_2100_a50_cons_init()
 }
 
 static void
-dec_2100_a50_device_register(dev, aux)
-	struct device *dev;
-	void *aux;
+dec_2100_a50_device_register(struct device *dev, void *aux)
 {
 	static int found, initted, diskboot, netboot;
 	static struct device *pcidev, *ctrlrdev;
@@ -272,11 +270,8 @@ dec_2100_a50_device_register(dev, aux)
 
 #ifndef SMALL_KERNEL
 static void
-dec_2100_a50_mcheck(mces, type, logout, framep)
-	unsigned long mces;
-	unsigned long type;
-	unsigned long logout;
-	struct trapframe *framep;
+dec_2100_a50_mcheck(unsigned long mces, unsigned long type,
+    unsigned long logout, struct trapframe *framep)
 {
 	struct mchkinfo *mcp;
 	static const char *fmt1 = "        %-25s = 0x%016lx\n";
@@ -387,19 +382,19 @@ dec_2100_a50_mcheck(mces, type, logout, framep)
 
 	  case AVANTI_IO_PARITY:
 	    printf("\tI/O parity error at 0x%08lx during PCI cycle 0x%0lx.\n",
-		   (unsigned long)ptr->epic_pear & 0xffffffff, 
+		   (unsigned long)ptr->epic_pear & 0xffffffff,
 		   (unsigned long)(ptr->epic_dcsr >> 18) & 0xf);
 	    break;
 
 	  case AVANTI_TARGET_ABORT:
 	    printf("\tPCI target abort at 0x%08lx during PCI cycle 0x%0lx.\n",
-		   (unsigned long)ptr->epic_pear & 0xffffffff, 
+		   (unsigned long)ptr->epic_pear & 0xffffffff,
 		   (unsigned long)(ptr->epic_dcsr >> 18) & 0xf);
 	    break;
 
 	  case AVANTI_NO_DEVICE:
 	    printf("\tNo device responded at 0x%08lx during PCI cycle 0x%0lx\n.",
-		   (unsigned long)ptr->epic_pear & 0xffffffff, 
+		   (unsigned long)ptr->epic_pear & 0xffffffff,
 		   (unsigned long)(ptr->epic_dcsr >> 18) & 0xf);
 	    break;
 
@@ -421,7 +416,7 @@ dec_2100_a50_mcheck(mces, type, logout, framep)
 	      printf("\tAddress lost.\n");
 	    else
 	      printf("\tBus address to 0x%08lx, PCI cycle 0x%0lx\n",
-		     (unsigned long)ptr->epic_pear & 0xffffffff, 
+		     (unsigned long)ptr->epic_pear & 0xffffffff,
 		     (unsigned long)(ptr->epic_dcsr >> 18) & 0xf);
 	    break;
 
@@ -468,7 +463,7 @@ dec_2100_a50_mcheck(mces, type, logout, framep)
 	      printf("CPU. cpuCReq<2:0> = %0lx\n",
 	        (unsigned long)(ptr->coma_edsr >> 6) & 7);
 	    break;
-	    
+
 	  case AVANTI_NONEXISTENT_MEMORY:
 	    printf("\tNonexistent memory error, caused by ");
 	    if (ptr->coma_edsr & 0x20)
@@ -552,7 +547,7 @@ dec_2100_a50_mcheck(mces, type, logout, framep)
 	    break;
 	  }
 	}
-	  
+
 	/*
 	 * Now that we've printed all sorts of useful information
 	 * and have decided that we really can't do any more to
@@ -566,11 +561,8 @@ dec_2100_a50_mcheck(mces, type, logout, framep)
 }
 
 static void
-dec_2100_a50_mcheck_handler(mces, framep, vector, param)
-	unsigned long mces;
-	struct trapframe *framep;
-	unsigned long vector;
-	unsigned long param;
+dec_2100_a50_mcheck_handler(unsigned long mces, struct trapframe *framep,
+    unsigned long vector, unsigned long param)
 {
 	switch (vector) {
 	case ALPHA_SYS_MCHECK:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ps.c,v 1.81 2024/05/18 13:08:09 sobrado Exp $	*/
+/*	$OpenBSD: ps.c,v 1.83 2025/06/29 16:22:05 tedu Exp $	*/
 /*	$NetBSD: ps.c,v 1.15 1995/05/18 20:33:25 mycroft Exp $	*/
 
 /*-
@@ -46,7 +46,6 @@
 #include <fcntl.h>
 #include <kvm.h>
 #include <locale.h>
-#include <nlist.h>
 #include <paths.h>
 #include <pwd.h>
 #include <stdio.h>
@@ -65,14 +64,15 @@ int	eval;			/* exit value */
 int	sumrusage;		/* -S */
 int	termwidth;		/* width of screen (0 == infinity) */
 int	totwidth;		/* calculated width of requested variables */
+int pagesize;
 
-int	needcomm, needenv, neednlist, commandonly;
+int	needcomm, needenv, commandonly;
 
 enum sort { DEFAULT, SORTMEM, SORTCPU } sortby = DEFAULT;
 
 static char	*kludge_oldps_options(char *);
 static int	 pscomp(const void *, const void *);
-static void	 scanvars(void);
+static void	 scanvars(struct kinfo_proc *kp, size_t nentries);
 static void	 forest_sort(struct pinfo *, int);
 static void	 usage(void);
 
@@ -116,6 +116,7 @@ main(int argc, char *argv[])
 		termwidth = ws.ws_col - 1;
 	if (termwidth == 0)
 		termwidth = 79;
+	pagesize = getpagesize();
 
 	if (argc > 1)
 		argv[1] = kludge_oldps_options(argv[1]);
@@ -325,14 +326,7 @@ main(int argc, char *argv[])
 		Uflag = 1;
 	}
 
-	/*
-	 * scan requested variables, noting what structures are needed,
-	 * and adjusting header widths as appropriate.
-	 */
-	scanvars();
-
-	if (neednlist && !nlistread)
-		(void) donlist();
+	getkernvars();
 
 	/*
 	 * get proc list
@@ -362,6 +356,12 @@ main(int argc, char *argv[])
 	kp = kvm_getprocs(kd, what, flag, sizeof(*kp), &nentries);
 	if (kp == NULL)
 		errx(1, "%s", kvm_geterr(kd));
+
+	/*
+	 * scan requested variables, noting what structures are needed,
+	 * and adjusting header widths as appropriate.
+	 */
+	scanvars(kp, nentries);
 
 	/*
 	 * print header
@@ -404,22 +404,37 @@ main(int argc, char *argv[])
 }
 
 static void
-scanvars(void)
+scanvars(struct kinfo_proc *kp, size_t nentries)
 {
 	struct varent *vent;
 	VAR *v;
 	int i;
+	int vszbump = 0, rssbump = 0;
 
+#define pgtok(a)    (((unsigned long long)(a)*pagesize)/1024)
+	for (i = 0; i < nentries; i++) {
+		struct kinfo_proc *ki = &kp[i];
+		if (vszbump == 0 && pgtok(ki->p_vm_dsize + ki->p_vm_ssize + ki->p_vm_tsize) >= 100000)
+			vszbump = 1;
+		if (vszbump == 1 && pgtok(ki->p_vm_dsize + ki->p_vm_ssize + ki->p_vm_tsize) >= 1000000)
+			vszbump = 2;
+		if (rssbump == 0 && pgtok(ki->p_vm_rssize) >= 100000)
+			rssbump = 1;
+		if (rssbump == 1 && pgtok(ki->p_vm_rssize) >= 1000000)
+			rssbump = 2;
+	}
 	for (vent = vhead; vent; vent = vent->next) {
 		v = vent->var;
+		if (strcmp(v->name, "vsz") == 0)
+			v->width += vszbump;
+		if (strcmp(v->name, "rss") == 0)
+			v->width += rssbump;
 		i = strlen(v->header);
 		if (v->width < i)
 			v->width = i;
 		totwidth += v->width + 1;	/* +1 for space */
 		if (v->flag & COMM)
 			needcomm = 1;
-		if (v->flag & NLIST)
-			neednlist = 1;
 	}
 	totwidth--;
 }

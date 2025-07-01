@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.84 2024/11/21 13:39:34 claudio Exp $	*/
+/*	$OpenBSD: main.c,v 1.87 2025/06/09 18:43:01 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -63,8 +63,6 @@ int		 ctl_stop(struct parse_result *, int, char *[]);
 int		 ctl_waitfor(struct parse_result *, int, char *[]);
 int		 ctl_pause(struct parse_result *, int, char *[]);
 int		 ctl_unpause(struct parse_result *, int, char *[]);
-int		 ctl_send(struct parse_result *, int, char *[]);
-int		 ctl_receive(struct parse_result *, int, char *[]);
 
 struct ctl_command ctl_commands[] = {
 	{ "console",	CMD_CONSOLE,	ctl_console,	"id" },
@@ -73,10 +71,8 @@ struct ctl_command ctl_commands[] = {
 	{ "load",	CMD_LOAD,	ctl_load,	"filename" },
 	{ "log",	CMD_LOG,	ctl_log,	"[brief | verbose]" },
 	{ "pause",	CMD_PAUSE,	ctl_pause,	"id" },
-	{ "receive",	CMD_RECEIVE,	ctl_receive,	"name" ,	1},
 	{ "reload",	CMD_RELOAD,	ctl_reload,	"" },
 	{ "reset",	CMD_RESET,	ctl_reset,	"[all | switches | vms]" },
-	{ "send",	CMD_SEND,	ctl_send,	"id",	1},
 	{ "show",	CMD_STATUS,	ctl_status,	"[id]" },
 	{ "start",	CMD_START,	ctl_start,
 	    "[-cL] [-B device] [-b path] [-d disk] [-i count]\n"
@@ -191,6 +187,7 @@ vmmaction(struct parse_result *res)
 	int			 n;
 	int			 ret, action;
 	unsigned int		 flags;
+	uint32_t		 type;
 
 	if (ctl_sock == -1) {
 		if (unveil(SOCKET_NAME, "w") == -1)
@@ -256,14 +253,6 @@ vmmaction(struct parse_result *res)
 	case CMD_UNPAUSE:
 		unpause_vm(res->id, res->name);
 		break;
-	case CMD_SEND:
-		send_vm(res->id, res->name);
-		done = 1;
-		ret = 0;
-		break;
-	case CMD_RECEIVE:
-		vm_receive(res->id, res->name);
-		break;
 	case CMD_CREATE:
 	case NONE:
 		/* The action is not expected here */
@@ -290,9 +279,10 @@ vmmaction(struct parse_result *res)
 			if (n == 0)
 				break;
 
-			if (imsg.hdr.type == IMSG_CTL_FAIL) {
-				if (IMSG_DATA_SIZE(&imsg) == sizeof(ret))
-					memcpy(&ret, imsg.data, sizeof(ret));
+			type = imsg_get_type(&imsg);
+			if (type == IMSG_CTL_FAIL) {
+				if (imsg_get_len(&imsg) == sizeof(ret))
+					ret = imsg_int_read(&imsg);
 				else
 					ret = 0;
 				if (ret != 0) {
@@ -322,9 +312,6 @@ vmmaction(struct parse_result *res)
 				break;
 			case CMD_PAUSE:
 				done = pause_vm_complete(&imsg, &ret);
-				break;
-			case CMD_RECEIVE:
-				done = vm_start_complete(&imsg, &ret, 0);
 				break;
 			case CMD_UNPAUSE:
 				done = unpause_vm_complete(&imsg, &ret);
@@ -863,7 +850,7 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 			if (res->isopath)
 				errx(1, "iso image specified multiple times");
 			if (realpath(optarg, path) == NULL)
-				err(1, "invalid iso image path");
+				err(1, "invalid iso image path: %s", optarg);
 			if ((res->isopath = strdup(path)) == NULL)
 				errx(1, "strdup");
 			break;
@@ -886,7 +873,7 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 		case 'd':
 			type = parse_disktype(optarg, &s);
 			if (realpath(s, path) == NULL)
-				err(1, "invalid disk path");
+				err(1, "invalid disk path: %s", s);
 			if (parse_disk(res, path, type) != 0)
 				errx(1, "invalid disk: %s", optarg);
 			break;
@@ -1003,34 +990,6 @@ ctl_unpause(struct parse_result *res, int argc, char *argv[])
 {
 	if (argc == 2) {
 		if (parse_vmid(res, argv[1], 0) == -1)
-			errx(1, "invalid id: %s", argv[1]);
-	} else if (argc != 2)
-		ctl_usage(res->ctl);
-
-	return (vmmaction(res));
-}
-
-int
-ctl_send(struct parse_result *res, int argc, char *argv[])
-{
-	if (pledge("stdio unix sendfd unveil", NULL) == -1)
-		err(1, "pledge");
-	if (argc == 2) {
-		if (parse_vmid(res, argv[1], 0) == -1)
-			errx(1, "invalid id: %s", argv[1]);
-	} else if (argc != 2)
-		ctl_usage(res->ctl);
-
-	return (vmmaction(res));
-}
-
-int
-ctl_receive(struct parse_result *res, int argc, char *argv[])
-{
-	if (pledge("stdio unix sendfd unveil", NULL) == -1)
-		err(1, "pledge");
-	if (argc == 2) {
-		if (parse_vmid(res, argv[1], 1) == -1)
 			errx(1, "invalid id: %s", argv[1]);
 	} else if (argc != 2)
 		ctl_usage(res->ctl);

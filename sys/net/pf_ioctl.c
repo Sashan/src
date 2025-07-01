@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.418 2024/07/18 14:46:28 bluhm Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.421 2025/05/22 06:34:03 sashan Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -200,9 +200,9 @@ pfattach(int num)
 	    IPL_SOFTNET, 0, "pfsrctr", NULL);
 	pool_init(&pf_sn_item_pl, sizeof(struct pf_sn_item), 0,
 	    IPL_SOFTNET, 0, "pfsnitem", NULL);
-	pool_init(&pf_state_pl, sizeof(struct pf_state), 0,
+	pool_init(&pf_state_pl, sizeof(struct pf_state), CACHELINESIZE,
 	    IPL_SOFTNET, 0, "pfstate", NULL);
-	pool_init(&pf_state_key_pl, sizeof(struct pf_state_key), 0,
+	pool_init(&pf_state_key_pl, sizeof(struct pf_state_key), CACHELINESIZE,
 	    IPL_SOFTNET, 0, "pfstkey", NULL);
 	pool_init(&pf_state_item_pl, sizeof(struct pf_state_item), 0,
 	    IPL_SOFTNET, 0, "pfstitem", NULL);
@@ -226,9 +226,9 @@ pfattach(int num)
 	pf_syncookies_init();
 
 	pool_sethardlimit(pf_pool_limits[PF_LIMIT_STATES].pp,
-	    pf_pool_limits[PF_LIMIT_STATES].limit, NULL, 0);
+	    pf_pool_limits[PF_LIMIT_STATES].limit);
 	pool_sethardlimit(pf_pool_limits[PF_LIMIT_ANCHORS].pp,
-	    pf_pool_limits[PF_LIMIT_ANCHORS].limit, NULL, 0);
+	    pf_pool_limits[PF_LIMIT_ANCHORS].limit);
 
 	if (physmem <= atop(100*1024*1024))
 		pf_pool_limits[PF_LIMIT_TABLE_ENTRIES].limit =

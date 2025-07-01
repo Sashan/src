@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.652 2025/02/12 16:49:56 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.656 2025/06/04 09:12:34 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -467,7 +467,7 @@ rde_dispatch_imsg_session(struct imsgbuf *imsgbuf)
 				peer_flush(peer, aid, peer->staletime[aid]);
 				break;
 			case IMSG_SESSION_RESTARTED:
-				if (peer->staletime[aid])
+				if (monotime_valid(peer->staletime[aid]))
 					peer_flush(peer, aid,
 					    peer->staletime[aid]);
 				break;
@@ -1326,7 +1326,7 @@ rde_dispatch_imsg_peer(struct rde_peer *peer, void *bula)
 		peer_imsg_flush(peer);
 		return;
 	}
-		
+
 	if (!peer_imsg_pop(peer, &imsg))
 		return;
 
@@ -1369,7 +1369,7 @@ rde_dispatch_imsg_peer(struct rde_peer *peer, void *bula)
 			break;
 		case ROUTE_REFRESH_END_RR:
 			if ((peer->recv_eor & (1 << rr.aid)) != 0 &&
-			    peer->staletime[rr.aid])
+			    monotime_valid(peer->staletime[rr.aid]))
 				peer_flush(peer, rr.aid,
 				    peer->staletime[rr.aid]);
 			else
@@ -2692,7 +2692,7 @@ rde_as4byte_fixup(struct rde_peer *peer, struct rde_aspath *a)
 			/* switch over to new AGGREGATOR */
 			attr_free(a, oaggr);
 			if (attr_optadd(a, ATTR_OPTIONAL | ATTR_TRANSITIVE,
-			    ATTR_AGGREGATOR, naggr->data, naggr->len))
+			    ATTR_AGGREGATOR, naggr->data, naggr->len) == -1)
 				fatalx("attr_optadd failed but impossible");
 		}
 	}
@@ -2822,14 +2822,14 @@ rde_dump_rib_as(struct prefix *p, struct rde_aspath *asp, pid_t pid, int flags,
 	struct rib_entry	*re;
 	struct prefix		*xp;
 	struct rde_peer		*peer;
-	time_t			 staletime;
+	monotime_t		 staletime;
 	size_t			 aslen;
 	uint8_t			 l;
 
 	nexthop = prefix_nexthop(p);
 	peer = prefix_peer(p);
 	memset(&rib, 0, sizeof(rib));
-	rib.age = getmonotime() - p->lastchange;
+	rib.lastchange = p->lastchange;
 	rib.local_pref = asp->lpref;
 	rib.med = asp->med;
 	rib.weight = asp->weight;
@@ -2890,7 +2890,8 @@ rde_dump_rib_as(struct prefix *p, struct rde_aspath *asp, pid_t pid, int flags,
 	else if (asp->flags & F_ATTR_PARSE_ERR)
 		rib.flags |= F_PREF_INVALID;
 	staletime = peer->staletime[p->pt->aid];
-	if (staletime && p->lastchange <= staletime)
+	if (monotime_valid(staletime) &&
+	    monotime_cmp(p->lastchange, staletime) <= 0)
 		rib.flags |= F_PREF_STALE;
 	if (!adjout) {
 		if (peer_has_add_path(peer, p->pt->aid, CAPA_AP_RECV)) {
@@ -3472,7 +3473,6 @@ void
 rde_update_queue_runner(uint8_t aid)
 {
 	struct rde_peer		*peer;
-	struct ibuf		*buf;
 	int			 sent, max = RDE_RUNNER_ROUNDS;
 
 	/* first withdraws ... */
@@ -3488,12 +3488,7 @@ rde_update_queue_runner(uint8_t aid)
 			if (RB_EMPTY(&peer->withdraws[aid]))
 				continue;
 
-			if ((buf = up_dump_withdraws(peer, aid)) == NULL) {
-				continue;
-			}
-			if (imsg_compose_ibuf(ibuf_se, IMSG_UPDATE,
-			    peer->conf.id, 0, buf) == -1)
-				fatal("%s: imsg_create error", __func__);
+			up_dump_withdraws(ibuf_se, peer, aid);
 			sent++;
 		}
 		max -= sent;
@@ -3523,12 +3518,7 @@ rde_update_queue_runner(uint8_t aid)
 				continue;
 			}
 
-			if ((buf = up_dump_update(peer, aid)) == NULL) {
-				continue;
-			}
-			if (imsg_compose_ibuf(ibuf_se, IMSG_UPDATE,
-			    peer->conf.id, 0, buf) == -1)
-				fatal("%s: imsg_compose_ibuf error", __func__);
+			up_dump_update(ibuf_se, peer, aid);
 			sent++;
 		}
 		max -= sent;

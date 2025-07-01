@@ -1,4 +1,4 @@
-/*	$OpenBSD: qcgpio.c,v 1.13 2024/12/22 21:55:20 mglocker Exp $	*/
+/*	$OpenBSD: qcgpio.c,v 1.15 2025/06/16 15:44:35 kettenis Exp $	*/
 /*
  * Copyright (c) 2022 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -68,6 +68,7 @@ int qcgpio_debug = 1;
 struct qcgpio_intrhand {
 	int (*ih_func)(void *);
 	void *ih_arg;
+	int ih_ipl;
 };
 
 struct qcgpio_pdcmap {
@@ -141,7 +142,7 @@ int	qcgpio_x1e80100_pin_map(struct qcgpio_softc *, int, bus_size_t *);
 
 int	qcgpio_read_pin(void *, int);
 void	qcgpio_write_pin(void *, int, int);
-void	qcgpio_intr_establish(void *, int, int, int (*)(void *), void *);
+void	qcgpio_intr_establish(void *, int, int, int, int (*)(void *), void *);
 void	qcgpio_intr_enable(void *, int);
 void	qcgpio_intr_disable(void *, int);
 int	qcgpio_intr(void *);
@@ -468,7 +469,7 @@ qcgpio_write_pin(void *cookie, int pin, int val)
 }
 
 void
-qcgpio_intr_establish(void *cookie, int pin, int flags,
+qcgpio_intr_establish(void *cookie, int pin, int flags, int level,
     int (*func)(void *), void *arg)
 {
 	struct qcgpio_softc *sc = cookie;
@@ -481,6 +482,7 @@ qcgpio_intr_establish(void *cookie, int pin, int flags,
 
 	sc->sc_pin_ih[pin].ih_func = func;
 	sc->sc_pin_ih[pin].ih_arg = arg;
+	sc->sc_pin_ih[pin].ih_ipl = level & ~IPL_WAKEUP;
 
 	reg = HREAD4(sc, off + TLMM_GPIO_INTR_CFG(pin));
 	reg &= ~TLMM_GPIO_INTR_CFG_INTR_DECT_CTL_MASK;
@@ -548,7 +550,7 @@ int
 qcgpio_intr(void *arg)
 {
 	struct qcgpio_softc *sc = arg;
-	int pin, handled = 0;
+	int pin, s, handled = 0;
 	bus_size_t off = 0;
 	uint32_t stat;
 
@@ -560,7 +562,9 @@ qcgpio_intr(void *arg)
 
 		stat = HREAD4(sc, off + TLMM_GPIO_INTR_STATUS(pin));
 		if (stat & TLMM_GPIO_INTR_STATUS_INTR_STATUS) {
+			s = splraise(sc->sc_pin_ih[pin].ih_ipl);
 			sc->sc_pin_ih[pin].ih_func(sc->sc_pin_ih[pin].ih_arg);
+			splx(s);
 			HWRITE4(sc, off + TLMM_GPIO_INTR_STATUS(pin),
 			    stat & ~TLMM_GPIO_INTR_STATUS_INTR_STATUS);
 			handled = 1;

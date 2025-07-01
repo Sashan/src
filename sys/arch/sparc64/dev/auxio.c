@@ -1,4 +1,4 @@
-/*	$OpenBSD: auxio.c,v 1.10 2022/10/16 01:22:39 jsg Exp $	*/
+/*	$OpenBSD: auxio.c,v 1.12 2025/06/26 20:43:41 miod Exp $	*/
 /*	$NetBSD: auxio.c,v 1.1 2000/04/15 03:08:13 mrg Exp $	*/
 
 /*
@@ -47,6 +47,8 @@
 #include <sparc64/dev/auxioreg.h>
 #include <sparc64/dev/auxiovar.h>
 
+#include "fdc.h"
+
 #define	AUXIO_ROM_NAME		"auxio"
 
 /*
@@ -71,6 +73,7 @@ struct cfdriver auxio_cd = {
 };
 
 void auxio_led_blink(void *, int);
+void auxio_flip(struct auxio_softc *, uint32_t, uint32_t);
 
 int
 auxio_ebus_match(struct device *parent, void *cf, void *aux)
@@ -92,32 +95,7 @@ auxio_ebus_attach(struct device *parent, struct device *self, void *aux)
 	}
 
 	sc->sc_tag = ea->ea_memtag;
-
-	if (ea->ea_nregs != 5 || ea->ea_nvaddrs != 5) {
-		printf(": not 5 (%d) registers, only setting led",
-		    ea->ea_nregs);
-		sc->sc_flags = AUXIO_LEDONLY|AUXIO_EBUS;
-	} else {
-		sc->sc_flags = AUXIO_EBUS;
-		if (bus_space_map(sc->sc_tag, ea->ea_vaddrs[2],
-		    sizeof(u_int32_t), BUS_SPACE_MAP_PROMADDRESS,
-		    &sc->sc_freq)) {
-			printf(": unable to map freq\n");
-			return;
-		}
-		if (bus_space_map(sc->sc_tag, ea->ea_vaddrs[3],
-		    sizeof(u_int32_t), BUS_SPACE_MAP_PROMADDRESS,
-		    &sc->sc_scsi)) {
-			printf(": unable to map SCSI\n");
-			return;
-		}
-		if (bus_space_map(sc->sc_tag, ea->ea_vaddrs[4],
-		    sizeof(u_int32_t), BUS_SPACE_MAP_PROMADDRESS,
-		    &sc->sc_temp)) {
-			printf(": unable to map temp\n");
-			return;
-		}
-	}
+	sc->sc_flags = AUXIO_EBUS;
 
 	if (bus_space_map(sc->sc_tag, ea->ea_vaddrs[0], sizeof(u_int32_t),
 	    BUS_SPACE_MAP_PROMADDRESS, &sc->sc_led)) {
@@ -155,7 +133,7 @@ auxio_sbus_attach(struct device *parent, struct device *self, void *aux)
 	}
 
 	/* sbus auxio only has one set of registers */
-	sc->sc_flags = AUXIO_LEDONLY|AUXIO_SBUS;
+	sc->sc_flags = AUXIO_SBUS;
 	if (bus_space_map(sc->sc_tag, sa->sa_promvaddr, 1,
 	    BUS_SPACE_MAP_PROMADDRESS, &sc->sc_led)) {
 		printf(": couldn't map registers\n");
@@ -175,10 +153,9 @@ auxio_attach_common(struct auxio_softc *sc)
 }
 
 void
-auxio_led_blink(void *vsc, int on)
+auxio_flip(struct auxio_softc *sc, uint32_t mask, uint32_t set)
 {
-	struct auxio_softc *sc = vsc;
-	u_int32_t led;
+	uint32_t led;
 	int s;
 
 	s = splhigh();
@@ -188,10 +165,7 @@ auxio_led_blink(void *vsc, int on)
 	else
 		led = bus_space_read_1(sc->sc_tag, sc->sc_led, 0);
 
-	if (on)
-		led |= AUXIO_LED_LED;
-	else
-		led &= ~AUXIO_LED_LED;
+	led = (led & ~mask) | set;
 
 	if (sc->sc_flags & AUXIO_EBUS)
 		bus_space_write_4(sc->sc_tag, sc->sc_led, 0, htole32(led));
@@ -201,11 +175,18 @@ auxio_led_blink(void *vsc, int on)
 	splx(s);
 }
 
+void
+auxio_led_blink(void *vsc, int on)
+{
+	struct auxio_softc *sc = vsc;
+	auxio_flip(sc, AUXIO_LED_LED, on ? AUXIO_LED_LED : 0);
+}
+
+#if NFDC > 0
 int
 auxio_fd_control(u_int32_t bits)
 {
 	struct auxio_softc *sc;
-	u_int32_t led;
 
 	if (auxio_cd.cd_ndevs == 0) {
 		return ENXIO;
@@ -216,17 +197,7 @@ auxio_fd_control(u_int32_t bits)
 	 * We'll assume the floppy drive is tied to first auxio found.
 	 */
 	sc = (struct auxio_softc *)auxio_cd.cd_devs[0];
-	if (sc->sc_flags & AUXIO_EBUS)
-		led = letoh32(bus_space_read_4(sc->sc_tag, sc->sc_led, 0));
-	else
-		led = bus_space_read_1(sc->sc_tag, sc->sc_led, 0);
-
-	led = (led & ~AUXIO_LED_FLOPPY_MASK) | bits;
-
-	if (sc->sc_flags & AUXIO_EBUS)
-		bus_space_write_4(sc->sc_tag, sc->sc_led, 0, htole32(led));
-	else
-		bus_space_write_1(sc->sc_tag, sc->sc_led, 0, led);
-
+	auxio_flip(sc, AUXIO_LED_FLOPPY_MASK, bits);
 	return 0;
 }
+#endif

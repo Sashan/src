@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vxlan.c,v 1.100 2024/10/31 11:41:31 mvs Exp $ */
+/*	$OpenBSD: if_vxlan.c,v 1.103 2025/03/03 22:25:58 bluhm Exp $ */
 
 /*
  * Copyright (c) 2021 David Gwynne <dlg@openbsd.org>
@@ -173,8 +173,8 @@ static int	vxlan_addmulti(struct vxlan_softc *, struct ifnet *);
 static void	vxlan_delmulti(struct vxlan_softc *);
 
 static struct mbuf *
-		vxlan_input(void *, struct mbuf *,
-		    struct ip *, struct ip6_hdr *, void *, int);
+		vxlan_input(void *, struct mbuf *, struct ip *,
+		    struct ip6_hdr *, void *, int, struct netstack *);
 
 static int	vxlan_set_rdomain(struct vxlan_softc *, const struct ifreq *);
 static int	vxlan_get_rdomain(struct vxlan_softc *, struct ifreq *);
@@ -514,16 +514,19 @@ vxlan_send_ipv4(struct vxlan_softc *sc, struct mbuf_list *ml)
 	struct mbuf *m;
 	uint64_t oerrors = 0;
 
+	if (ml_empty(ml))
+		return (0);
+
+	memset(&imo, 0, sizeof(struct ip_moptions));
 	imo.imo_ifidx = sc->sc_if_index0;
 	imo.imo_ttl = sc->sc_ttl;
-	imo.imo_loop = 0;
 
-	NET_LOCK();
+	NET_LOCK_SHARED();
 	while ((m = ml_dequeue(ml)) != NULL) {
 		if (ip_output(m, NULL, NULL, IP_RAWOUTPUT, &imo, NULL, 0) != 0)
 			oerrors++;
 	}
-	NET_UNLOCK();
+	NET_UNLOCK_SHARED();
 
 	return (oerrors);
 }
@@ -536,16 +539,19 @@ vxlan_send_ipv6(struct vxlan_softc *sc, struct mbuf_list *ml)
 	struct mbuf *m;
 	uint64_t oerrors = 0;
 
+	if (ml_empty(ml))
+		return (0);
+
+	memset(&im6o, 0, sizeof(struct ip6_moptions));
 	im6o.im6o_ifidx = sc->sc_if_index0;
 	im6o.im6o_hlim = sc->sc_ttl;
-	im6o.im6o_loop = 0;
 
-	NET_LOCK();
+	NET_LOCK_SHARED();
 	while ((m = ml_dequeue(ml)) != NULL) {
 		if (ip6_output(m, NULL, NULL, 0, &im6o, NULL) != 0)
 			oerrors++;
 	}
-	NET_UNLOCK();
+	NET_UNLOCK_SHARED();
 
 	return (oerrors);
 }
@@ -602,7 +608,7 @@ vxlan_send(void *arg)
 
 static struct mbuf *
 vxlan_input(void *arg, struct mbuf *m, struct ip *ip, struct ip6_hdr *ip6,
-    void *uhp, int hlen)
+    void *uhp, int hlen, struct netstack *ns)
 {
 	struct vxlan_tep *vt = arg;
 	union vxlan_addr addr;
@@ -711,7 +717,7 @@ vxlan_input(void *arg, struct mbuf *m, struct ip *ip, struct ip6_hdr *ip6,
 		break;
         }
 
-	if_vinput(ifp, m);
+	if_vinput(ifp, m, ns);
 rele:
 	vxlan_rele(sc);
 	return (NULL);
@@ -729,6 +735,7 @@ vxlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct vxlan_softc *sc = ifp->if_softc;
 	struct ifreq *ifr = (struct ifreq *)data;
 	struct ifbrparam *bparam = (struct ifbrparam *)data;
+	struct ifnet *ifp0;
 	int error = 0;
 
 	switch (cmd) {
@@ -743,6 +750,13 @@ vxlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		} else {
 			if (ISSET(ifp->if_flags, IFF_RUNNING))
 				error = vxlan_down(sc);
+		}
+		break;
+
+	case SIOCSIFXFLAGS:
+		if ((ifp0 = if_get(sc->sc_if_index0)) != NULL) {
+			ifsetlro(ifp0, ISSET(ifr->ifr_flags, IFXF_LRO));
+			if_put(ifp0);
 		}
 		break;
 
@@ -932,10 +946,10 @@ vxlan_tep_add_addr(struct vxlan_softc *sc, const union vxlan_addr *addr,
 	if (error != 0)
 		goto free;
 
-	solock(so);
+	solock_shared(so);
 	sotoinpcb(so)->inp_upcall = vxlan_input;
 	sotoinpcb(so)->inp_upcall_arg = vt;
-	sounlock(so);
+	sounlock_shared(so);
 
 	m_inithdr(&m);
 	m.m_len = sizeof(vt->vt_rdomain);
@@ -972,9 +986,9 @@ vxlan_tep_add_addr(struct vxlan_softc *sc, const union vxlan_addr *addr,
 		unhandled_af(vt->vt_af);
 	}
 
-	solock(so);
+	solock_shared(so);
 	error = sobind(so, &m, curproc);
-	sounlock(so);
+	sounlock_shared(so);
 	if (error != 0)
 		goto close;
 

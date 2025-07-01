@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_local.h,v 1.65 2025/01/25 13:15:21 tb Exp $ */
+/* $OpenBSD: ec_local.h,v 1.69 2025/05/25 05:19:26 jsing Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -76,14 +76,18 @@
 #include <openssl/objects.h>
 
 #include "bn_local.h"
+#include "ec_internal.h"
 
 __BEGIN_HIDDEN_DECLS
 
-struct ec_method_st {
+typedef struct ec_method_st {
 	int (*group_set_curve)(EC_GROUP *, const BIGNUM *p, const BIGNUM *a,
 	    const BIGNUM *b, BN_CTX *);
 	int (*group_get_curve)(const EC_GROUP *, BIGNUM *p, BIGNUM *a,
 	    BIGNUM *b, BN_CTX *);
+
+	int (*point_set_to_infinity)(const EC_GROUP *, EC_POINT *);
+	int (*point_is_at_infinity)(const EC_GROUP *, const EC_POINT *);
 
 	int (*point_is_on_curve)(const EC_GROUP *, const EC_POINT *, BN_CTX *);
 	int (*point_cmp)(const EC_GROUP *, const EC_POINT *a, const EC_POINT *b,
@@ -106,8 +110,8 @@ struct ec_method_st {
 	int (*mul_single_ct)(const EC_GROUP *group, EC_POINT *r,
 	    const BIGNUM *scalar, const EC_POINT *point, BN_CTX *);
 	int (*mul_double_nonct)(const EC_GROUP *group, EC_POINT *r,
-	    const BIGNUM *g_scalar, const BIGNUM *p_scalar,
-	    const EC_POINT *point, BN_CTX *);
+	    const BIGNUM *scalar1, const EC_POINT *point1,
+	    const BIGNUM *scalar2, const EC_POINT *point2, BN_CTX *);
 
 	/*
 	 * These can be used by 'add' and 'dbl' so that the same implementations
@@ -124,7 +128,7 @@ struct ec_method_st {
 	    BN_CTX *);
 	int (*field_decode)(const EC_GROUP *, BIGNUM *r, const BIGNUM *a,
 	    BN_CTX *);
-} /* EC_METHOD */;
+} EC_METHOD;
 
 struct ec_group_st {
 	const EC_METHOD *meth;
@@ -155,6 +159,10 @@ struct ec_group_st {
 
 	/* Montgomery context used by EC_GFp_mont_method. */
 	BN_MONT_CTX *mont_ctx;
+
+	EC_FIELD_MODULUS fm;
+	EC_FIELD_ELEMENT fe_a;
+	EC_FIELD_ELEMENT fe_b;
 } /* EC_GROUP */;
 
 struct ec_point_st {
@@ -168,11 +176,19 @@ struct ec_point_st {
 	BIGNUM *Y;
 	BIGNUM *Z;
 	int Z_is_one; /* enable optimized point arithmetics for special case */
+
+	EC_FIELD_ELEMENT fe_x;
+	EC_FIELD_ELEMENT fe_y;
+	EC_FIELD_ELEMENT fe_z;
 } /* EC_POINT */;
 
-/* Compute r = generator * m + point * n in non-constant time. */
-int ec_wnaf_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *m,
-    const EC_POINT *point, const BIGNUM *n, BN_CTX *ctx);
+const EC_METHOD *EC_GFp_simple_method(void);
+const EC_METHOD *EC_GFp_mont_method(void);
+
+/* Compute r = scalar1 * point1 + scalar2 * point2 in non-constant time. */
+int ec_wnaf_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *scalar1,
+    const EC_POINT *point1, const BIGNUM *scalar2, const EC_POINT *point2,
+    BN_CTX *ctx);
 
 int ec_group_is_builtin_curve(const EC_GROUP *group, int *out_nid);
 

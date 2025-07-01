@@ -1,4 +1,4 @@
-/* $OpenBSD: pci_eb64plus.c,v 1.16 2017/09/08 05:36:51 deraadt Exp $ */
+/* $OpenBSD: pci_eb64plus.c,v 1.18 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pci_eb64plus.c,v 1.10 2001/07/27 00:25:20 thorpej Exp $ */
 
 /*-
@@ -103,18 +103,17 @@ extern void	eb64plus_intr_enable(int irq);  /* pci_eb64plus_intr.S */
 extern void	eb64plus_intr_disable(int irq); /* pci_eb64plus_intr.S */
 
 void
-pci_eb64plus_pickintr(acp)
-	struct apecs_config *acp;
+pci_eb64plus_pickintr(struct apecs_config *acp)
 {
 	bus_space_tag_t iot = &acp->ac_iot;
 	pci_chipset_tag_t pc = &acp->ac_pc;
 	int i;
 
-        pc->pc_intr_v = acp;
-        pc->pc_intr_map = dec_eb64plus_intr_map;
-        pc->pc_intr_string = dec_eb64plus_intr_string;
-        pc->pc_intr_establish = dec_eb64plus_intr_establish;
-        pc->pc_intr_disestablish = dec_eb64plus_intr_disestablish;
+	pc->pc_intr_v = acp;
+	pc->pc_intr_map = dec_eb64plus_intr_map;
+	pc->pc_intr_string = dec_eb64plus_intr_string;
+	pc->pc_intr_establish = dec_eb64plus_intr_establish;
+	pc->pc_intr_disestablish = dec_eb64plus_intr_disestablish;
 
 	/* Not supported on the EB64+. */
 	pc->pc_pciide_compat_intr_establish = NULL;
@@ -137,10 +136,8 @@ pci_eb64plus_pickintr(acp)
 #endif
 }
 
-int     
-dec_eb64plus_intr_map(pa, ihp)
-	struct pci_attach_args *pa;
-        pci_intr_handle_t *ihp;
+int
+dec_eb64plus_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	int buspin, line = pa->pa_intrline;
 
@@ -166,26 +163,19 @@ dec_eb64plus_intr_map(pa, ihp)
 }
 
 const char *
-dec_eb64plus_intr_string(acv, ih)
-	void *acv;
-	pci_intr_handle_t ih;
+dec_eb64plus_intr_string(void *acv, pci_intr_handle_t ih)
 {
-        static char irqstr[15];          /* 11 + 2 + NULL + sanity */
+	static char irqstr[15];	  /* 11 + 2 + NULL + sanity */
 
-        if (ih >= EB64PLUS_MAX_IRQ)
-                panic("dec_eb64plus_intr_string: bogus eb64+ IRQ 0x%lx", ih);
-        snprintf(irqstr, sizeof irqstr, "eb64+ irq %ld", ih);
-        return (irqstr);
+	if (ih >= EB64PLUS_MAX_IRQ)
+		panic("dec_eb64plus_intr_string: bogus eb64+ IRQ 0x%lx", ih);
+	snprintf(irqstr, sizeof irqstr, "eb64+ irq %ld", ih);
+	return (irqstr);
 }
 
 void *
-dec_eb64plus_intr_establish(acv, ih, level, func, arg, name)
-        void *acv;
-        pci_intr_handle_t ih;
-        int level;
-        int (*func)(void *);
-	void *arg;
-	const char *name;
+dec_eb64plus_intr_establish(void *acv, pci_intr_handle_t ih, int level,
+    int (*func)(void *), void *arg, const char *name)
 {
 	void *cookie;
 
@@ -205,13 +195,12 @@ dec_eb64plus_intr_establish(acv, ih, level, func, arg, name)
 }
 
 void
-dec_eb64plus_intr_disestablish(acv, cookie)
-        void *acv, *cookie;
+dec_eb64plus_intr_disestablish(void *acv, void *cookie)
 {
 	struct alpha_shared_intrhand *ih = cookie;
 	unsigned int irq = ih->ih_num;
 	int s;
- 
+
 	s = splhigh();
 
 	alpha_shared_intr_disestablish(eb64plus_pci_intr, cookie);
@@ -221,16 +210,14 @@ dec_eb64plus_intr_disestablish(acv, cookie)
 		    IST_NONE);
 		scb_free(0x900 + SCB_IDXTOVEC(irq));
 	}
- 
+
 	splx(s);
 }
 
 void
-eb64plus_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+eb64plus_iointr(void *arg, unsigned long vec)
 {
-	int irq; 
+	int irq;
 
 	irq = SCB_VECTOIDX(vec - 0x900);
 
@@ -247,8 +234,7 @@ eb64plus_iointr(arg, vec)
 u_int8_t eb64plus_intr_mask[3] = { 0xff, 0xff, 0xff };
 
 void
-eb64plus_intr_enable(irq)
-	int irq;
+eb64plus_intr_enable(int irq)
 {
 	int byte = (irq / 8), bit = (irq % 8);
 
@@ -262,8 +248,7 @@ eb64plus_intr_enable(irq)
 }
 
 void
-eb64plus_intr_disable(irq)
-	int irq;
+eb64plus_intr_disable(int irq)
 {
 	int byte = (irq / 8), bit = (irq % 8);
 

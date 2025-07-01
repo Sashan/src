@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_pmap.h,v 1.35 2025/01/18 16:35:31 kettenis Exp $	*/
+/*	$OpenBSD: uvm_pmap.h,v 1.37 2025/06/02 18:49:04 claudio Exp $	*/
 /*	$NetBSD: uvm_pmap.h,v 1.1 2000/06/27 09:00:14 mrg Exp $	*/
 
 /* 
@@ -125,9 +125,6 @@ boolean_t	 pmap_clear_modify(struct vm_page *);
 boolean_t	 pmap_clear_reference(struct vm_page *);
 #endif
 
-#if !defined(pmap_collect) && defined(__HAVE_PMAP_COLLECT)
-void		 pmap_collect(pmap_t);
-#endif
 #if !defined(pmap_copy_page)
 void		 pmap_copy_page(struct vm_page *, struct vm_page *);
 #endif
@@ -181,6 +178,10 @@ void		 pmap_virtual_space(vaddr_t *, vaddr_t *);
 
 #if defined(__HAVE_PMAP_POPULATE)
 void		pmap_populate(pmap_t, vaddr_t);
+#endif
+
+#if defined(__HAVE_PMAP_PURGE)
+void		pmap_purge(struct proc *);
 #endif
 
 /* nested pmaps are used in i386/amd64 vmm */

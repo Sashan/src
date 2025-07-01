@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_umb.c,v 1.59 2024/08/08 05:10:00 deraadt Exp $ */
+/*	$OpenBSD: if_umb.c,v 1.64 2025/06/16 12:36:43 gerhard Exp $ */
 
 /*
  * Copyright (c) 2016 genua mbH
@@ -359,6 +359,7 @@ umb_attach(struct device *parent, struct device *self, void *aux)
 	int	 altnum;
 	int	 s;
 	struct ifnet *ifp;
+	uint32_t maxpktlen;
 
 	sc->sc_udev = uaa->device;
 	sc->sc_ctrl_ifaceno = uaa->ifaceno;
@@ -461,10 +462,17 @@ umb_attach(struct device *parent, struct device *self, void *aux)
 				    MBIM_CTRLMSG_MAXLEN);
 				/* cont. anyway */
 			}
-			sc->sc_maxpktlen = UGETW(md->wMaxSegmentSize);
-			DPRINTFN(2, "%s: ctrl_len=%d, maxpktlen=%d, cap=0x%x\n",
-			    DEVNAM(sc), sc->sc_ctrl_len, sc->sc_maxpktlen,
-			    md->bmNetworkCapabilities);
+			maxpktlen = UGETW(md->wMaxSegmentSize);
+			if (maxpktlen > 0) {
+				sc->sc_maxpktlen = maxpktlen;
+				DPRINTFN(2, "%s: ctrl_len=%d, maxpktlen=%d, "
+				    "cap=0x%x\n", DEVNAM(sc), sc->sc_ctrl_len,
+				    sc->sc_maxpktlen,
+				    md->bmNetworkCapabilities);
+			} else {
+				DPRINTFN(2, "%s: max segment size %d out of "
+				    "range\n", DEVNAM(sc), maxpktlen);
+			}
 			break;
 		default:
 			break;
@@ -709,8 +717,10 @@ umb_ncm_setup(struct umb_softc *sc)
 	USETW(req.wLength, sizeof (np));
 	if (usbd_do_request(sc->sc_udev, &req, &np) == USBD_NORMAL_COMPLETION &&
 	    UGETW(np.wLength) == sizeof (np)) {
-		sc->sc_rx_bufsz = UGETDW(np.dwNtbInMaxSize);
-		sc->sc_tx_bufsz = UGETDW(np.dwNtbOutMaxSize);
+		sc->sc_rx_bufsz = MIN(UGETDW(np.dwNtbInMaxSize),
+		    sc->sc_maxpktlen);
+		sc->sc_tx_bufsz = MIN(UGETDW(np.dwNtbOutMaxSize),
+		    sc->sc_maxpktlen);
 		sc->sc_maxdgram = UGETW(np.wNtbOutMaxDatagrams);
 		sc->sc_align = UGETW(np.wNdpOutAlignment);
 		sc->sc_ndp_div = UGETW(np.wNdpOutDivisor);
@@ -1433,10 +1443,9 @@ umb_getinfobuf(void *in, int inlen, uint32_t offs, uint32_t sz,
 {
 	offs = letoh32(offs);
 	sz = letoh32(sz);
-	if (inlen >= offs + sz) {
-		memset(out, 0, outlen);
+	memset(out, 0, outlen);
+	if ((uint64_t)inlen >= (uint64_t)offs + (uint64_t)sz)
 		memcpy(out, in + offs, MIN(sz, outlen));
-	}
 }
 
 static inline int
@@ -1838,7 +1847,8 @@ umb_add_inet_config(struct umb_softc *sc, struct in_addr ip, u_int prefixlen,
 	sin = &ifra.ifra_mask;
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof (*sin);
-	in_len2mask(&sin->sin_addr, prefixlen);
+	in_len2mask(&sin->sin_addr,
+	    MIN(prefixlen, sizeof (struct in_addr) * 8));
 
 	rv = in_ioctl(SIOCAIFADDR, (caddr_t)&ifra, ifp, 1);
 	if (rv != 0) {
@@ -2407,9 +2417,8 @@ umb_decap(struct umb_softc *sc, struct usbd_xfer *xfer)
 	struct ncm_pointer16_dgram *dgram16;
 	struct ncm_pointer32_dgram *dgram32;
 	uint32_t hsig, psig;
-	int	 blen;
-	int	 ptrlen, ptroff, dgentryoff;
-	uint32_t doff, dlen;
+	uint32_t ptrlen, dgentryoff;
+	uint64_t blen, ptroff, doff, dlen;
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct mbuf *m;
 
@@ -2453,15 +2462,17 @@ umb_decap(struct umb_softc *sc, struct usbd_xfer *xfer)
 		goto fail;
 	}
 	if (blen != 0 && len < blen) {
-		DPRINTF("%s: bad NTB len (%d) for %d bytes of data\n",
+		DPRINTF("%s: bad NTB len (%llu) for %d bytes of data\n",
 		    DEVNAM(sc), blen, len);
 		goto fail;
 	}
 
+	if (len < ptroff)
+		goto toosmall;
 	ptr16 = (struct ncm_pointer16 *)(buf + ptroff);
 	psig = UGETDW(ptr16->dwSignature);
 	ptrlen = UGETW(ptr16->wLength);
-	if (len < ptrlen + ptroff)
+	if ((uint64_t)len < (uint64_t)ptrlen + ptroff)
 		goto toosmall;
 	if (!MBIM_NCM_NTH16_ISISG(psig) && !MBIM_NCM_NTH32_ISISG(psig)) {
 		DPRINTF("%s: unsupported NCM pointer signature (0x%08x)\n",
@@ -2508,16 +2519,16 @@ umb_decap(struct umb_softc *sc, struct usbd_xfer *xfer)
 		/* Terminating zero entry */
 		if (dlen == 0 || doff == 0)
 			break;
-		if (len < dlen + doff) {
+		if ((uint64_t)len < dlen + doff) {
 			/* Skip giant datagram but continue processing */
-			DPRINTF("%s: datagram too large (%d @ off %d)\n",
+			DPRINTF("%s: datagram too large (%llu @ off %llu)\n",
 			    DEVNAM(sc), dlen, doff);
 			continue;
 		}
 
 		dp = buf + doff;
-		DPRINTFN(3, "%s: decap %d bytes\n", DEVNAM(sc), dlen);
-		m = m_devget(dp, dlen, sizeof(uint32_t));
+		DPRINTFN(3, "%s: decap %llu bytes\n", DEVNAM(sc), dlen);
+		m = m_devget(dp, (int)dlen, sizeof(uint32_t));
 		if (m == NULL) {
 			ifp->if_iqdrops++;
 			continue;

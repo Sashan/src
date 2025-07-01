@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_resource.c,v 1.93 2024/11/10 06:45:36 jsg Exp $	*/
+/*	$OpenBSD: kern_resource.c,v 1.95 2025/05/31 12:40:33 dlg Exp $	*/
 /*	$NetBSD: kern_resource.c,v 1.38 1996/10/23 07:19:38 matthias Exp $	*/
 
 /*-
@@ -63,7 +63,7 @@ struct plimit	*lim_copy(struct plimit *);
 struct plimit	*lim_write_begin(void);
 void		 lim_write_commit(struct plimit *);
 
-void	tuagg_sumup(struct tusage *, const struct tusage *);
+void	tuagg_sumup(struct tusage *, struct tusage *);
 
 /*
  * Patchable maximum data and stack limits.
@@ -369,32 +369,22 @@ sys_getrlimit(struct proc *p, void *v, register_t *retval)
 
 /* Add the counts from *from to *tu, ensuring a consistent read of *from. */ 
 void
-tuagg_sumup(struct tusage *tu, const struct tusage *from)
+tuagg_sumup(struct tusage *tu, struct tusage *from)
 {
 	struct tusage	tmp;
-	uint64_t	enter, leave;
+	unsigned int	gen;
 
-	enter = from->tu_gen;
-	for (;;) {
-		/* the generation number is odd during an update */
-		while (enter & 1) {
-			CPU_BUSY_CYCLE();
-			enter = from->tu_gen;
-		}
-
-		membar_consumer();
+	pc_cons_enter(&from->tu_pcl, &gen);
+	do {
 		tmp = *from;
-		membar_consumer();
-		leave = from->tu_gen;
-
-		if (enter == leave)
-			break;
-		enter = leave;
-	}
+	} while (pc_cons_leave(&from->tu_pcl, &gen) != 0);
 
 	tu->tu_uticks += tmp.tu_uticks;
 	tu->tu_sticks += tmp.tu_sticks;
 	tu->tu_iticks += tmp.tu_iticks;
+	tu->tu_ixrss += tmp.tu_ixrss;
+	tu->tu_idrss += tmp.tu_idrss;
+	tu->tu_isrss += tmp.tu_isrss;
 	timespecadd(&tu->tu_runtime, &tmp.tu_runtime, &tu->tu_runtime);
 }
 
@@ -430,16 +420,19 @@ tuagg_get_process(struct tusage *tu, struct process *pr)
 void
 tuagg_add_process(struct process *pr, struct proc *p)
 {
+	unsigned int gen;
+
 	MUTEX_ASSERT_LOCKED(&pr->ps_mtx);
 	KASSERT(curproc == p || p->p_stat == SDEAD);
 
-	tu_enter(&pr->ps_tu);
+	gen = tu_enter(&pr->ps_tu);
 	tuagg_sumup(&pr->ps_tu, &p->p_tu);
-	tu_leave(&pr->ps_tu);
+	tu_leave(&pr->ps_tu, gen);
 
 	/* Now reset CPU time usage for the thread. */
 	timespecclear(&p->p_tu.tu_runtime);
 	p->p_tu.tu_uticks = p->p_tu.tu_sticks = p->p_tu.tu_iticks = 0;
+	p->p_tu.tu_ixrss = p->p_tu.tu_idrss = p->p_tu.tu_isrss = 0;
 }
 
 void
@@ -448,6 +441,7 @@ tuagg_add_runtime(void)
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
 	struct proc *p = curproc;
 	struct timespec ts, delta;
+	unsigned int gen;
 
 	/*
 	 * Compute the amount of time during which the current
@@ -468,9 +462,9 @@ tuagg_add_runtime(void)
 	}
 	/* update spc_runtime */
 	spc->spc_runtime = ts;
-	tu_enter(&p->p_tu);
+	gen = tu_enter(&p->p_tu);
 	timespecadd(&p->p_tu.tu_runtime, &delta, &p->p_tu.tu_runtime);
-	tu_leave(&p->p_tu);
+	tu_leave(&p->p_tu, gen);
 }
 
 /*
@@ -567,6 +561,10 @@ dogetrusage(struct proc *p, int who, struct rusage *rup)
 		}
 
 		calcru(&tu, &rup->ru_utime, &rup->ru_stime, NULL);
+
+		rup->ru_ixrss = tu.tu_ixrss;
+		rup->ru_idrss = tu.tu_idrss;
+		rup->ru_isrss = tu.tu_isrss;
 		break;
 
 	case RUSAGE_THREAD:

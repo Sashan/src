@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_usrreq.c,v 1.215 2025/01/31 13:40:33 bluhm Exp $	*/
+/*	$OpenBSD: uipc_usrreq.c,v 1.220 2025/06/12 20:37:58 deraadt Exp $	*/
 /*	$NetBSD: uipc_usrreq.c,v 1.18 1996/02/09 19:00:50 christos Exp $	*/
 
 /*
@@ -242,6 +242,7 @@ u_int	unpsq_recvspace = PIPSIZ;	/* [a] */
 u_int	unpdg_sendspace = 8192;		/* [a] really max datagram size */
 u_int	unpdg_recvspace = PIPSIZ;	/* [a] */
 
+#ifndef SMALL_KERNEL
 const struct sysctl_bounded_args unpstctl_vars[] = {
 	{ UNPCTL_RECVSPACE, &unpst_recvspace, 0, SB_MAX },
 	{ UNPCTL_SENDSPACE, &unpst_sendspace, 0, SB_MAX },
@@ -254,6 +255,7 @@ const struct sysctl_bounded_args unpdgctl_vars[] = {
 	{ UNPCTL_RECVSPACE, &unpdg_recvspace, 0, SB_MAX },
 	{ UNPCTL_SENDSPACE, &unpdg_sendspace, 0, SB_MAX },
 };
+#endif /* SMALL_KERNEL */
 
 int
 uipc_attach(struct socket *so, int proto, int wait)
@@ -546,7 +548,7 @@ uipc_send(struct socket *so, struct mbuf *m, struct mbuf *nam,
 	mtx_enter(&so2->so_rcv.sb_mtx);
 	mtx_enter(&so->so_snd.sb_mtx);
 	if (control) {
-		if (sbappendcontrol(so2, &so2->so_rcv, m, control)) {
+		if (sbappendcontrol(&so2->so_rcv, m, control)) {
 			control = NULL;
 		} else {
 			mtx_leave(&so->so_snd.sb_mtx);
@@ -555,9 +557,9 @@ uipc_send(struct socket *so, struct mbuf *m, struct mbuf *nam,
 			goto dispose;
 		}
 	} else if (so->so_type == SOCK_SEQPACKET)
-		sbappendrecord(so2, &so2->so_rcv, m);
+		sbappendrecord(&so2->so_rcv, m);
 	else
-		sbappend(so2, &so2->so_rcv, m);
+		sbappend(&so2->so_rcv, m);
 	so->so_snd.sb_mbcnt = so2->so_rcv.sb_mbcnt;
 	so->so_snd.sb_cc = so2->so_rcv.sb_cc;
 	if (so2->so_rcv.sb_cc > 0)
@@ -625,7 +627,7 @@ uipc_dgram_send(struct socket *so, struct mbuf *m, struct mbuf *nam,
 		from = &sun_noname;
 
 	mtx_enter(&so2->so_rcv.sb_mtx);
-	if (sbappendaddr(so2, &so2->so_rcv, from, m, control)) {
+	if (sbappendaddr(&so2->so_rcv, from, m, control)) {
 		dowakeup = 1;
 		m = NULL;
 		control = NULL;
@@ -725,6 +727,7 @@ uipc_connect2(struct socket *so, struct socket *so2)
 	return (0);
 }
 
+#ifndef SMALL_KERNEL
 int
 uipc_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
@@ -759,6 +762,7 @@ uipc_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (ENOPROTOOPT);
 	}
 }
+#endif /* SMALL_KERNEL */
 
 void
 unp_detach(struct unpcb *unp)

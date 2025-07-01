@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.368 2024/11/26 15:52:41 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.372 2025/04/03 11:51:27 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -40,6 +40,7 @@ static void	window_copy_free(struct window_mode_entry *);
 static void	window_copy_resize(struct window_mode_entry *, u_int, u_int);
 static void	window_copy_formats(struct window_mode_entry *,
 		    struct format_tree *);
+static struct screen *window_copy_get_screen(struct window_mode_entry *);
 static void	window_copy_scroll1(struct window_mode_entry *,
 		    struct window_pane *wp, int, u_int, int);
 static void	window_copy_pageup1(struct window_mode_entry *, int);
@@ -160,6 +161,7 @@ const struct window_mode window_copy_mode = {
 	.key_table = window_copy_key_table,
 	.command = window_copy_command,
 	.formats = window_copy_formats,
+	.get_screen = window_copy_get_screen
 };
 
 const struct window_mode window_view_mode = {
@@ -171,6 +173,7 @@ const struct window_mode window_view_mode = {
 	.key_table = window_copy_key_table,
 	.command = window_copy_command,
 	.formats = window_copy_formats,
+	.get_screen = window_copy_get_screen
 };
 
 enum {
@@ -866,9 +869,9 @@ window_copy_get_word(struct window_pane *wp, u_int x, u_int y)
 {
 	struct window_mode_entry	*wme = TAILQ_FIRST(&wp->modes);
 	struct window_copy_mode_data	*data = wme->data;
-	struct grid			*gd = data->screen.grid;
+	struct grid			*gd = data->backing->grid;
 
-	return (format_grid_word(gd, x, gd->hsize + y));
+	return (format_grid_word(gd, x, gd->hsize + y - data->oy));
 }
 
 char *
@@ -879,6 +882,16 @@ window_copy_get_line(struct window_pane *wp, u_int y)
 	struct grid			*gd = data->screen.grid;
 
 	return (format_grid_line(gd, gd->hsize + y));
+}
+
+char *
+window_copy_get_hyperlink(struct window_pane *wp, u_int x, u_int y)
+{
+	struct window_mode_entry	*wme = TAILQ_FIRST(&wp->modes);
+	struct window_copy_mode_data	*data = wme->data;
+	struct grid			*gd = data->screen.grid;
+
+	return (format_grid_hyperlink(gd, x, gd->hsize + y, wp->screen));
 }
 
 static void *
@@ -970,6 +983,14 @@ window_copy_formats(struct window_mode_entry *wme, struct format_tree *ft)
 	format_add_cb(ft, "copy_cursor_line", window_copy_cursor_line_cb);
 	format_add_cb(ft, "copy_cursor_hyperlink",
 	    window_copy_cursor_hyperlink_cb);
+}
+
+static struct screen *
+window_copy_get_screen(struct window_mode_entry *wme)
+{
+	struct window_copy_mode_data	*data = wme->data;
+
+	return (data->backing);
 }
 
 static void
@@ -4252,6 +4273,8 @@ window_copy_match_at_cursor(struct window_copy_mode_data *data)
 			buf = xrealloc(buf, len + 2);
 			buf[len] = '\t';
 			len++;
+		} else if (gc.flags & GRID_FLAG_PADDING) {
+			/* nothing to do */
 		} else {
 			buf = xrealloc(buf, len + gc.data.size + 1);
 			memcpy(buf + len, gc.data.data, gc.data.size);

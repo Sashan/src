@@ -36,6 +36,8 @@
 
 #include <uvm/uvm_extern.h>
 
+struct drm_fb_helper;
+struct drm_fb_helper_surface_size;
 struct drm_file;
 struct drm_gem_object;
 struct drm_master;
@@ -374,6 +376,22 @@ struct drm_driver {
 			       uint64_t *offset);
 
 	/**
+	 * @fbdev_probe
+	 *
+	 * Allocates and initialize the fb_info structure for fbdev emulation.
+	 * Furthermore it also needs to allocate the DRM framebuffer used to
+	 * back the fbdev.
+	 *
+	 * This callback is mandatory for fbdev support.
+	 *
+	 * Returns:
+	 *
+	 * 0 on success ot a negative error code otherwise.
+	 */
+	int (*fbdev_probe)(struct drm_fb_helper *fbdev_helper,
+			   struct drm_fb_helper_surface_size *sizes);
+
+	/**
 	 * @show_fdinfo:
 	 *
 	 * Print device specific fdinfo.  See Documentation/gpu/drm-usage-stats.rst.
@@ -569,13 +587,6 @@ struct drm_dmamem {
 	bus_dma_segment_t	segs[1];
 	LIST_ENTRY(drm_dmamem)	next;
 };
-
-typedef struct drm_dma_handle {
-	struct drm_dmamem *mem;
-	dma_addr_t busaddr;
-	void *vaddr;
-	size_t size;
-} drm_dma_handle_t;
 
 struct drm_dmamem	*drm_dmamem_alloc(bus_dma_tag_t, bus_size_t, bus_size_t,
 			     int, bus_size_t, int, int);

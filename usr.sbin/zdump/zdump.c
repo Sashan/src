@@ -1,4 +1,4 @@
-/*	$OpenBSD: zdump.c,v 1.14 2016/03/15 19:50:48 millert Exp $ */
+/*	$OpenBSD: zdump.c,v 1.19 2025/06/23 13:53:11 millert Exp $ */
 /*
 ** This file is in the public domain, so clarified as of
 ** 2009-05-17 by Arthur David Olson.
@@ -11,6 +11,8 @@
 */
 
 #include <ctype.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -33,9 +35,20 @@
 #define TM_YEAR_BASE	1900
 #define DAYSPERNYEAR	365
 
-#define SECSPERDAY	((long) SECSPERHOUR * HOURSPERDAY)
+#define SECSPERDAY	(SECSPERHOUR * HOURSPERDAY)
 #define SECSPERNYEAR	(SECSPERDAY * DAYSPERNYEAR)
 #define SECSPERLYEAR	(SECSPERNYEAR + SECSPERDAY)
+#define SECSPER400YEARS	(SECSPERNYEAR * (intmax_t) (300 + 3)	\
+			 + SECSPERLYEAR * (intmax_t) (100 - 3))
+
+/*
+** True if SECSPER400YEARS is known to be representable as an
+** intmax_t.  It's OK that SECSPER400YEARS_FITS can in theory be false
+** even if SECSPER400YEARS is representable, because when that happens
+** the code merely runs a bit more slowly, and this slowness doesn't
+** occur on any practical platform.
+*/
+enum { SECSPER400YEARS_FITS = SECSPERLYEAR <= INTMAX_MAX / 400 };
 
 #define isleap(y) (((y) % 4) == 0 && (((y) % 100) != 0 || ((y) % 400) == 0))
 
@@ -50,21 +63,19 @@ extern char	**environ;
 extern char	*tzname[2];
 extern char 	*__progname;
 
-time_t		absolute_min_time;
-time_t		absolute_max_time;
-size_t		longest;
-int		warned;
+static const time_t	absolute_min_time = LLONG_MIN;
+static const time_t	absolute_max_time = LLONG_MAX;
+static size_t		longest;
+static int		warned;
 
 static char 		*abbr(struct tm *tmp);
 static void		abbrok(const char *abbrp, const char *zone);
-static long		delta(struct tm *newp, struct tm *oldp);
+static __pure intmax_t	delta(struct tm *newp, struct tm *oldp);
 static void		dumptime(const struct tm *tmp);
-static time_t		hunt(char *name, time_t lot, time_t	hit);
-static void		setabsolutes(void);
+static time_t		hunt(char *name, time_t lot, time_t hit);
 static void		show(char *zone, time_t t, int v);
-static const char 	*tformat(void);
-static time_t		yeartot(long y);
-static void		usage(void);
+static __pure time_t	yeartot(intmax_t y);
+static __dead void	usage(void);
 
 static void
 abbrok(const char * const abbrp, const char * const zone)
@@ -96,19 +107,19 @@ abbrok(const char * const abbrp, const char * const zone)
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-v] [-c [loyear,]hiyear] zonename ...\n",
-	    __progname);
+	fprintf(stderr, "usage: %s [-Vv] [-c [loyear,]hiyear] "
+	    "[-t [lotime,]hitime] zonename ...\n", __progname);
 	exit(EXIT_FAILURE);
 }
 
 int
 main(int argc, char *argv[])
 {
-	int		i, c, vflag = 0;
+	int		ch, i, Vflag = 0, vflag = 0;
 	char		*cutarg = NULL;
-	long		cutloyear = ZDUMP_LO_YEAR;
-	long		cuthiyear = ZDUMP_HI_YEAR;
-	time_t		cutlotime = 0, cuthitime = 0;
+	char		*cuttimes = NULL;
+	time_t		cutlotime = absolute_min_time;
+	time_t		cuthitime = absolute_max_time;
 	time_t		now, t, newt;
 	struct tm	tm, newtm, *tmp, *newtmp;
 	char		**fakeenv;
@@ -118,31 +129,40 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	while ((c = getopt(argc, argv, "c:v")) == 'c' || c == 'v') {
-		switch (c) {
-		case 'v':
-			vflag = 1;
-			break;
+	while ((ch = getopt(argc, argv, "c:t:Vv")) != -1) {
+		switch (ch) {
 		case 'c':
 			cutarg = optarg;
 			break;
+		case 't':
+			cuttimes = optarg;
+			break;
+		case 'V':
+			Vflag = 1;
+			break;
+		case 'v':
+			vflag = 1;
+			break;
 		default:
 			usage();
-			break;
 		}
 	}
-	if (c != -1 ||
-	    (optind == argc - 1 && strcmp(argv[optind], "=") == 0)) {
-		usage();
-	}
-	if (vflag) {
-		if (cutarg != NULL) {
-			long	lo, hi;
-			char	dummy;
+	argc -= optind;
+	argv += optind;
 
-			if (sscanf(cutarg, "%ld%c", &hi, &dummy) == 1) {
+	if (argc == 1 && strcmp(argv[0], "=") == 0)
+		usage();
+
+	if (vflag || Vflag) {
+		char dummy;
+		intmax_t cutloyear = ZDUMP_LO_YEAR;
+		intmax_t cuthiyear = ZDUMP_HI_YEAR;
+		intmax_t lo, hi;
+
+		if (cutarg != NULL) {
+			if (sscanf(cutarg, "%"SCNdMAX"%c", &hi, &dummy) == 1) {
 				cuthiyear = hi;
-			} else if (sscanf(cutarg, "%ld,%ld%c",
+			} else if (sscanf(cutarg, "%"SCNdMAX",%"SCNdMAX"%c",
 			    &lo, &hi, &dummy) == 2) {
 				cutloyear = lo;
 				cuthiyear = hi;
@@ -152,13 +172,41 @@ main(int argc, char *argv[])
 				exit(EXIT_FAILURE);
 			}
 		}
-		setabsolutes();
-		cutlotime = yeartot(cutloyear);
-		cuthitime = yeartot(cuthiyear);
+		if (cutarg != NULL || cuttimes == NULL) {
+			cutlotime = yeartot(cutloyear);
+			cuthitime = yeartot(cuthiyear);
+		}
+		if (cuttimes != NULL) {
+			if (sscanf(cuttimes, "%"SCNdMAX"%c", &hi, &dummy) == 1) {
+				cutlotime = yeartot(cutloyear);
+				if (hi < cuthitime) {
+					if (hi < absolute_min_time)
+						hi = absolute_min_time;
+					cuthitime = hi;
+				}
+			} else if (sscanf(cuttimes, "%"SCNdMAX",%"SCNdMAX"%c",
+					  &lo, &hi, &dummy) == 2) {
+				if (cutlotime < lo) {
+					if (absolute_max_time < lo)
+						lo = absolute_max_time;
+					cutlotime = lo;
+				}
+				if (hi < cuthitime) {
+					if (hi < absolute_min_time)
+						hi = absolute_min_time;
+					cuthitime = hi;
+				}
+			} else {
+				(void) fprintf(stderr,
+					"%s: wild -t argument %s\n",
+					__progname, cuttimes);
+				exit(EXIT_FAILURE);
+			}
+		}
 	}
 	time(&now);
 	longest = 0;
-	for (i = optind; i < argc; ++i)
+	for (i = 0; i < argc; ++i)
 		if (strlen(argv[i]) > longest)
 			longest = strlen(argv[i]);
 
@@ -181,19 +229,21 @@ main(int argc, char *argv[])
 		fakeenv[to] = NULL;
 		environ = fakeenv;
 	}
-	for (i = optind; i < argc; ++i) {
+	for (i = 0; i < argc; ++i) {
 		char	buf[MAX_STRING_LENGTH];
 
 		strlcpy(&fakeenv[0][3], argv[i], longest + 1);
-		if (!vflag) {
+		if (!(vflag | Vflag)) {
 			show(argv[i], now, FALSE);
 			continue;
 		}
 		warned = FALSE;
 		t = absolute_min_time;
-		show(argv[i], t, TRUE);
-		t += SECSPERHOUR * HOURSPERDAY;
-		show(argv[i], t, TRUE);
+		if (!Vflag) {
+			show(argv[i], t, TRUE);
+			t += SECSPERDAY;
+			show(argv[i], t, TRUE);
+		}
 		if (t < cutlotime)
 			t = cutlotime;
 		tmp = localtime(&t);
@@ -202,9 +252,11 @@ main(int argc, char *argv[])
 			strlcpy(buf, abbr(&tm), sizeof buf);
 		}
 		for ( ; ; ) {
-			if (t >= cuthitime || t >= cuthitime - SECSPERHOUR * 12)
+			newt = (t < absolute_max_time - SECSPERDAY / 2
+				? t + SECSPERDAY / 2
+				: absolute_max_time);
+			if (cuthitime <= newt)
 				break;
-			newt = t + SECSPERHOUR * 12;
 			newtmp = localtime(&newt);
 			if (newtmp != NULL)
 				newtm = *newtmp;
@@ -223,11 +275,13 @@ main(int argc, char *argv[])
 			tm = newtm;
 			tmp = newtmp;
 		}
-		t = absolute_max_time;
-		t -= SECSPERHOUR * HOURSPERDAY;
-		show(argv[i], t, TRUE);
-		t += SECSPERHOUR * HOURSPERDAY;
-		show(argv[i], t, TRUE);
+		if (!Vflag) {
+			t = absolute_max_time;
+			t -= SECSPERDAY;
+			show(argv[i], t, TRUE);
+			t += SECSPERDAY;
+			show(argv[i], t, TRUE);
+		}
 	}
 	if (fflush(stdout) || ferror(stdout)) {
 		fprintf(stderr, "%s: ", __progname);
@@ -237,47 +291,43 @@ main(int argc, char *argv[])
 	return 0;
 }
 
-static void
-setabsolutes(void)
-{
-	time_t t = 0, t1 = 1;
-
-	while (t < t1) {
-		t = t1;
-		t1 = 2 * t1 + 1;
-	}
-
-	absolute_max_time = t;
-	t = -t;
-	absolute_min_time = t - 1;
-	if (t < absolute_min_time)
-		absolute_min_time = t;
-}
-
 static time_t
-yeartot(const long y)
+yeartot(const intmax_t y)
 {
-	long	myy = EPOCH_YEAR, seconds;
-	time_t	t = 0;
+	intmax_t	seconds, years, myy = EPOCH_YEAR;
+	time_t		t = 0;
 
-	while (myy != y) {
-		if (myy < y) {
+	while (myy < y) {
+		if (SECSPER400YEARS_FITS && 400 <= y - myy) {
+			intmax_t diff400 = (y - myy) / 400;
+			if (INTMAX_MAX / SECSPER400YEARS < diff400)
+				return absolute_max_time;
+			seconds = diff400 * SECSPER400YEARS;
+			years = diff400 * 400;
+                } else {
 			seconds = isleap(myy) ? SECSPERLYEAR : SECSPERNYEAR;
-			++myy;
-			if (t > absolute_max_time - seconds) {
-				t = absolute_max_time;
-				break;
-			}
-			t += seconds;
-		} else {
-			--myy;
-			seconds = isleap(myy) ? SECSPERLYEAR : SECSPERNYEAR;
-			if (t < absolute_min_time + seconds) {
-				t = absolute_min_time;
-				break;
-			}
-			t -= seconds;
+			years = 1;
 		}
+		myy += years;
+		if (t > absolute_max_time - seconds)
+			return absolute_max_time;
+		t += seconds;
+	}
+	while (y < myy) {
+		if (SECSPER400YEARS_FITS && y + 400 <= myy && myy < 0) {
+			intmax_t diff400 = (myy - y) / 400;
+			if (INTMAX_MAX / SECSPER400YEARS < diff400)
+				return absolute_min_time;
+			seconds = diff400 * SECSPER400YEARS;
+			years = diff400 * 400;
+		} else {
+			seconds = isleap(myy - 1) ? SECSPERLYEAR : SECSPERNYEAR;
+			years = 1;
+		}
+		myy -= years;
+		if (t < absolute_min_time + seconds)
+			return absolute_min_time;
+		t -= seconds;
 	}
 	return t;
 }
@@ -286,7 +336,6 @@ static time_t
 hunt(char *name, time_t lot, time_t hit)
 {
 	time_t			t;
-	long			diff;
 	struct tm		lotm, *lotmp;
 	struct tm		tm, *tmp;
 	char			loab[MAX_STRING_LENGTH];
@@ -297,7 +346,7 @@ hunt(char *name, time_t lot, time_t hit)
 		strlcpy(loab, abbr(&lotm), sizeof loab);
 	}
 	for ( ; ; ) {
-		diff = (long) (hit - lot);
+		time_t diff = hit - lot;
 		if (diff < 2)
 			break;
 		t = lot;
@@ -328,11 +377,11 @@ hunt(char *name, time_t lot, time_t hit)
 ** Thanks to Paul Eggert for logic used in delta.
 */
 
-static long
+static intmax_t
 delta(struct tm *newp, struct tm *oldp)
 {
-	long	result;
-	int	tmy;
+	intmax_t	result;
+	int		tmy;
 
 	if (newp->tm_year < oldp->tm_year)
 		return -delta(oldp, newp);
@@ -358,10 +407,10 @@ show(char *zone, time_t t, int v)
 	if (v) {
 		tmp = gmtime(&t);
 		if (tmp == NULL) {
-			printf(tformat(), t);
+			printf("%lld", t);
 		} else {
 			dumptime(tmp);
-			printf(" UTC");
+			printf(" UT");
 		}
 		printf(" = ");
 	}
@@ -392,17 +441,6 @@ abbr(struct tm *tmp)
 		return &nada;
 	result = tzname[tmp->tm_isdst];
 	return (result == NULL) ? &nada : result;
-}
-
-/*
-** The code below can fail on certain theoretical systems;
-** it works on all known real-world systems as of 2004-12-30.
-*/
-
-static const char *
-tformat(void)
-{
-	return "%lld";
 }
 
 static void

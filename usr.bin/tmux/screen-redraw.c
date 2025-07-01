@@ -1,4 +1,4 @@
-/* $OpenBSD: screen-redraw.c,v 1.103 2024/11/15 13:12:20 nicm Exp $ */
+/* $OpenBSD: screen-redraw.c,v 1.105 2025/05/22 07:46:38 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -121,7 +121,12 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 	u_int		 ex = wp->xoff + wp->sx, ey = wp->yoff + wp->sy;
 	int		 hsplit = 0, vsplit = 0, pane_status = ctx->pane_status;
 	int		 pane_scrollbars = ctx->pane_scrollbars, sb_w = 0;
-	int		 sb_pos = ctx->pane_scrollbars_pos;
+	int		 sb_pos;
+
+	if (pane_scrollbars != 0)
+		sb_pos = ctx->pane_scrollbars_pos;
+	else
+		sb_pos = 0;
 
 	/* Inside pane. */
 	if (px >= wp->xoff && px < ex && py >= wp->yoff && py < ey)
@@ -149,16 +154,24 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 			if (wp->xoff - sb_w == 0 && px == wp->sx + sb_w)
 				if (!hsplit || (hsplit && py <= wp->sy / 2))
 					return (SCREEN_REDRAW_BORDER_RIGHT);
-			if (wp->xoff - sb_w != 0 && px == wp->xoff - sb_w - 1)
-				if (!hsplit || (hsplit && py > wp->sy / 2))
+			if (wp->xoff - sb_w != 0) {
+				if (px == wp->xoff - sb_w - 1 &&
+				    (!hsplit || (hsplit && py > wp->sy / 2)))
 					return (SCREEN_REDRAW_BORDER_LEFT);
-		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT */
+				if (px == wp->xoff + wp->sx + sb_w - 1)
+					return (SCREEN_REDRAW_BORDER_RIGHT);
+			}
+		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT or disabled*/
 			if (wp->xoff == 0 && px == wp->sx + sb_w)
 				if (!hsplit || (hsplit && py <= wp->sy / 2))
 					return (SCREEN_REDRAW_BORDER_RIGHT);
-			if (wp->xoff != 0 && px == wp->xoff - 1)
-				if (!hsplit || (hsplit && py > wp->sy / 2))
+			if (wp->xoff != 0) {
+				if (px == wp->xoff - 1 &&
+				    (!hsplit || (hsplit && py > wp->sy / 2)))
 					return (SCREEN_REDRAW_BORDER_LEFT);
+				if (px == wp->xoff + wp->sx + sb_w)
+					return (SCREEN_REDRAW_BORDER_RIGHT);
+			}
 		}
 	}
 
@@ -433,10 +446,14 @@ screen_redraw_make_pane_status(struct client *c, struct window_pane *wp,
 	const char		*fmt;
 	struct format_tree	*ft;
 	char			*expanded;
-	int			 pane_status = rctx->pane_status;
+	int			 pane_status = rctx->pane_status, sb_w = 0;
+	int			 pane_scrollbars = rctx->pane_scrollbars;
 	u_int			 width, i, cell_type, px, py;
 	struct screen_write_ctx	 ctx;
 	struct screen		 old;
+
+	if (window_pane_show_scrollbar(wp, pane_scrollbars))
+		sb_w = wp->scrollbar_style.width + wp->scrollbar_style.pad;
 
 	ft = format_create(c, NULL, FORMAT_PANE|wp->id, FORMAT_STATUS);
 	format_defaults(ft, c, c->session, c->session->curw, wp);
@@ -451,7 +468,7 @@ screen_redraw_make_pane_status(struct client *c, struct window_pane *wp,
 	if (wp->sx < 4)
 		wp->status_size = width = 0;
 	else
-		wp->status_size = width = wp->sx - 4;
+		wp->status_size = width = wp->sx + sb_w - 2;
 
 	memcpy(&old, &wp->status_screen, sizeof old);
 	screen_init(&wp->status_screen, width, 1, 0);

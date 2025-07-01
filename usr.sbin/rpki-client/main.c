@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.278 2025/01/03 10:14:32 job Exp $ */
+/*	$OpenBSD: main.c,v 1.284 2025/06/26 06:00:32 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -488,7 +488,7 @@ queue_add_from_tal(struct tal *tal)
  * Add a manifest (MFT) found in an X509 certificate, RFC 6487.
  */
 static void
-queue_add_from_cert(const struct cert *cert)
+queue_add_from_cert(const struct cert *cert, struct nca_tree *ncas)
 {
 	struct repo		*repo;
 	struct fqdnlistentry	*le;
@@ -549,6 +549,7 @@ queue_add_from_cert(const struct cert *cert)
 			err(1, NULL);
 	}
 
+	cert_insert_nca(ncas, cert, repo);
 	entityq_add(npath, nfile, RTYPE_MFT, DIR_UNKNOWN, repo, NULL, 0,
 	    cert->talid, cert->certid, NULL);
 }
@@ -562,7 +563,7 @@ queue_add_from_cert(const struct cert *cert)
 static void
 entity_process(struct ibuf *b, struct stats *st, struct vrp_tree *tree,
     struct brk_tree *brktree, struct vap_tree *vaptree,
-    struct vsp_tree *vsptree)
+    struct vsp_tree *vsptree, struct nca_tree *ncatree)
 {
 	enum rtype	 type;
 	struct tal	*tal;
@@ -619,7 +620,7 @@ entity_process(struct ibuf *b, struct stats *st, struct vrp_tree *tree,
 		switch (cert->purpose) {
 		case CERT_PURPOSE_TA:
 		case CERT_PURPOSE_CA:
-			queue_add_from_cert(cert);
+			queue_add_from_cert(cert, ncatree);
 			break;
 		case CERT_PURPOSE_BGPSEC_ROUTER:
 			cert_insert_brks(brktree, cert);
@@ -641,6 +642,7 @@ entity_process(struct ibuf *b, struct stats *st, struct vrp_tree *tree,
 		if (mft->seqnum_gap)
 			repo_stat_inc(rp, talid, type, STYPE_SEQNUM_GAP);
 		queue_add_from_mft(mft);
+		cert_remove_nca(ncatree, mft->certid, rp);
 		mft_free(mft);
 		break;
 	case RTYPE_CRL:
@@ -730,6 +732,8 @@ rrdp_process(struct ibuf *b)
 		io_read_str(b, &uri);
 		io_read_str(b, &last_mod);
 		rrdp_http_fetch(id, uri, last_mod);
+		free(uri);
+		free(last_mod);
 		break;
 	case RRDP_SESSION:
 		s = rrdp_session_read(b);
@@ -768,6 +772,7 @@ sum_stats(const struct repo *rp, const struct repotalstats *in, void *arg)
 	out->mfts_gap += in->mfts_gap;
 	out->certs += in->certs;
 	out->certs_fail += in->certs_fail;
+	out->certs_nonfunc += in->certs_nonfunc;
 	out->roas += in->roas;
 	out->roas_fail += in->roas_fail;
 	out->roas_invalid += in->roas_invalid;
@@ -974,6 +979,7 @@ main(int argc, char *argv[])
 {
 	int		 rc, c, i, st, hangup = 0;
 	int		 procfd, rsyncfd, httpfd, rrdpfd;
+	int		 nthreads = 1;
 	pid_t		 pid, procpid, rsyncpid, httppid, rrdppid;
 	struct pollfd	 pfd[NPFD];
 	struct msgbuf	*queues[NPFD];
@@ -987,6 +993,7 @@ main(int argc, char *argv[])
 	struct vsp_tree	 vsps = RB_INITIALIZER(&vsps);
 	struct brk_tree	 brks = RB_INITIALIZER(&brks);
 	struct vap_tree	 vaps = RB_INITIALIZER(&vaps);
+	struct nca_tree	 ncas = RB_INITIALIZER(&ncas);
 	struct rusage	 ru;
 	struct timespec	 start_time, now_time;
 
@@ -1014,7 +1021,7 @@ main(int argc, char *argv[])
 		err(1, "pledge");
 
 	while ((c =
-	    getopt(argc, argv, "0Ab:Bcd:e:fH:jmnoP:Rs:S:t:vVx")) != -1)
+	    getopt(argc, argv, "0Ab:Bcd:e:fH:jmnop:P:Rs:S:t:vVx")) != -1)
 		switch (c) {
 		case '0':
 			excludeas0 = 0;
@@ -1056,6 +1063,11 @@ main(int argc, char *argv[])
 			break;
 		case 'o':
 			outformats |= FORMAT_OPENBGPD;
+			break;
+		case 'p':
+			nthreads = strtonum(optarg, 1, 128, &errs);
+			if (errs)
+				errx(1, "-p: %s", errs);
 			break;
 		case 'P':
 			evaluation_time = strtonum(optarg, X509_TIME_MIN + 1,
@@ -1150,7 +1162,7 @@ main(int argc, char *argv[])
 	procpid = process_start("parser", &procfd);
 	if (procpid == 0) {
 		if (!filemode)
-			proc_parser(procfd);
+			proc_parser(procfd, nthreads);
 		else
 			proc_filemode(procfd);
 	}
@@ -1240,7 +1252,7 @@ main(int argc, char *argv[])
 	    NULL)
 		err(1, NULL);
 	if ((rrdpq = msgbuf_new_reader(sizeof(size_t), io_parse_hdr, NULL)) ==
-	   NULL)
+	    NULL)
 		err(1, NULL);
 
 	/*
@@ -1403,7 +1415,7 @@ main(int argc, char *argv[])
 			}
 			while ((b = io_buf_get(queues[0])) != NULL) {
 				entity_process(b, &stats, &vrps, &brks, &vaps,
-				    &vsps);
+				    &vsps, &ncas);
 				ibuf_free(b);
 			}
 		}
@@ -1496,7 +1508,7 @@ main(int argc, char *argv[])
 	}
 	repo_stats_collect(sum_repostats, &stats.repo_stats);
 
-	if (outputfiles(&vrps, &brks, &vaps, &vsps, &stats))
+	if (outputfiles(&vrps, &brks, &vaps, &vsps, &ncas, &stats))
 		rc = 1;
 
 	printf("Processing time %lld seconds "
@@ -1520,8 +1532,9 @@ main(int argc, char *argv[])
 		    stats.repo_tal_stats.spls_invalid);
 	}
 	printf("BGPsec Router Certificates: %u\n", stats.repo_tal_stats.brks);
-	printf("Certificates: %u (%u invalid)\n",
-	    stats.repo_tal_stats.certs, stats.repo_tal_stats.certs_fail);
+	printf("Certificates: %u (%u invalid, %u non-functional)\n",
+	    stats.repo_tal_stats.certs, stats.repo_tal_stats.certs_fail,
+	    stats.repo_tal_stats.certs_nonfunc);
 	printf("Trust Anchor Locators: %u (%u invalid)\n",
 	    stats.tals, talsz - stats.tals);
 	printf("Manifests: %u (%u failed parse, %u seqnum gaps)\n",
@@ -1554,9 +1567,9 @@ usage:
 	fprintf(stderr,
 	    "usage: rpki-client [-0ABcjmnoRVvx] [-b sourceaddr] [-d cachedir]"
 	    " [-e rsync_prog]\n"
-	    "                   [-H fqdn] [-P epoch] [-S skiplist] [-s timeout]"
-	    " [-t tal]\n"
-	    "                   [outputdir]\n"
+	    "                   [-H fqdn] [-P posix-seconds] [-p threads]"
+	    " [-S skiplist]\n"
+	    "                   [-s timeout] [-t tal] [outputdir]\n"
 	    "       rpki-client [-Vv] [-d cachedir] [-j] [-t tal] -f file ..."
 	    "\n");
 	return 1;

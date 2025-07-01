@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.323 2025/02/12 14:11:26 deraadt Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.327 2025/06/30 04:40:03 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -133,7 +133,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	 */
 	[SYS_sysctl] = PLEDGE_STDIO,
 
-	/* For moncontrol(3).  Only allowed to disable profiling. */
+	/* Only available to programs compiled -pg */
 	[SYS_profil] = PLEDGE_STDIO,
 
 	/* Support for malloc(3) family of operations */
@@ -1236,9 +1236,9 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 		case DIOCXBEGIN:
 		case DIOCXCOMMIT:
 		case DIOCKILLSRCNODES:
-			if ((fp->f_type == DTYPE_VNODE) &&
-			    (vp->v_type == VCHR) &&
-			    (cdevsw[major(vp->v_rdev)].d_open == pfopen))
+			if (fp->f_type == DTYPE_VNODE &&
+			    vp->v_type == VCHR &&
+			    cdevsw[major(vp->v_rdev)].d_open == pfopen)
 				return (0);
 			break;
 		}
@@ -1253,19 +1253,21 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 				break;
 			if ((pledge & PLEDGE_WPATH) == 0)
 				break;
-			if (fp->f_type != DTYPE_VNODE || vp->v_type != VCHR)
-				break;
-			if (cdevsw[major(vp->v_rdev)].d_open != ptmopen)
-				break;
-			return (0);
+			if (fp->f_type == DTYPE_VNODE &&
+			    vp->v_type == VCHR &&
+			    cdevsw[major(vp->v_rdev)].d_open == ptmopen)
+				return (0);
+			break;
 		case TIOCUCNTL:		/* vmd */
 			if ((pledge & PLEDGE_RPATH) == 0)
 				break;
 			if ((pledge & PLEDGE_WPATH) == 0)
 				break;
-			if (cdevsw[major(vp->v_rdev)].d_open != ptcopen)
-				break;
-			return (0);
+			if (fp->f_type == DTYPE_VNODE &&
+			    vp->v_type == VCHR &&
+			    cdevsw[major(vp->v_rdev)].d_open == ptcopen)
+				return (0);
+			break;
 #endif /* NPTY > 0 */
 		case TIOCSPGRP:
 			if ((pledge & PLEDGE_PROC) == 0)
@@ -1337,9 +1339,9 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 
 #if NVMM > 0
 	if ((pledge & PLEDGE_VMM)) {
-		if ((fp->f_type == DTYPE_VNODE) &&
-		    (vp->v_type == VCHR) &&
-		    (cdevsw[major(vp->v_rdev)].d_open == vmmopen)) {
+		if (fp->f_type == DTYPE_VNODE &&
+		    vp->v_type == VCHR &&
+		    cdevsw[major(vp->v_rdev)].d_open == vmmopen) {
 			error = pledge_ioctl_vmm(p, com);
 			if (error == 0)
 				return 0;
@@ -1349,9 +1351,9 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 
 #if NPSP > 0
 	if ((pledge & PLEDGE_VMM)) {
-		if ((fp->f_type == DTYPE_VNODE) &&
-		    (vp->v_type == VCHR) &&
-		    (cdevsw[major(vp->v_rdev)].d_open == pspopen)) {
+		if (fp->f_type == DTYPE_VNODE &&
+		    vp->v_type == VCHR &&
+		    cdevsw[major(vp->v_rdev)].d_open == pspopen) {
 			error = pledge_ioctl_psp(p, com);
 			if (error == 0)
 				return (0);
@@ -1481,6 +1483,7 @@ pledge_sockopt(struct proc *p, int set, int level, int optname)
 		case IPV6_PORTRANGE:
 		case IPV6_RECVPKTINFO:
 		case IPV6_RECVDSTPORT:
+		case IPV6_RECVTCLASS:
 		case IPV6_V6ONLY:
 			return (0);
 		case IPV6_MULTICAST_IF:
@@ -1599,16 +1602,6 @@ pledge_kill(struct proc *p, pid_t pid)
 	if (pid == 0 || pid == p->p_p->ps_pid)
 		return 0;
 	return pledge_fail(p, EPERM, PLEDGE_PROC);
-}
-
-int
-pledge_profil(struct proc *p, u_int scale)
-{
-	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
-		return 0;
-	if (scale != 0)
-		return pledge_fail(p, EPERM, PLEDGE_STDIO);
-	return 0;
 }
 
 int

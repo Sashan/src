@@ -1,4 +1,4 @@
-/* $OpenBSD: i8253.c,v 1.42 2024/09/26 01:45:13 jsg Exp $ */
+/* $OpenBSD: i8253.c,v 1.44 2025/06/17 16:01:41 dv Exp $ */
 /*
  * Copyright (c) 2016 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -176,11 +176,11 @@ vcpu_exit_i8253_misc(struct vm_run_params *vrp)
 		if (i8253_channel[2].mode == TIMER_INTTC) {
 			if (i8253_channel[2].state) {
 				set_return_data(vei, (1 << 5));
-				log_debug("%s: counter 2 fired, returning "
+				DPRINTF("%s: counter 2 fired, returning "
 				    "0x20", __func__);
 			} else {
 				set_return_data(vei, 0);
-				log_debug("%s: counter 2 clear, returning 0x0",
+				DPRINTF("%s: counter 2 clear, returning 0x0",
 				    __func__);
 			}
 		} else if (i8253_channel[2].mode == TIMER_SQWAVE) {
@@ -199,7 +199,7 @@ vcpu_exit_i8253_misc(struct vm_run_params *vrp)
 			}
 		}
 	} else {
-		log_debug("%s: discarding data written to PIT misc port",
+		DPRINTF("%s: discarding data written to PIT misc port",
 		    __func__);
 	}
 
@@ -375,42 +375,6 @@ i8253_fire(int fd, short type, void *arg)
 		evtimer_add(&ctr->timer, &tv);
 	} else
 		ctr->state = 1;
-}
-
-int
-i8253_dump(int fd)
-{
-	log_debug("%s: sending PIT", __func__);
-	if (atomicio(vwrite, fd, &i8253_channel, sizeof(i8253_channel)) !=
-	    sizeof(i8253_channel)) {
-		log_warnx("%s: error writing PIT to fd", __func__);
-		return (-1);
-	}
-	return (0);
-}
-
-int
-i8253_restore(int fd, uint32_t vm_id)
-{
-	int i;
-	log_debug("%s: restoring PIT", __func__);
-	if (atomicio(read, fd, &i8253_channel, sizeof(i8253_channel)) !=
-	    sizeof(i8253_channel)) {
-		log_warnx("%s: error reading PIT from fd", __func__);
-		return (-1);
-	}
-
-	for (i = 0; i < 3; i++) {
-		memset(&i8253_channel[i].timer, 0, sizeof(struct event));
-		i8253_channel[i].vm_id = vm_id;
-		evtimer_set(&i8253_channel[i].timer, i8253_fire,
-		    &i8253_channel[i]);
-		i8253_reset(i);
-	}
-
-	vm_pipe_init(&dev_pipe, i8253_pipe_dispatch);
-
-	return (0);
 }
 
 void

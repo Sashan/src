@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifq.c,v 1.56 2025/02/03 08:58:52 mvs Exp $ */
+/*	$OpenBSD: ifq.c,v 1.60 2025/06/12 20:37:59 deraadt Exp $ */
 
 /*
  * Copyright (c) 2015 David Gwynne <dlg@openbsd.org>
@@ -355,8 +355,7 @@ ifq_destroy(struct ifqueue *ifq)
 #endif
 
 	NET_ASSERT_UNLOCKED();
-	if (!task_del(ifq->ifq_softnet, &ifq->ifq_bundle))
-		taskq_barrier(ifq->ifq_softnet);
+	taskq_del_barrier(ifq->ifq_softnet, &ifq->ifq_bundle);
 
 	/* don't need to lock because this is the last use of the ifq */
 
@@ -664,6 +663,7 @@ void
 ifiq_init(struct ifiqueue *ifiq, struct ifnet *ifp, unsigned int idx)
 {
 	ifiq->ifiq_if = ifp;
+	ifiq->ifiq_bpfp = NULL;
 	ifiq->ifiq_softnet = net_tq(idx);
 	ifiq->ifiq_softc = NULL;
 
@@ -701,8 +701,7 @@ ifiq_destroy(struct ifiqueue *ifiq)
 #endif
 
 	NET_ASSERT_UNLOCKED();
-	if (!task_del(ifiq->ifiq_softnet, &ifiq->ifiq_task))
-		taskq_barrier(ifiq->ifiq_softnet);
+	taskq_del_barrier(ifiq->ifiq_softnet, &ifiq->ifiq_task);
 
 	/* don't need to lock because this is the last use of the ifiq */
 	ml_purge(&ifiq->ifiq_ml);
@@ -721,7 +720,7 @@ ifiq_input(struct ifiqueue *ifiq, struct mbuf_list *ml)
 	uint64_t fdrops = 0;
 	unsigned int len;
 #if NBPFILTER > 0
-	caddr_t if_bpf;
+	caddr_t *ifiq_bpfp, ifiq_bpf = NULL, if_bpf;
 #endif
 
 	if (ml_empty(ml))
@@ -735,14 +734,24 @@ ifiq_input(struct ifiqueue *ifiq, struct mbuf_list *ml)
 	packets = ml_len(ml);
 
 #if NBPFILTER > 0
-	if_bpf = ifp->if_bpf;
-	if (if_bpf) {
+	ifiq_bpfp = READ_ONCE(ifiq->ifiq_bpfp);
+	if (ifiq_bpfp != NULL)
+		ifiq_bpf = READ_ONCE(*ifiq_bpfp);
+	if_bpf = READ_ONCE(ifp->if_bpf);
+	if (ifiq_bpf || if_bpf) {
 		struct mbuf_list ml0 = *ml;
 
 		ml_init(ml);
 
 		while ((m = ml_dequeue(&ml0)) != NULL) {
-			if ((*ifp->if_bpf_mtap)(if_bpf, m, BPF_DIRECTION_IN)) {
+			int drop = 0;
+			if (ifiq_bpf &&
+			    (*ifp->if_bpf_mtap)(ifiq_bpf, m, BPF_DIRECTION_IN))
+				drop = 1;
+			if (if_bpf &&
+			    (*ifp->if_bpf_mtap)(if_bpf, m, BPF_DIRECTION_IN))
+				drop = 1;
+			if (drop) {
 				m_freem(m);
 				fdrops++;
 			} else
@@ -862,9 +871,10 @@ ifiq_process(void *arg)
 	ml_init(&ifiq->ifiq_ml);
 	mtx_leave(&ifiq->ifiq_mtx);
 
-	if_input_process(ifiq->ifiq_if, &ml);
+	if_input_process(ifiq->ifiq_if, &ml, ifiq->ifiq_idx);
 }
 
+#ifndef SMALL_KERNEL
 int
 net_ifiq_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, 
     void *newp, size_t newlen)
@@ -904,6 +914,7 @@ net_ifiq_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 
 	return (error);
 }
+#endif /* SMALL_KERNEL */
 
 /*
  * priq implementation

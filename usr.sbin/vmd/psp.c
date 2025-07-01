@@ -1,7 +1,7 @@
-/*	$OpenBSD: psp.c,v 1.5 2024/11/06 23:04:45 bluhm Exp $	*/
+/*	$OpenBSD: psp.c,v 1.7 2025/06/04 08:21:29 bluhm Exp $	*/
 
 /*
- * Copyright (c) 2023, 2024 Hans-Joerg Hoexer <hshoexer@genua.de>
+ * Copyright (c) 2023-2025 Hans-Joerg Hoexer <hshoexer@genua.de>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -118,7 +118,7 @@ psp_get_gstate(uint32_t handle, uint32_t *policy, uint32_t *asid,
  * Start the launch sequence of a guest.
  */
 int
-psp_launch_start(uint32_t *handle)
+psp_launch_start(uint32_t *handle, int seves)
 {
 	struct psp_launch_start ls;
 
@@ -127,6 +127,9 @@ psp_launch_start(uint32_t *handle)
 	/* Set guest policy. */
 	ls.policy = (GPOL_NODBG | GPOL_NOKS | GPOL_NOSEND | GPOL_DOMAIN |
 	    GPOL_SEV);
+	/* Add encrypted state. */
+	if (seves)
+		ls.policy |= GPOL_ES;
 
 	if (ioctl(env->vmd_psp_fd, PSP_IOC_LAUNCH_START, &ls) < 0) {
 		log_warn("%s: ioctl", __func__);
@@ -170,6 +173,27 @@ psp_launch_update(uint32_t handle, vaddr_t v, size_t len)
  * the PSP, the measurement is not really meaningful.  Thus we just
  * log it for now.
  */
+int
+psp_encrypt_state(uint32_t handle, uint32_t asid, uint32_t vmid,
+    uint32_t vcpuid)
+{
+	struct psp_encrypt_state es;
+
+	memset(&es, 0, sizeof(es));
+	es.handle = handle;
+	es.asid = asid;
+	es.vmid = vmid;
+	es.vcpuid = vcpuid;
+
+	if (ioctl(env->vmd_psp_fd, PSP_IOC_ENCRYPT_STATE, &es) < 0) {
+		log_warn("%s: ioctl", __func__);
+		return (-1);
+	}
+
+	return (0);
+}
+
+
 int
 psp_launch_measure(uint32_t handle)
 {

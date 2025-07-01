@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci.c,v 1.35 2024/10/02 17:05:56 dv Exp $	*/
+/*	$OpenBSD: pci.c,v 1.38 2025/06/24 22:01:10 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -199,7 +199,7 @@ pci_add_device(uint8_t *id, uint16_t vid, uint16_t pid, uint8_t class,
 		intr_toggle_el(&current_vm, pci.pci_devices[*id].pd_irq, 1);
 	}
 
-	pci.pci_dev_ct ++;
+	pci.pci_dev_ct++;
 
 	return (0);
 }
@@ -256,53 +256,45 @@ pci_handle_address_reg(struct vm_run_params *vrp)
 uint8_t
 pci_handle_io(struct vm_run_params *vrp)
 {
-	int i, j, k, l;
+	int i, j;
 	uint16_t reg, b_hi, b_lo;
-	pci_iobar_fn_t fn;
+	pci_iobar_fn_t fn = NULL;
+	void *cookie = NULL;
+	uint8_t intr = 0xFF, irq = 0xFF, dir, sz;
 	struct vm_exit *vei = vrp->vrp_exit;
-	uint8_t intr, dir;
 
-	k = -1;
-	l = -1;
 	reg = vei->vei.vei_port;
 	dir = vei->vei.vei_dir;
-	intr = 0xFF;
+	sz = vei->vei.vei_size;
 
-	for (i = 0 ; i < pci.pci_dev_ct ; i++) {
+	for (i = 0 ; i < pci.pci_dev_ct; i++) {
 		for (j = 0 ; j < pci.pci_devices[i].pd_bar_ct; j++) {
 			b_lo = PCI_MAPREG_IO_ADDR(pci.pci_devices[i].pd_bar[j]);
 			b_hi = b_lo + VM_PCI_IO_BAR_SIZE;
 			if (reg >= b_lo && reg < b_hi) {
-				if (pci.pci_devices[i].pd_barfunc[j]) {
-					k = j;
-					l = i;
-				}
+				fn = pci.pci_devices[i].pd_barfunc[j];
+				reg = reg - b_lo;
+				cookie = pci.pci_devices[i].pd_bar_cookie[j];
+				irq = pci.pci_devices[i].pd_irq;
+				goto found;
 			}
 		}
 	}
-
-	if (k >= 0 && l >= 0) {
-		fn = (pci_iobar_fn_t)pci.pci_devices[l].pd_barfunc[k];
-		if (fn(vei->vei.vei_dir, reg -
-		    PCI_MAPREG_IO_ADDR(pci.pci_devices[l].pd_bar[k]),
-		    &vei->vei.vei_data, &intr,
-		    pci.pci_devices[l].pd_bar_cookie[k],
-		    vei->vei.vei_size)) {
-			log_warnx("%s: pci i/o access function failed",
-			    __progname);
-		}
-	} else {
+found:
+	if (fn == NULL) {
 		DPRINTF("%s: no pci i/o function for reg 0x%llx (dir=%d "
 		    "guest %%rip=0x%llx", __progname, (uint64_t)reg, dir,
 		    vei->vrs.vrs_gprs[VCPU_REGS_RIP]);
 		/* Reads from undefined ports return 0xFF */
 		if (dir == VEI_DIR_IN)
 			set_return_data(vei, 0xFFFFFFFF);
+		return (0xFF);
 	}
 
-	if (intr != 0xFF) {
-		intr = pci.pci_devices[l].pd_irq;
-	}
+	if (fn(dir, reg, &vei->vei.vei_data, &intr, cookie, sz))
+		log_warnx("%s: pci i/o access function failed", __progname);
+	if (intr != 0xFF)
+		intr = irq;
 
 	return (intr);
 }
@@ -311,7 +303,9 @@ void
 pci_handle_data_reg(struct vm_run_params *vrp)
 {
 	struct vm_exit *vei = vrp->vrp_exit;
-	uint8_t b, d, f, o, baridx, ofs, sz;
+	struct pci_dev *pd = NULL;
+	uint8_t b, d, f, o, baridx, cfgidx, ofs, sz;
+	uint32_t data = 0;
 	int ret;
 	pci_cs_fn_t csfunc;
 
@@ -334,9 +328,26 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 	f = (pci.pci_addr_reg >> 8) & 0x7;
 	o = (pci.pci_addr_reg & 0xfc);
 
-	csfunc = pci.pci_devices[d].pd_csfunc;
+	if (d >= pci.pci_dev_ct) {
+		/* Device out of range. Return 0xFF's if a read. */
+		DPRINTF("%s: invalid pci device access (%u)", __func__, d);
+		if (vei->vei.vei_dir == VEI_DIR_IN)
+			set_return_data(vei, 0xFFFFFFFF);
+		return;
+	}
+	pd = &pci.pci_devices[d];
+
+	cfgidx = (o / 4);
+	if (cfgidx >= nitems(pd->pd_cfg_space)) {
+		DPRINTF("%s: out of range config space access", __func__);
+		if (vei->vei.vei_dir == VEI_DIR_IN)
+			set_return_data(vei, 0xFFFFFFFF);
+	}
+	baridx = cfgidx - 4;	/* baridx checked below */
+
+	csfunc = pd->pd_csfunc;
 	if (csfunc != NULL) {
-		ret = csfunc(vei->vei.vei_dir, (o / 4), &vei->vei.vei_data);
+		ret = csfunc(vei->vei.vei_dir, cfgidx, &vei->vei.vei_data);
 		if (ret)
 			log_warnx("cfg space access function failed for "
 			    "pci device %d", d);
@@ -344,7 +355,6 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 	}
 
 	/* No config space function, fallback to default simple r/w impl. */
-
 	o += ofs;
 
 	/*
@@ -365,8 +375,7 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 			 * o = 0x20 -> baridx = 4
 			 * o = 0x24 -> baridx = 5
 			 */
-			baridx = (o / 4) - 4;
-			if (baridx < pci.pci_devices[d].pd_bar_ct)
+			if (baridx < pd->pd_bar_ct)
 				vei->vei.vei_data = 0xfffff000;
 			else
 				vei->vei.vei_data = 0;
@@ -374,10 +383,8 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 
 		/* IOBAR registers must have bit 0 set */
 		if (o >= 0x10 && o <= 0x24) {
-			baridx = (o / 4) - 4;
-			if (baridx < pci.pci_devices[d].pd_bar_ct &&
-			    pci.pci_devices[d].pd_bartype[baridx] ==
-			    PCI_BAR_TYPE_IO)
+			if (baridx < pd->pd_bar_ct &&
+			    pd->pd_bartype[baridx] == PCI_BAR_TYPE_IO)
 				vei->vei.vei_data |= 1;
 		}
 
@@ -387,8 +394,7 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 		 * writes and copy data to config space registers.
 		 */
 		if (o != PCI_EXROMADDR_0)
-			get_input_data(vei,
-			    &pci.pci_devices[d].pd_cfg_space[o / 4]);
+			get_input_data(vei, &pd->pd_cfg_space[cfgidx]);
 	} else {
 		/*
 		 * vei_dir == VEI_DIR_IN : in instruction
@@ -399,50 +405,25 @@ pci_handle_data_reg(struct vm_run_params *vrp)
 		if (d > pci.pci_dev_ct || b > 0 || f > 0)
 			set_return_data(vei, 0xFFFFFFFF);
 		else {
+			data = pd->pd_cfg_space[cfgidx];
 			switch (sz) {
 			case 4:
-				set_return_data(vei,
-				    pci.pci_devices[d].pd_cfg_space[o / 4]);
+				set_return_data(vei, data);
 				break;
 			case 2:
 				if (ofs == 0)
-					set_return_data(vei, pci.pci_devices[d].
-					    pd_cfg_space[o / 4]);
+					set_return_data(vei, data);
 				else
-					set_return_data(vei, pci.pci_devices[d].
-					    pd_cfg_space[o / 4] >> 16);
+					set_return_data(vei, data >> 16);
 				break;
 			case 1:
-				set_return_data(vei, pci.pci_devices[d].
-				    pd_cfg_space[o / 4] >> (ofs * 8));
+				set_return_data(vei, data >> (ofs * 8));
 				break;
 			}
 		}
 	}
 }
 #endif /* __amd64__ */
-
-int
-pci_dump(int fd)
-{
-	log_debug("%s: sending pci", __func__);
-	if (atomicio(vwrite, fd, &pci, sizeof(pci)) != sizeof(pci)) {
-		log_warnx("%s: error writing pci to fd", __func__);
-		return (-1);
-	}
-	return (0);
-}
-
-int
-pci_restore(int fd)
-{
-	log_debug("%s: receiving pci", __func__);
-	if (atomicio(read, fd, &pci, sizeof(pci)) != sizeof(pci)) {
-		log_warnx("%s: error reading pci from fd", __func__);
-		return (-1);
-	}
-	return (0);
-}
 
 /*
  * Find the first PCI device based on PCI Subsystem ID

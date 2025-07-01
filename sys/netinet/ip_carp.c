@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_carp.c,v 1.365 2024/12/19 22:10:35 mvs Exp $	*/
+/*	$OpenBSD: ip_carp.c,v 1.369 2025/05/28 06:27:04 dlg Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff. All rights reserved.
@@ -434,7 +434,8 @@ carp_hmac_verify(struct carp_vhost_entry *vhe, u_int32_t counter[2],
 }
 
 int
-carp_proto_input(struct mbuf **mp, int *offp, int proto, int af)
+carp_proto_input(struct mbuf **mp, int *offp, int proto, int af,
+    struct netstack *ns)
 {
 	struct ifnet *ifp;
 
@@ -538,7 +539,8 @@ carp_proto_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto)
 
 #ifdef INET6
 int
-carp6_proto_input(struct mbuf **mp, int *offp, int proto, int af)
+carp6_proto_input(struct mbuf **mp, int *offp, int proto, int af,
+    struct netstack *ns)
 {
 	struct ifnet *ifp;
 
@@ -1066,7 +1068,7 @@ void
 carp_send_ad(struct carp_vhost_entry *vhe)
 {
 	struct carp_header ch;
-	struct timeval tv;
+	uint64_t usec;
 	struct carp_softc *sc = vhe->parent_sc;
 	struct carp_header *ch_ptr;
 	struct mbuf *m;
@@ -1089,11 +1091,10 @@ carp_send_ad(struct carp_vhost_entry *vhe)
 	} else {
 		advbase = sc->sc_advbase;
 		advskew = vhe->advskew;
-		tv.tv_sec = advbase;
-		if (advbase == 0 && advskew == 0)
-			tv.tv_usec = 1 * 1000000 / 256;
-		else
-			tv.tv_usec = advskew * 1000000 / 256;
+		usec = (uint64_t)advbase * 1000000;
+		usec += (uint64_t)advskew * 1000000 / 256;
+		if (usec == 0)
+			usec = 1000000 / 256;
 	}
 
 	ch.carp_version = CARP_VERSION;
@@ -1276,7 +1277,7 @@ carp_send_ad(struct carp_vhost_entry *vhe)
 retry_later:
 	sc->cur_vhe = NULL;
 	if (advbase != 255 || advskew != 255)
-		timeout_add_tv(&vhe->ad_tmo, &tv);
+		timeout_add_usec(&vhe->ad_tmo, usec);
 	if_put(ifp);
 }
 
@@ -1404,7 +1405,8 @@ carp_vhe_match(struct carp_softc *sc, uint64_t dst)
 }
 
 struct mbuf *
-carp_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst)
+carp_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst,
+    struct netstack *ns)
 {
 	struct srpl *cif;
 	struct carp_softc *sc;
@@ -1458,14 +1460,14 @@ carp_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst)
 			if (m0 == NULL)
 				continue;
 
-			if_vinput(&sc->sc_if, m0);
+			if_vinput(&sc->sc_if, m0, ns);
 		}
 		SRPL_LEAVE(&sr);
 
 		return (m);
 	}
 
-	if_vinput(&sc->sc_if, m);
+	if_vinput(&sc->sc_if, m, ns);
 out:
 	SRPL_LEAVE(&sr);
 
@@ -1584,8 +1586,8 @@ void
 carp_setrun(struct carp_vhost_entry *vhe, sa_family_t af)
 {
 	struct ifnet *ifp;
-	struct timeval tv;
 	struct carp_softc *sc = vhe->parent_sc;
+	uint64_t usec;
 
 	if ((ifp = if_get(sc->sc_carpdevidx)) == NULL) {
 		sc->sc_if.if_flags &= ~IFF_RUNNING;
@@ -1609,6 +1611,11 @@ carp_setrun(struct carp_vhost_entry *vhe, sa_family_t af)
 		return;
 	}
 
+	usec = (uint64_t)sc->sc_advbase * 1000000;
+	usec += (uint64_t)vhe->advskew * 1000000 / 256;
+	if (usec == 0)
+		usec = 1000000 / 256;
+
 	switch (vhe->state) {
 	case INIT:
 		carp_set_state(vhe, BACKUP);
@@ -1616,39 +1623,27 @@ carp_setrun(struct carp_vhost_entry *vhe, sa_family_t af)
 		break;
 	case BACKUP:
 		timeout_del(&vhe->ad_tmo);
-		tv.tv_sec = 3 * sc->sc_advbase;
-		if (sc->sc_advbase == 0 && vhe->advskew == 0)
-			tv.tv_usec = 3 * 1000000 / 256;
-		else if (sc->sc_advbase == 0)
-			tv.tv_usec = 3 * vhe->advskew * 1000000 / 256;
-		else
-			tv.tv_usec = vhe->advskew * 1000000 / 256;
 		if (vhe->vhe_leader)
 			sc->sc_delayed_arp = -1;
 		switch (af) {
 		case AF_INET:
-			timeout_add_tv(&vhe->md_tmo, &tv);
+			timeout_add_usec(&vhe->md_tmo, 3 * usec);
 			break;
 #ifdef INET6
 		case AF_INET6:
-			timeout_add_tv(&vhe->md6_tmo, &tv);
+			timeout_add_usec(&vhe->md6_tmo, 3 * usec);
 			break;
 #endif /* INET6 */
 		default:
 			if (sc->sc_naddrs)
-				timeout_add_tv(&vhe->md_tmo, &tv);
+				timeout_add_usec(&vhe->md_tmo, 3 * usec);
 			if (sc->sc_naddrs6)
-				timeout_add_tv(&vhe->md6_tmo, &tv);
+				timeout_add_usec(&vhe->md6_tmo, 3 * usec);
 			break;
 		}
 		break;
 	case MASTER:
-		tv.tv_sec = sc->sc_advbase;
-		if (sc->sc_advbase == 0 && vhe->advskew == 0)
-			tv.tv_usec = 1 * 1000000 / 256;
-		else
-			tv.tv_usec = vhe->advskew * 1000000 / 256;
-		timeout_add_tv(&vhe->ad_tmo, &tv);
+		timeout_add_usec(&vhe->ad_tmo, usec);
 		break;
 	}
 }
@@ -2042,6 +2037,13 @@ carp_ioctl(struct ifnet *ifp, u_long cmd, caddr_t addr)
 		} else if (vhe->state == INIT && (ifr->ifr_flags & IFF_UP)) {
 			sc->sc_if.if_flags |= IFF_UP;
 			carp_setrun_all(sc, 0);
+		}
+		break;
+
+	case SIOCSIFXFLAGS:
+		if ((ifp0 = if_get(sc->sc_carpdevidx)) != NULL) {
+			ifsetlro(ifp0, ISSET(ifr->ifr_flags, IFXF_LRO));
+			if_put(ifp0);
 		}
 		break;
 

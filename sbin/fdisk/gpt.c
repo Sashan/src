@@ -1,4 +1,4 @@
-/*	$OpenBSD: gpt.c,v 1.95 2024/12/24 21:34:23 krw Exp $	*/
+/*	$OpenBSD: gpt.c,v 1.106 2025/06/29 10:26:35 krw Exp $	*/
 /*
  * Copyright (c) 2015 Markus Muller <mmu@grummel.net>
  * Copyright (c) 2015 Kenneth R Westerback <krw@openbsd.org>
@@ -58,6 +58,8 @@ int			  protective_mbr(const struct mbr *);
 int			  gpt_chk_mbr(struct dos_partition *, uint64_t);
 void			  string_to_name(const unsigned int, const char *);
 const char		 *name_to_string(const unsigned int);
+void			  print_free(const uint64_t, const uint64_t,
+    const char *);
 
 void
 string_to_name(const unsigned int pn, const char *ch)
@@ -306,6 +308,139 @@ get_partition_table(void)
 	return rslt;
 }
 
+void
+print_free(const uint64_t start, const uint64_t end, const char *units)
+{
+	float			 size;
+	const struct unit_type	*ut;
+
+	size = units_size(units, end - start + 1, &ut);
+	printf("%4s: Free%-32s [%12llu: %12.0f%s]\n", "", "", start, size,
+	    ut->ut_abbr);
+}
+
+int
+GPT_recover_partition(const char *line1, const char *line2, const char *line3)
+{
+	char			 type[37], guid[37], name[37], name2[37];
+	struct uuid		 type_uuid, guid_uuid;
+	const char		*p;
+	uint64_t		 start, size, end, attrs, attrs2;
+	unsigned int		 pn;
+	int			 error, fields;
+	unsigned int		 i;
+	uint32_t		 status;
+
+	if (line1 == NULL) {
+		/* Try to recover from disk contents. */
+		error = get_header(GPTSECTOR);
+		if (error != 0 || get_partition_table() != 0)
+			error = get_header(DL_GETDSIZE(&dl) - 1);
+		if (error == 0)
+			error = get_partition_table();
+		return error;
+	}
+
+	fields = sscanf(line1, "%u: %36[^[] [%llu:%llu] 0x%llx %36[^\n]", &pn,
+	    type, &start, &size, &attrs, name);
+	switch (fields) {
+	case 4:
+		attrs = 0;
+		memset(name, 0, sizeof(name));
+		break;
+	case 5:
+		memset(name, 0, sizeof(name));
+		break;
+	case 6:
+		break;
+	default:
+		return -1;
+	}
+
+	fields = sscanf(line2, "%36s %36[^\n]", guid, name2);
+	switch (fields) {
+	case 0:
+	case EOF:
+		memset(guid, 0, sizeof(guid));
+		break;
+	case 1:
+		break;
+	case 2:
+		memcpy(name, name2, sizeof(name));
+		break;
+	}
+
+	fields = sscanf(line3, "Attributes: (0x%llx)", &attrs2);
+	switch (fields) {
+	case 0:
+	case EOF:
+		break;
+	case 1:
+		attrs = attrs2;
+		break;
+	}
+
+	uuid_from_string(type, &type_uuid, &status);
+	if (status != uuid_s_ok) {
+		for (i = strlen(type); i > 0; i--) {
+			if (!isspace((unsigned char)type[i - 1]))
+				break;
+			type[i - 1] = '\0';
+		}
+		if ((p = PRT_desc_to_guid(type)) == NULL)
+			return -1;
+		uuid_from_string(p, &type_uuid, &status);
+		if (status != uuid_s_ok)
+			return -1;
+	}
+
+	uuid_from_string(guid, &guid_uuid, &status);
+	if (status != uuid_s_ok)
+		return -1;
+	if (uuid_is_nil(&guid_uuid, NULL)) {
+		uuid_create(&guid_uuid, &status);
+		if (status != uuid_s_ok)
+			return -1;
+	}
+
+	if (start == 0) {
+		if (lba_free(&start, NULL) == -1)
+			return -1;
+		if (start % BLOCKALIGNMENT)
+			start += (BLOCKALIGNMENT - start % BLOCKALIGNMENT);
+	}
+
+	end = start + size - 1;
+	if (pn >= nitems(gp) || start < gh.gh_lba_start ||
+	    end > gh.gh_lba_end || size == 0)
+		return -1;
+
+	/* Don't overwrite already recovered protected partitions! */
+	if (PRT_protected_uuid(&gp[pn].gp_type) ||
+	    (gp[pn].gp_attrs & GPTPARTATTR_REQUIRED))
+		return -1;
+
+	/* Don't overlap already recovered partitions. */
+	for (i = 0; i < gh.gh_part_num; i++) {
+		if (i == pn)
+			continue;
+		if (start >= gp[i].gp_lba_start && start <= gp[i].gp_lba_end)
+			return -1;
+		if (end >= gp[i].gp_lba_start && end <= gp[i].gp_lba_end)
+			return -1;
+	}
+
+	gp[pn].gp_type = type_uuid;
+	gp[pn].gp_guid = guid_uuid;
+	gp[pn].gp_lba_start = start;
+	gp[pn].gp_lba_end = end;
+	gp[pn].gp_attrs = attrs;
+
+	string_to_name(pn, name);
+
+	return 0;
+}
+
 int
 GPT_read(const int which)
 {
@@ -349,13 +484,15 @@ GPT_read(const int which)
 }
 
 void
-GPT_print(const char *units, const int verbosity)
+GPT_print(const char *units)
 {
+	const struct gpt_partition * const *sgp;
 	const struct unit_type	*ut;
 	const int		 secsize = dl.d_secsize;
 	char			*guidstr = NULL;
 	double			 size;
-	unsigned int		 pn;
+	uint64_t		 bs, nextbs;
+	unsigned int		 i, pn;
 	uint32_t		 status;
 
 #ifdef	DEBUG
@@ -396,7 +533,7 @@ GPT_print(const char *units, const int verbosity)
 #endif	/* DEBUG */
 
 	size = units_size(units, DL_GETDSIZE(&dl), &ut);
-	printf("Disk: %s       Usable LBA: %llu to %llu [%.0f ",
+	printf("Disk: %s\tUsable LBA: %llu to %llu [%.0f ",
 	    disk.dk_name, gh.gh_lba_start, gh.gh_lba_end, size);
 	if (ut->ut_conversion == 0 && secsize != DEV_BSIZE)
 		printf("%d-byte ", secsize);
@@ -412,16 +549,27 @@ GPT_print(const char *units, const int verbosity)
 		free(guidstr);
 	}
 
-	GPT_print_parthdr(verbosity);
-	for (pn = 0; pn < gh.gh_part_num; pn++) {
-		if (uuid_is_nil(&gp[pn].gp_type, NULL))
-			continue;
-		GPT_print_part(pn, units, verbosity);
+	GPT_print_parthdr();
+
+	sgp = sort_gpt();
+	bs = gh.gh_lba_start;
+	for (i = 0; sgp && sgp[i] != NULL; i++) {
+		for (pn = 0; pn < nitems(gp); pn++) {
+			if (&gp[pn] == sgp[i]) {
+				nextbs = gp[pn].gp_lba_start;
+				if (nextbs > bs)
+					print_free(bs, nextbs - 1, units);
+				GPT_print_part(pn, units);
+				bs = gp[pn].gp_lba_end + 1;
+			}
+		}
 	}
+	if (bs < gh.gh_lba_end)
+		print_free(bs, gh.gh_lba_end, units);
 }
 
 void
-GPT_print_parthdr(const int verbosity)
+GPT_print_parthdr(void)
 {
 	printf("   #: type                                "
 	    " [       start:         size ]\n");
@@ -432,7 +580,7 @@ GPT_print_parthdr(const int verbosity)
 }
 
 void
-GPT_print_part(const unsigned int pn, const char *units, const int verbosity)
+GPT_print_part(const unsigned int pn, const char *units)
 {
 	const struct unit_type	*ut;
 	char			*guidstr = NULL;
@@ -445,7 +593,7 @@ GPT_print_part(const unsigned int pn, const char *units, const int verbosity)
 	size = units_size(units, (start > end) ? 0 : end - start + 1, &ut);
 
 	printf(" %3u: %-36s [%12lld: %12.0f%s]\n", pn,
-	    PRT_uuid_to_desc(&gp[pn].gp_type), start, size, ut->ut_abbr);
+	    PRT_uuid_to_desc(&gp[pn].gp_type, 0), start, size, ut->ut_abbr);
 
 	if (verbosity == VERBOSE) {
 		uuid_to_string(&gp[pn].gp_guid, &guidstr, &status);

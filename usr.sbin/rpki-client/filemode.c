@@ -1,4 +1,4 @@
-/*	$OpenBSD: filemode.c,v 1.57 2024/12/16 13:53:37 tb Exp $ */
+/*	$OpenBSD: filemode.c,v 1.62 2025/06/25 16:24:44 job Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -41,11 +41,9 @@
 #include "extern.h"
 #include "json.h"
 
-extern BN_CTX		*bn_ctx;
-
 static X509_STORE_CTX	*ctx;
 static struct auth_tree	 auths = RB_INITIALIZER(&auths);
-static struct crl_tree	 crlt = RB_INITIALIZER(&crlt);
+static struct crl_tree	 crls = RB_INITIALIZER(&crls);
 
 struct tal		*talobj[TALSZ_MAX];
 
@@ -119,7 +117,7 @@ parse_load_crl(char *uri)
 	}
 
 	crl = crl_parse(uri, f, flen);
-	if (crl != NULL && !crl_insert(&crlt, crl))
+	if (crl != NULL && !crl_insert(&crls, crl))
 		crl_free(crl);
 
 	free(f);
@@ -219,7 +217,7 @@ parse_load_certchain(char *uri)
 		cert = stack[i - 1];
 		uri = filestack[i - 1];
 
-		crl = crl_get(&crlt, a);
+		crl = crl_get(&crls, a);
 		if (!valid_x509(uri, ctx, cert->x509, a, crl, &errstr) ||
 		    !valid_cert(uri, a, cert)) {
 			if (errstr != NULL)
@@ -315,7 +313,7 @@ print_signature_path(const char *crl, const char *aia, const struct auth *a)
 {
 	if (crl != NULL)
 		printf("Signature path:           %s\n", crl);
-	if (a != NULL && a->cert != NULL && a->cert->mft != NULL)
+	if (a != NULL)
 		printf("                          %s\n", a->cert->mft);
 	if (aia != NULL)
 		printf("                          %s\n", aia);
@@ -323,8 +321,7 @@ print_signature_path(const char *crl, const char *aia, const struct auth *a)
 	for (; a != NULL; a = a->issuer) {
 		if (a->cert->crl != NULL)
 			printf("                          %s\n", a->cert->crl);
-		if (a->issuer != NULL && a->issuer->cert != NULL &&
-		    a->issuer->cert->mft != NULL)
+		if (a->issuer != NULL)
 			printf("                          %s\n",
 			    a->issuer->cert->mft);
 		if (a->cert->aia != NULL)
@@ -503,7 +500,7 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 		tal_print(tal);
 		break;
 	default:
-		printf("%s: unsupported file type\n", file);
+		errstr = "unsupported file type";
 		break;
 	}
 
@@ -511,7 +508,7 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 		x509_get_crl(x509, file, &crl_uri);
 		parse_load_crl(crl_uri);
 		a = parse_load_certchain(aia);
-		c = crl_get(&crlt, a);
+		c = crl_get(&crls, a);
 
 		if ((status = valid_x509(file, ctx, x509, a, c, &errstr))) {
 			switch (type) {
@@ -569,7 +566,7 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 
 	if (expires != NULL) {
 		if ((status && aia != NULL) || is_ta)
-			*expires = x509_find_expires(*notafter, a, &crlt);
+			*expires = x509_find_expires(*notafter, a, &crls);
 
 		switch (type) {
 		case RTYPE_ASPA:
@@ -646,7 +643,8 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 			goto out;
 
 		if (verbose) {
-			if (!X509_print_fp(stdout, x509))
+			if (!X509_print_ex_fp(stdout, x509, XN_FLAG_COMPAT,
+			    X509V3_EXT_DUMP_UNKNOWN))
 				errx(1, "X509_print_fp");
 		}
 
@@ -743,8 +741,6 @@ proc_filemode(int fd)
 
 	if ((ctx = X509_STORE_CTX_new()) == NULL)
 		err(1, "X509_STORE_CTX_new");
-	if ((bn_ctx = BN_CTX_new()) == NULL)
-		err(1, "BN_CTX_new");
 
 	TAILQ_INIT(&q);
 
@@ -807,10 +803,9 @@ proc_filemode(int fd)
 	}
 
 	auth_tree_free(&auths);
-	crl_tree_free(&crlt);
+	crl_tree_free(&crls);
 
 	X509_STORE_CTX_free(ctx);
-	BN_CTX_free(bn_ctx);
 
 	ibuf_free(inbuf);
 

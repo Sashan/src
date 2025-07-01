@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.76 2024/09/26 01:45:13 jsg Exp $	*/
+/*	$OpenBSD: config.c,v 1.78 2025/06/09 18:43:01 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -154,9 +154,7 @@ config_getconfig(struct vmd *env, struct imsg *imsg)
 
 	log_debug("%s: %s retrieving config",
 	    __func__, ps->ps_title[privsep_process]);
-
-	IMSG_SIZE_CHECK(imsg, &env->vmd_cfg);
-	memcpy(&env->vmd_cfg, imsg->data, sizeof(env->vmd_cfg));
+	vmop_config_read(imsg, &env->vmd_cfg);
 
 	return (0);
 }
@@ -175,22 +173,6 @@ config_setreset(struct vmd *env, unsigned int reset)
 			continue;
 		proc_compose(ps, id, IMSG_CTL_RESET, &reset, sizeof(reset));
 	}
-
-	return (0);
-}
-
-int
-config_getreset(struct vmd *env, struct imsg *imsg)
-{
-	unsigned int	 mode;
-
-	IMSG_SIZE_CHECK(imsg, &mode);
-	memcpy(&mode, imsg->data, sizeof(mode));
-
-	log_debug("%s: %s resetting state",
-	    __func__, env->vmd_ps.ps_title[privsep_process]);
-
-	config_purge(env, mode);
 
 	return (0);
 }
@@ -276,7 +258,7 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 	/*
 	 * From here onward, all failures need cleanup and use goto fail
 	 */
-	if (!(vm->vm_state & VM_STATE_RECEIVED) && vm->vm_kernel == -1) {
+	if (vm->vm_kernel == -1) {
 		if (vm->vm_kernel_path != NULL) {
 			/* Open external kernel for child */
 			kernfd = open(vm->vm_kernel_path, O_RDONLY | O_CLOEXEC);
@@ -473,14 +455,8 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 
 	/* Send VM information */
 	/* XXX check proc_compose_imsg return values */
-	if (vm->vm_state & VM_STATE_RECEIVED)
-		proc_compose_imsg(ps, PROC_VMM, -1,
-		    IMSG_VMDOP_RECEIVE_VM_REQUEST, vm->vm_vmid, fd, vmc,
-		    sizeof(struct vmop_create_params));
-	else
-		proc_compose_imsg(ps, PROC_VMM, -1,
-		    IMSG_VMDOP_START_VM_REQUEST, vm->vm_vmid, vm->vm_kernel,
-		    vmc, sizeof(*vmc));
+	proc_compose_imsg(ps, PROC_VMM, -1, IMSG_VMDOP_START_VM_REQUEST,
+	    vm->vm_vmid, vm->vm_kernel, vmc, sizeof(*vmc));
 
 	if (strlen(vmc->vmc_cdrom))
 		proc_compose_imsg(ps, PROC_VMM, -1,
@@ -508,9 +484,8 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 		    vm->vm_vmid, dup(tapfds[i]), &var, sizeof(var));
 	}
 
-	if (!(vm->vm_state & VM_STATE_RECEIVED))
-		proc_compose_imsg(ps, PROC_VMM, -1,
-		    IMSG_VMDOP_START_VM_END, vm->vm_vmid, fd, NULL, 0);
+	proc_compose_imsg(ps, PROC_VMM, -1, IMSG_VMDOP_START_VM_END,
+	    vm->vm_vmid, fd, NULL, 0);
 
 	free(tapfds);
 
@@ -556,15 +531,18 @@ config_getvm(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmop_create_params	 vmc;
 	struct vmd_vm			*vm = NULL;
+	uint32_t			 peer_id;
 	int				 fd;
 
-	IMSG_SIZE_CHECK(imsg, &vmc);
-	memcpy(&vmc, imsg->data, sizeof(vmc));
+	vmop_create_params_read(imsg, &vmc);
+
 	fd = imsg_get_fd(imsg);
+	peer_id = imsg_get_id(imsg);
+
 	vmc.vmc_kernel = fd;
 
 	errno = 0;
-	if (vm_register(ps, &vmc, &vm, imsg->hdr.peerid, 0) == -1)
+	if (vm_register(ps, &vmc, &vm, peer_id, 0) == -1)
 		goto fail;
 
 	vm->vm_state |= VM_STATE_RUNNING;
@@ -589,15 +567,16 @@ config_getdisk(struct privsep *ps, struct imsg *imsg)
 	struct vmd_vm	*vm;
 	unsigned int	 n, idx;
 	int		 fd;
+	uint32_t	 peer_id;
 
+	peer_id = imsg_get_id(imsg);
 	errno = 0;
-	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
+	if ((vm = vm_getbyvmid(peer_id)) == NULL) {
 		errno = ENOENT;
 		return (-1);
 	}
 
-	IMSG_SIZE_CHECK(imsg, &n);
-	memcpy(&n, imsg->data, sizeof(n));
+	n = imsg_uint_read(imsg);
 	fd = imsg_get_fd(imsg);
 
 	if (n >= vm->vm_params.vmc_ndisks || fd == -1) {
@@ -621,15 +600,16 @@ config_getif(struct privsep *ps, struct imsg *imsg)
 	struct vmd_vm	*vm;
 	unsigned int	 n;
 	int		 fd;
+	uint32_t	 peer_id;
 
+	peer_id = imsg_get_id(imsg);
 	errno = 0;
-	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
+	if ((vm = vm_getbyvmid(peer_id)) == NULL) {
 		errno = ENOENT;
 		return (-1);
 	}
 
-	IMSG_SIZE_CHECK(imsg, &n);
-	memcpy(&n, imsg->data, sizeof(n));
+	n = imsg_uint_read(imsg);
 	fd = imsg_get_fd(imsg);
 
 	if (n >= vm->vm_params.vmc_nnics ||
@@ -651,9 +631,11 @@ config_getcdrom(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmd_vm	*vm;
 	int		 fd;
+	uint32_t	 peer_id;
 
+	peer_id = imsg_get_id(imsg);
 	errno = 0;
-	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
+	if ((vm = vm_getbyvmid(peer_id)) == NULL) {
 		errno = ENOENT;
 		return (-1);
 	}

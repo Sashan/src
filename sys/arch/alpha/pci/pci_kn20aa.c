@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci_kn20aa.c,v 1.29 2017/09/08 05:36:51 deraadt Exp $	*/
+/*	$OpenBSD: pci_kn20aa.c,v 1.31 2025/06/29 15:55:21 miod Exp $	*/
 /*	$NetBSD: pci_kn20aa.c,v 1.21 1996/11/17 02:05:27 cgd Exp $	*/
 
 /*
@@ -73,23 +73,22 @@ void	kn20aa_enable_intr(int irq);
 void	kn20aa_disable_intr(int irq);
 
 void
-pci_kn20aa_pickintr(ccp)
-	struct cia_config *ccp;
+pci_kn20aa_pickintr(struct cia_config *ccp)
 {
 	int i;
 	bus_space_tag_t iot = &ccp->cc_iot;
 	pci_chipset_tag_t pc = &ccp->cc_pc;
 
-        pc->pc_intr_v = ccp;
-        pc->pc_intr_map = dec_kn20aa_intr_map;
-        pc->pc_intr_string = dec_kn20aa_intr_string;
-        pc->pc_intr_line = dec_kn20aa_intr_line;
-        pc->pc_intr_establish = dec_kn20aa_intr_establish;
-        pc->pc_intr_disestablish = dec_kn20aa_intr_disestablish;
+	pc->pc_intr_v = ccp;
+	pc->pc_intr_map = dec_kn20aa_intr_map;
+	pc->pc_intr_string = dec_kn20aa_intr_string;
+	pc->pc_intr_line = dec_kn20aa_intr_line;
+	pc->pc_intr_establish = dec_kn20aa_intr_establish;
+	pc->pc_intr_disestablish = dec_kn20aa_intr_disestablish;
 
-        /* Not supported on KN20AA. */
-        pc->pc_pciide_compat_intr_establish = NULL;
-        pc->pc_pciide_compat_intr_disestablish = NULL;
+	/* Not supported on KN20AA. */
+	pc->pc_pciide_compat_intr_establish = NULL;
+	pc->pc_pciide_compat_intr_disestablish = NULL;
 
 	kn20aa_pci_intr = alpha_shared_intr_alloc(KN20AA_MAX_IRQ);
 	for (i = 0; i < KN20AA_MAX_IRQ; i++)
@@ -102,10 +101,8 @@ pci_kn20aa_pickintr(ccp)
 #endif
 }
 
-int     
-dec_kn20aa_intr_map(pa, ihp)
-	struct pci_attach_args *pa;
-        pci_intr_handle_t *ihp;
+int
+dec_kn20aa_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	pcitag_t bustag = pa->pa_intrtag;
 	int buspin = pa->pa_intrpin;
@@ -157,7 +154,7 @@ dec_kn20aa_intr_map(pa, ihp)
 	default:
 		printf("dec_kn20aa_intr_map: don't know how to setup %d/%d/%d\n",
 		    pa->pa_bus, pa->pa_device, pa->pa_function);
-                return 1;
+		return 1;
 	}
 
 	if (kn20aa_irq != 13)
@@ -174,39 +171,31 @@ dec_kn20aa_intr_map(pa, ihp)
 }
 
 const char *
-dec_kn20aa_intr_string(ccv, ih)
-	void *ccv;
-	pci_intr_handle_t ih;
+dec_kn20aa_intr_string(void *ccv, pci_intr_handle_t ih)
 {
-        static char irqstr[15];          /* 11 + 2 + NULL + sanity */
+	static char irqstr[15];	  /* 11 + 2 + NULL + sanity */
 
-        if (ih > KN20AA_MAX_IRQ)
+	if (ih > KN20AA_MAX_IRQ)
 		panic("dec_kn20aa_intr_string: bogus kn20aa IRQ 0x%lx", ih);
 
-        snprintf(irqstr, sizeof irqstr, "kn20aa irq %ld", ih);
-        return (irqstr);
+	snprintf(irqstr, sizeof irqstr, "kn20aa irq %ld", ih);
+	return (irqstr);
 }
 
 int
-dec_kn20aa_intr_line(ccv, ih)
-	void *ccv;
-	pci_intr_handle_t ih;
+dec_kn20aa_intr_line(void *ccv, pci_intr_handle_t ih)
 {
 	return (ih);
 }
 
 void *
-dec_kn20aa_intr_establish(ccv, ih, level, func, arg, name)
-        void *ccv, *arg;
-        pci_intr_handle_t ih;
-        int level;
-        int (*func)(void *);
-	const char *name;
-{           
+dec_kn20aa_intr_establish(void *ccv, pci_intr_handle_t ih, int level,
+    int (*func)(void *), void *arg, const char *name)
+{
 	void *cookie;
 
-        if (ih > KN20AA_MAX_IRQ)
-                panic("dec_kn20aa_intr_establish: bogus kn20aa IRQ 0x%lx",
+	if (ih > KN20AA_MAX_IRQ)
+		panic("dec_kn20aa_intr_establish: bogus kn20aa IRQ 0x%lx",
 		    ih);
 
 	cookie = alpha_shared_intr_establish(kn20aa_pci_intr, ih, IST_LEVEL,
@@ -220,9 +209,8 @@ dec_kn20aa_intr_establish(ccv, ih, level, func, arg, name)
 	return (cookie);
 }
 
-void    
-dec_kn20aa_intr_disestablish(ccv, cookie)
-        void *ccv, *cookie;
+void
+dec_kn20aa_intr_disestablish(void *ccv, void *cookie)
 {
 	struct alpha_shared_intrhand *ih = cookie;
 	unsigned int irq = ih->ih_num;
@@ -241,9 +229,7 @@ dec_kn20aa_intr_disestablish(ccv, cookie)
 }
 
 void
-kn20aa_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+kn20aa_iointr(void *arg, unsigned long vec)
 {
 	int irq;
 
@@ -259,8 +245,7 @@ kn20aa_iointr(arg, vec)
 }
 
 void
-kn20aa_enable_intr(irq)
-	int irq;
+kn20aa_enable_intr(int irq)
 {
 
 	/*
@@ -275,8 +260,7 @@ kn20aa_enable_intr(irq)
 }
 
 void
-kn20aa_disable_intr(irq)
-	int irq;
+kn20aa_disable_intr(int irq)
 {
 
 	alpha_mb();

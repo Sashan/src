@@ -1,4 +1,4 @@
-/*	$OpenBSD: icmp6.h,v 1.54 2025/01/01 13:44:22 bluhm Exp $	*/
+/*	$OpenBSD: icmp6.h,v 1.56 2025/05/19 06:50:00 florian Exp $	*/
 /*	$KAME: icmp6.h,v 1.84 2003/04/23 10:26:51 itojun Exp $	*/
 
 /*
@@ -511,8 +511,7 @@ struct icmp6stat {
 #define ICMPV6CTL_ND6_MAXNUDHINT	15
 #define ICMPV6CTL_MTUDISC_HIWAT	16
 #define ICMPV6CTL_MTUDISC_LOWAT	17
-#define ICMPV6CTL_ND6_DEBUG	18
-#define ICMPV6CTL_MAXID		19
+#define ICMPV6CTL_MAXID		18
 
 #define ICMPV6CTL_NAMES { \
 	{ 0, 0 }, \
@@ -533,7 +532,6 @@ struct icmp6stat {
 	{ "nd6_maxnudhint", CTLTYPE_INT }, \
 	{ "mtudisc_hiwat", CTLTYPE_INT }, \
 	{ "mtudisc_lowat", CTLTYPE_INT }, \
-	{ "nd6_debug", CTLTYPE_INT }, \
 }
 
 #define RTF_PROBEMTU	RTF_PROTO1
@@ -592,7 +590,8 @@ struct	in6_multi;
 void		 icmp6_init(void);
 struct mbuf	*icmp6_do_error(struct mbuf *, int, int, int);
 void		 icmp6_error(struct mbuf *, int, int, int);
-int		 icmp6_input(struct mbuf **, int *, int, int);
+int		 icmp6_input(struct mbuf **, int *, int, int,
+		    struct netstack *);
 void		 icmp6_fasttimo(void);
 int		 icmp6_reflect(struct mbuf **, size_t, struct sockaddr *);
 void		 icmp6_redirect_input(struct mbuf *, int);

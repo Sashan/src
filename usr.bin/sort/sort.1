@@ -1,4 +1,4 @@
-.\"	$OpenBSD: sort.1,v 1.65 2022/03/31 17:27:27 naddy Exp $
+.\"	$OpenBSD: sort.1,v 1.69 2025/04/01 00:18:28 schwarze Exp $
 .\"
 .\" Copyright (c) 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -32,7 +32,7 @@
 .\"
 .\"     @(#)sort.1	8.1 (Berkeley) 6/6/93
 .\"
-.Dd $Mdocdate: March 31 2022 $
+.Dd $Mdocdate: April 1 2025 $
 .Dt SORT 1
 .Os
 .Sh NAME
@@ -50,7 +50,7 @@
 .Sh DESCRIPTION
 The
 .Nm
-utility sorts text and binary files by lines.
+utility sorts the lines of text or binary files.
 A line is a record separated from the subsequent record by a
 newline (default) or NUL
 .Ql \e0
@@ -61,12 +61,12 @@ option
 .Pc .
 A record can contain any printable or unprintable characters.
 Comparisons are based on one or more sort keys extracted from
-each line of input, and are performed lexicographically,
-according to the specified command-line options
-that can tune the actual sorting behavior.
-By default, if keys are not given,
+each line according to the specified command line options.
+By default,
 .Nm
-uses entire lines for comparison.
+uses entire lines for comparison and sorts in
+.Xr ascii 7
+order.
 .Pp
 If no
 .Ar file
@@ -121,7 +121,8 @@ if
 is not defined.
 .It Fl u , Fl Fl unique
 Unique: suppress all but one in each set of lines having equal keys.
-This option implies a stable sort (see below).
+This option implies
+.Fl s .
 If used with
 .Fl C
 or
@@ -148,24 +149,25 @@ Consider only blank spaces and alphanumeric characters in comparisons.
 Consider all lowercase characters that have uppercase
 equivalents to be the same for purposes of comparison.
 .It Fl g , Fl Fl general-numeric-sort , Fl Fl sort Ns = Ns Cm general-numeric
-Sort by general numerical value.
+Use an initial numeric string as the key and sort numerically.
 As opposed to
 .Fl n ,
-this option handles general floating points.
+this option handles general floating point numbers.
 It has a more
 permissive format than that allowed by
 .Fl n
 but it has a significant performance drawback.
 .It Fl h , Fl Fl human-numeric-sort , Fl Fl sort Ns = Ns Cm human-numeric
-Sort by numerical value, but take into account the SI suffix,
-if present.
+Use an initial numeric string with an optional SI suffix as the key.
 Sorts first by numeric sign (negative, zero, or
 positive); then by SI suffix (either empty, or `k' or `K', or one
 of `MGTPEZY', in that order); and finally by numeric value.
 The SI suffix must immediately follow the number.
 For example, '12345K' sorts before '1M', because M is "larger" than K.
 This sort option is useful for sorting the output of a single invocation
-of 'df' command with
+of a
+.Xr df 1
+command with
 .Fl h
 or
 .Fl H
@@ -176,9 +178,9 @@ Ignore all non-printable characters.
 Sort by month abbreviations.
 Unknown strings are considered smaller than valid month names.
 .It Fl n , Fl Fl numeric-sort , Fl Fl sort Ns = Ns Cm numeric
-An initial numeric string, consisting of optional blank space, optional
-minus sign, and zero or more digits (including decimal point)
-is sorted by arithmetic value.
+Use an initial numeric string as the key, consisting of optional
+blank space, an optional minus sign, and zero or more digits including
+an optional decimal point, and sort numerically.
 Leading blank characters are ignored.
 .It Fl R , Fl Fl random-sort , Fl Fl sort Ns = Ns Cm random
 Sort lines in random order.
@@ -194,16 +196,36 @@ the same random hash function is used for all of them.
 .It Fl r , Fl Fl reverse
 Sort in reverse order.
 .It Fl V , Fl Fl version-sort
-Sort version numbers.
-The input lines are treated as file names in form
-PREFIX VERSION SUFFIX, where SUFFIX matches the regular expression
-"(\.([A-Za-z~][A-Za-z0-9~]*)?)*".
-The files are compared by their prefixes and versions (leading
-zeros are ignored in version numbers, see example below).
-If an input string does not match the pattern, then it is compared
-using the byte compare function.
+This option is intended to sort strings that contain version numbers
+but it can be used for other purposes as well, for example to sort
+IPv4 addresses in dotted quad notation.
 .Pp
-For example:
+When comparing two strings, both strings are split into substrings
+such that the first and every other odd-numbered substring
+consists of non-digit characters only,
+while every even-numbered substring consists of digits only.
+These substrings are compared in turn from left to right
+until a difference is found.
+The first substring can be empty; all others cannot.
+.Pp
+Non-digit substrings are compared alphabetically, with upper case
+letters sorting before lower case letters, letters sorting before
+non-letters, and non-letters sorting in
+.Xr ascii 7
+order.
+Substrings consisting of digits are compared as integer numbers.
+.Pp
+At the end of each string, zero or more suffixes that start with a dot,
+consist only of letters, digits, and tilde characters, and do not
+start with a digit are ignored, equivalent to the regular expression
+"(\e.([A-Za-z~][A-Za-z0-9~]*)?)*".
+This is intended for ignoring filename suffixes such as
+.Dq .tar.bz2 .
+.Pp
+In the following example, the first substring is
+.Qq sort\-
+and the other odd-numbered substrings are all
+.Qq \&. :
 .Bd -literal -offset indent
 $ ls sort* | sort -V
 sort-1.022.tgz

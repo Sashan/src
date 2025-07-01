@@ -1,4 +1,4 @@
-/* $OpenBSD: tty-keys.c,v 1.185 2025/01/02 10:34:45 nicm Exp $ */
+/* $OpenBSD: tty-keys.c,v 1.191 2025/06/24 10:57:35 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -208,11 +208,15 @@ static const struct tty_default_key_raw tty_default_raw_keys[] = {
 	{ "\033[O", KEYC_FOCUS_OUT },
 
 	/* Paste keys. */
-	{ "\033[200~", KEYC_PASTE_START },
-	{ "\033[201~", KEYC_PASTE_END },
+	{ "\033[200~", KEYC_PASTE_START|KEYC_IMPLIED_META },
+	{ "\033[201~", KEYC_PASTE_END|KEYC_IMPLIED_META },
 
 	/* Extended keys. */
 	{ "\033[1;5Z", '\011'|KEYC_CTRL|KEYC_SHIFT },
+
+	/* Theme reporting. */
+	{ "\033[?997;1n", KEYC_REPORT_DARK_THEME },
+	{ "\033[?997;2n", KEYC_REPORT_LIGHT_THEME },
 };
 
 /* Default xterm keys. */
@@ -791,10 +795,12 @@ tty_keys_next(struct tty *tty)
 	switch (tty_keys_colours(tty, buf, len, &size, &tty->fg, &tty->bg)) {
 	case 0:		/* yes */
 		key = KEYC_UNKNOWN;
+		session_theme_changed(c->session);
 		goto complete_key;
 	case -1:	/* no, or not valid */
 		break;
 	case 1:		/* partial */
+		session_theme_changed(c->session);
 		goto partial_key;
 	}
 
@@ -931,6 +937,11 @@ partial_key:
 	delay = options_get_number(global_options, "escape-time");
 	if (delay == 0)
 		delay = 1;
+	if ((tty->flags & TTY_ALL_REQUEST_FLAGS) != TTY_ALL_REQUEST_FLAGS) {
+		log_debug("%s: increasing delay for active DA query", c->name);
+		if (delay < 500)
+			delay = 500;
+	}
 	tv.tv_sec = delay / 1000;
 	tv.tv_usec = (delay % 1000) * 1000L;
 
@@ -1050,8 +1061,8 @@ tty_keys_extended_key(struct tty *tty, const char *buf, size_t len,
 		return (-1);
 
 	/* Copy to the buffer. */
-	memcpy(tmp, buf + 2, end);
-	tmp[end] = '\0';
+	memcpy(tmp, buf + 2, end - 2);
+	tmp[end - 2] = '\0';
 
 	/* Try to parse either form of key. */
 	if (buf[end] == '~') {
@@ -1448,6 +1459,8 @@ tty_keys_device_attributes(struct tty *tty, const char *buf, size_t len,
 				tty_add_features(features, "margins", ",");
 			if (p[i] == 28)
 				tty_add_features(features, "rectfill", ",");
+			if (p[i] == 52)
+				tty_add_features(features, "clipboard", ",");
 		}
 		break;
 	}

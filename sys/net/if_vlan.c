@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vlan.c,v 1.219 2024/06/09 16:25:28 jan Exp $	*/
+/*	$OpenBSD: if_vlan.c,v 1.221 2025/03/02 21:28:32 bluhm Exp $	*/
 
 /*
  * Copyright 1998 Massachusetts Institute of Technology
@@ -374,7 +374,8 @@ vlan_inject(struct mbuf *m, uint16_t type, uint16_t tag)
 }
 
 struct mbuf *
-vlan_input(struct ifnet *ifp0, struct mbuf *m, unsigned int *sdelim)
+vlan_input(struct ifnet *ifp0, struct mbuf *m, unsigned int *sdelim,
+    struct netstack *ns)
 {
 	struct vlan_softc *sc;
 	struct ifnet *ifp;
@@ -471,7 +472,7 @@ vlan_input(struct ifnet *ifp0, struct mbuf *m, unsigned int *sdelim)
 		break;
 	}
 
-	if_vinput(ifp, m);
+	if_vinput(ifp, m, ns);
 leave:
 	refcnt_rele_wake(&sc->sc_refcnt);
 	return (NULL);
@@ -698,6 +699,13 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		} else {
 			if (ISSET(ifp->if_flags, IFF_RUNNING))
 				error = vlan_down(sc);
+		}
+		break;
+
+	case SIOCSIFXFLAGS:
+		if ((ifp0 = if_get(sc->sc_ifidx0)) != NULL) {
+			ifsetlro(ifp0, ISSET(ifr->ifr_flags, IFXF_LRO));
+			if_put(ifp0);
 		}
 		break;
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: cms.c,v 1.36 2024/08/12 15:34:58 job Exp $ */
+/* $OpenBSD: cms.c,v 1.38 2025/06/07 08:24:15 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -193,14 +193,32 @@ get_cipher_by_name(char *name)
 static int
 cms_opt_cipher(int argc, char **argv, int *argsused)
 {
+	const EVP_CIPHER *cipher;
 	char *name = argv[0];
 
 	if (*name++ != '-')
 		return (1);
 
-	if ((cfg.cipher = get_cipher_by_name(name)) == NULL)
-		if ((cfg.cipher = EVP_get_cipherbyname(name)) == NULL)
+	if ((cipher = get_cipher_by_name(name)) == NULL)
+		if ((cipher = EVP_get_cipherbyname(name)) == NULL)
 			return (1);
+
+	/*
+	 * XXX - this should really be done in CMS_{encrypt,decrypt}() until
+	 * we have proper support for AuthEnvelopedData (RFC 5084), but this
+	 * is good enough for now to avoid outputting garbage with this rusty
+	 * swiss army knife.
+	 */
+	if ((EVP_CIPHER_flags(cipher) & EVP_CIPH_FLAG_AEAD_CIPHER) != 0) {
+		BIO_printf(bio_err, "AuthEnvelopedData is not supported\n");
+		return (1);
+	}
+	if (EVP_CIPHER_mode(cipher) == EVP_CIPH_XTS_MODE) {
+		BIO_printf(bio_err, "XTS mode not supported\n");
+		return (1);
+	}
+
+	cfg.cipher = cipher;
 
 	*argsused = 1;
 	return (0);
@@ -475,7 +493,7 @@ static const struct option cms_options[] = {
 	},
 	{
 		.name = "aes256",
-		.desc = "Encrypt PEM output with CBC AES",
+		.desc = "Encrypt PEM output with CBC AES (default)",
 		.type = OPTION_ARGV_FUNC,
 		.opt.argvfunc = cms_opt_cipher,
 	},
@@ -509,7 +527,7 @@ static const struct option cms_options[] = {
 	},
 	{
 		.name = "des3",
-		.desc = "Encrypt with triple DES (default)",
+		.desc = "Encrypt with triple DES",
 		.type = OPTION_ARGV_FUNC,
 		.opt.argvfunc = cms_opt_cipher,
 	},
@@ -1291,14 +1309,8 @@ cms_main(int argc, char **argv)
 	}
 
 	if (cfg.operation == SMIME_ENCRYPT) {
-		if (cfg.cipher == NULL) {
-#ifndef OPENSSL_NO_DES
-			cfg.cipher = EVP_des_ede3_cbc();
-#else
-			BIO_printf(bio_err, "No cipher selected\n");
-			goto end;
-#endif
-		}
+		if (cfg.cipher == NULL)
+			cfg.cipher = EVP_aes_256_cbc();
 		if (cfg.secret_key != NULL &&
 		    cfg.secret_keyid == NULL) {
 			BIO_printf(bio_err, "No secret key id\n");

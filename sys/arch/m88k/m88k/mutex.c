@@ -1,4 +1,4 @@
-/*	$OpenBSD: mutex.c,v 1.1 2020/05/26 11:55:10 aoyama Exp $	*/
+/*	$OpenBSD: mutex.c,v 1.3 2025/06/19 12:01:08 jca Exp $	*/
 
 /*
  * Copyright (c) 2020 Miodrag Vallat
@@ -28,10 +28,6 @@
 
 #include <ddb/db_output.h>
 
-#ifdef MP_LOCKDEBUG
-extern int __mp_lock_spinout;	/* kern_lock.c */
-#endif /* MP_LOCKDEBUG */
-
 static inline int
 atomic_swap(volatile int *lockptr, int new)
 {
@@ -56,7 +52,7 @@ mtx_enter(struct mutex *mtx)
 {
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
 #ifdef MP_LOCKDEBUG
-	int nticks = __mp_lock_spinout;
+	long nticks = __mp_lock_spinout;
 #endif
 
 	WITNESS_CHECKORDER(MUTEX_LOCK_OBJECT(mtx),

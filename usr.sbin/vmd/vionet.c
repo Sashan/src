@@ -1,4 +1,4 @@
-/*	$OpenBSD: vionet.c,v 1.22 2024/11/21 13:39:34 claudio Exp $	*/
+/*	$OpenBSD: vionet.c,v 1.24 2025/06/09 18:43:01 dv Exp $	*/
 
 /*
  * Copyright (c) 2023 Dave Voutila <dv@openbsd.org>
@@ -158,34 +158,6 @@ vionet_main(int fd, int fd_vmm)
 	close_fd(fd_vmm);
 	if (pledge("stdio", NULL) == -1)
 		fatal("pledge2");
-
-	/* If we're restoring hardware, re-initialize virtqueue hva's. */
-	if (vm.vm_state & VM_STATE_RECEIVED) {
-		struct virtio_vq_info *vq_info;
-		void *hva = NULL;
-
-		vq_info = &dev.vionet.vq[TXQ];
-		if (vq_info->q_gpa != 0) {
-			log_debug("%s: restoring TX virtqueue for gpa 0x%llx",
-			    __func__, vq_info->q_gpa);
-			hva = hvaddr_mem(vq_info->q_gpa,
-			    vring_size(VIONET_QUEUE_SIZE));
-			if (hva == NULL)
-				fatalx("%s: hva == NULL", __func__);
-			vq_info->q_hva = hva;
-		}
-
-		vq_info = &dev.vionet.vq[RXQ];
-		if (vq_info->q_gpa != 0) {
-			log_debug("%s: restoring RX virtqueue for gpa 0x%llx",
-			    __func__, vq_info->q_gpa);
-			hva = hvaddr_mem(vq_info->q_gpa,
-			    vring_size(VIONET_QUEUE_SIZE));
-			if (hva == NULL)
-				fatalx("%s: hva == NULL", __func__);
-			vq_info->q_hva = hva;
-		}
-	}
 
 	/* Initialize our packet injection pipe. */
 	if (pipe2(pipe_inject, O_NONBLOCK) == -1) {
@@ -902,6 +874,7 @@ dev_dispatch_vm(int fd, short event, void *arg)
 	struct imsg	 	 imsg;
 	ssize_t			 n = 0;
 	int			 verbose;
+	uint32_t		 type;
 
 	if (dev == NULL)
 		fatalx("%s: missing vionet pointer", __func__);
@@ -937,11 +910,10 @@ dev_dispatch_vm(int fd, short event, void *arg)
 		if (n == 0)
 			break;
 
-		switch (imsg.hdr.type) {
+		type = imsg_get_type(&imsg);
+		switch (type) {
 		case IMSG_DEVOP_HOSTMAC:
-			IMSG_SIZE_CHECK(&imsg, vionet->hostmac);
-			memcpy(vionet->hostmac, imsg.data,
-			    sizeof(vionet->hostmac));
+			vionet_hostmac_read(&imsg, vionet);
 			log_debug("%s: set hostmac", __func__);
 			break;
 		case IMSG_VMDOP_PAUSE_VM:
@@ -954,8 +926,8 @@ dev_dispatch_vm(int fd, short event, void *arg)
 				vm_pipe_send(&pipe_rx, VIRTIO_THREAD_START);
 			break;
 		case IMSG_CTL_VERBOSE:
-			IMSG_SIZE_CHECK(&imsg, &verbose);
-			memcpy(&verbose, imsg.data, sizeof(verbose));
+			if (imsg_get_data(&imsg, &verbose, sizeof(verbose)))
+				fatal("%s", __func__);
 			log_setverbose(verbose);
 			break;
 		}
@@ -1011,19 +983,10 @@ handle_sync_io(int fd, short event, void *arg)
 			break;
 
 		/* Unpack our message. They ALL should be dev messeges! */
-		IMSG_SIZE_CHECK(&imsg, &msg);
-		memcpy(&msg, imsg.data, sizeof(msg));
+		viodev_msg_read(&imsg, &msg);
 		imsg_free(&imsg);
 
 		switch (msg.type) {
-		case VIODEV_MSG_DUMP:
-			/* Dump device */
-			n = atomicio(vwrite, dev->sync_fd, dev, sizeof(*dev));
-			if (n != sizeof(*dev)) {
-				log_warnx("%s: failed to dump vionet device",
-				    __func__);
-				break;
-			}
 		case VIODEV_MSG_IO_READ:
 			/* Read IO: make sure to send a reply */
 			msg.data = handle_io_read(&msg, dev, &intr);

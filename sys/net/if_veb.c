@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_veb.c,v 1.36 2024/08/05 17:47:29 bluhm Exp $ */
+/*	$OpenBSD: if_veb.c,v 1.40 2025/06/30 13:01:10 jan Exp $ */
 
 /*
  * Copyright (c) 2021 David Gwynne <dlg@openbsd.org>
@@ -167,7 +167,7 @@ static int	veb_clone_create(struct if_clone *, int);
 static int	veb_clone_destroy(struct ifnet *);
 
 static int	veb_ioctl(struct ifnet *, u_long, caddr_t);
-static void	veb_input(struct ifnet *, struct mbuf *);
+static void	veb_input(struct ifnet *, struct mbuf *, struct netstack *);
 static int	veb_enqueue(struct ifnet *, struct mbuf *);
 static int	veb_output(struct ifnet *, struct mbuf *, struct sockaddr *,
 		    struct rtentry *);
@@ -409,7 +409,8 @@ veb_clone_destroy(struct ifnet *ifp)
 }
 
 static struct mbuf *
-veb_span_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
+veb_span_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport,
+    struct netstack *ns)
 {
 	m_freem(m);
 	return (NULL);
@@ -457,6 +458,9 @@ veb_ip_filter(const struct mbuf *m)
 {
 	const struct ether_header *eh;
 
+	if (ISSET(m->m_flags, M_VLANTAG))
+		return (1);
+
 	eh = mtod(m, struct ether_header *);
 	switch (ntohs(eh->ether_type)) {
 	case ETHERTYPE_IP:
@@ -476,6 +480,9 @@ veb_vlan_filter(const struct mbuf *m)
 {
 	const struct ether_header *eh;
 
+	if (ISSET(m->m_flags, M_VLANTAG))
+		return (1);
+
 	eh = mtod(m, struct ether_header *);
 	switch (ntohs(eh->ether_type)) {
 	case ETHERTYPE_VLAN:
@@ -493,6 +500,9 @@ veb_rule_arp_match(const struct veb_rule *vr, struct mbuf *m)
 {
 	struct ether_header *eh;
 	struct ether_arp ea;
+
+	if (ISSET(m->m_flags, M_VLANTAG))
+		return (0);
 
 	eh = mtod(m, struct ether_header *);
 
@@ -589,7 +599,8 @@ veb_rule_filter(struct veb_port *p, int dir, struct mbuf *m,
 struct veb_pf_ip_family {
 	sa_family_t	   af;
 	struct mbuf	*(*ip_check)(struct ifnet *, struct mbuf *);
-	void		 (*ip_input)(struct ifnet *, struct mbuf *);
+	void		 (*ip_input)(struct ifnet *, struct mbuf *,
+			    struct netstack *);
 };
 
 static const struct veb_pf_ip_family veb_pf_ipv4 = {
@@ -607,7 +618,7 @@ static const struct veb_pf_ip_family veb_pf_ipv6 = {
 #endif
 
 static struct mbuf *
-veb_pf(struct ifnet *ifp0, int dir, struct mbuf *m)
+veb_pf(struct ifnet *ifp0, int dir, struct mbuf *m, struct netstack *ns)
 {
 	struct ether_header *eh, copy;
 	const struct veb_pf_ip_family *fam;
@@ -621,6 +632,9 @@ veb_pf(struct ifnet *ifp0, int dir, struct mbuf *m)
 	 * other veb ports.
 	 */
 	if (ifp0->if_enqueue == vport_enqueue)
+		return (m);
+
+	if (ISSET(m->m_flags, M_VLANTAG))
 		return (m);
 
 	eh = mtod(m, struct ether_header *);
@@ -654,7 +668,7 @@ veb_pf(struct ifnet *ifp0, int dir, struct mbuf *m)
 	if (dir == PF_IN && ISSET(m->m_pkthdr.pf.flags, PF_TAG_DIVERTED)) {
 		pf_mbuf_unlink_state_key(m);
 		pf_mbuf_unlink_inpcb(m);
-		(*fam->ip_input)(ifp0, m);
+		(*fam->ip_input)(ifp0, m, ns);
 		return (NULL);
 	}
 
@@ -719,7 +733,7 @@ veb_ipsec_proto_in(struct ifnet *ifp0, struct mbuf *m, int iphlen,
 			}
 		}
 
-		(*(tdb->tdb_xform->xf_input))(m, tdb, iphlen, poff);
+		(*(tdb->tdb_xform->xf_input))(m, tdb, iphlen, poff, NULL);
 		return (NULL);
 	}
 
@@ -789,6 +803,9 @@ veb_ipsec_in(struct ifnet *ifp0, struct mbuf *m)
 	struct ether_header *eh, copy;
 
 	if (ifp0->if_enqueue == vport_enqueue)
+		return (m);
+
+	if (ISSET(m->m_flags, M_VLANTAG))
 		return (m);
 
 	eh = mtod(m, struct ether_header *);
@@ -893,6 +910,9 @@ veb_ipsec_out(struct ifnet *ifp0, struct mbuf *m)
 	if (ifp0->if_enqueue == vport_enqueue)
 		return (m);
 
+	if (ISSET(m->m_flags, M_VLANTAG))
+		return (m);
+
 	eh = mtod(m, struct ether_header *);
 	switch (ntohs(eh->ether_type)) {
 	case ETHERTYPE_IP:
@@ -925,9 +945,30 @@ veb_ipsec_out(struct ifnet *ifp0, struct mbuf *m)
 }
 #endif /* IPSEC */
 
+static struct mbuf *
+veb_offload(struct ifnet *ifp, struct ifnet *ifp0, struct mbuf *m)
+{
+#if NVLAN > 0
+	if (ISSET(m->m_flags, M_VLANTAG) &&
+	    !ISSET(ifp0->if_capabilities, IFCAP_VLAN_HWTAGGING)) {
+		/*
+		 * If the underlying interface has no VLAN hardware tagging
+		 * support, inject one in software.
+		 */
+		m = vlan_inject(m, ETHERTYPE_VLAN, m->m_pkthdr.ether_vtag);
+		if (m == NULL) {
+			counters_inc(ifp->if_counters, ifc_ierrors);
+			return NULL;
+		}
+	}
+#endif
+
+	return m;
+}
+
 static void
 veb_broadcast(struct veb_softc *sc, struct veb_port *rp, struct mbuf *m0,
-    uint64_t src, uint64_t dst)
+    uint64_t src, uint64_t dst, struct netstack *ns)
 {
 	struct ifnet *ifp = &sc->sc_if;
 	struct veb_ports *pm;
@@ -944,7 +985,7 @@ veb_broadcast(struct veb_softc *sc, struct veb_port *rp, struct mbuf *m0,
 	 * let pf look at it, but use the veb interface as a proxy.
 	 */
 	if (ISSET(ifp->if_flags, IFF_LINK1) &&
-	    (m0 = veb_pf(ifp, PF_FWD, m0)) == NULL)
+	    (m0 = veb_pf(ifp, PF_FWD, m0, ns)) == NULL)
 		return;
 #endif
 
@@ -994,6 +1035,9 @@ veb_broadcast(struct veb_softc *sc, struct veb_port *rp, struct mbuf *m0,
 		if (veb_rule_filter(tp, VEB_RULE_LIST_OUT, m0, src, dst))
 			continue;
 
+		if ((m0 = veb_offload(ifp, ifp0, m0)) == NULL)
+			goto done;
+
 		m = m_dup_pkt(m0, max_linkhdr + ETHER_ALIGN, M_NOWAIT);
 		if (m == NULL) {
 			/* XXX count error? */
@@ -1010,7 +1054,7 @@ done:
 
 static struct mbuf *
 veb_transmit(struct veb_softc *sc, struct veb_port *rp, struct veb_port *tp,
-    struct mbuf *m, uint64_t src, uint64_t dst)
+    struct mbuf *m, uint64_t src, uint64_t dst, struct netstack *ns)
 {
 	struct ifnet *ifp = &sc->sc_if;
 	struct ifnet *ifp0;
@@ -1039,12 +1083,15 @@ veb_transmit(struct veb_softc *sc, struct veb_port *rp, struct veb_port *tp,
 
 #if NPF > 0
 	if (ISSET(ifp->if_flags, IFF_LINK1) &&
-	    (m = veb_pf(ifp0, PF_FWD, m)) == NULL)
+	    (m = veb_pf(ifp0, PF_FWD, m, ns)) == NULL)
 		return (NULL);
 #endif
 
 	counters_pkt(ifp->if_counters, ifc_opackets, ifc_obytes,
 	    m->m_pkthdr.len);
+
+	if ((m = veb_offload(ifp, ifp0, m)) == NULL)
+		goto drop;
 
 	(*tp->p_enqueue)(ifp0, m); /* XXX count error */
 
@@ -1055,13 +1102,15 @@ drop:
 }
 
 static struct mbuf *
-veb_vport_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
+veb_vport_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport,
+    struct netstack *ns)
 {
 	return (m);
 }
 
 static struct mbuf *
-veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
+veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport,
+    struct netstack *ns)
 {
 	struct veb_port *p = brport;
 	struct veb_softc *sc = p->p_veb;
@@ -1101,20 +1150,6 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 		}
 	}
 
-#if NVLAN > 0
-	/*
-	 * If the underlying interface removed the VLAN header itself,
-	 * add it back.
-	 */
-	if (ISSET(m->m_flags, M_VLANTAG)) {
-		m = vlan_inject(m, ETHERTYPE_VLAN, m->m_pkthdr.ether_vtag);
-		if (m == NULL) {
-			counters_inc(ifp->if_counters, ifc_ierrors);
-			goto drop;
-		}
-	}
-#endif
-
 	counters_pkt(ifp->if_counters, ifc_ipackets, ifc_ibytes,
 	    m->m_pkthdr.len);
 
@@ -1144,7 +1179,7 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 
 #if NPF > 0
 	if (ISSET(ifp->if_flags, IFF_LINK1) &&
-	    (m = veb_pf(ifp0, PF_IN, m)) == NULL)
+	    (m = veb_pf(ifp0, PF_IN, m, ns)) == NULL)
 		return (NULL);
 #endif
 
@@ -1170,7 +1205,7 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 			veb_eb_port_take(NULL, tp);
 		smr_read_leave();
 		if (tp != NULL) {
-			m = veb_transmit(sc, p, tp, m, src, dst);
+			m = veb_transmit(sc, p, tp, m, src, dst, ns);
 			veb_eb_port_rele(NULL, tp);
 		}
 
@@ -1182,7 +1217,7 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 		SET(m->m_flags, ETH64_IS_BROADCAST(dst) ? M_BCAST : M_MCAST);
 	}
 
-	veb_broadcast(sc, p, m, src, dst);
+	veb_broadcast(sc, p, m, src, dst, ns);
 	return (NULL);
 
 drop:
@@ -1191,7 +1226,7 @@ drop:
 }
 
 static void
-veb_input(struct ifnet *ifp, struct mbuf *m)
+veb_input(struct ifnet *ifp, struct mbuf *m, struct netstack *ns)
 {
 	m_freem(m);
 }
@@ -2345,6 +2380,7 @@ vport_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_qstart = vport_start;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_xflags = IFXF_CLONED | IFXF_MPSAFE;
+	ifp->if_capabilities = IFCAP_VLAN_HWTAGGING;
 	ether_fakeaddr(ifp);
 
 	if_counters_alloc(ifp);
@@ -2446,7 +2482,7 @@ vport_if_enqueue(struct ifnet *ifp, struct mbuf *m)
 	 * if_vinput compat with veb calling if_enqueue.
 	 */
 
-	if_vinput(ifp, m);
+	if_vinput(ifp, m, NULL);
 
 	return (0);
 }
@@ -2483,7 +2519,7 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 	smr_read_leave();
 	if (eb != NULL) {
 		struct mbuf *(*input)(struct ifnet *, struct mbuf *,
-		    uint64_t, void *) = eb->eb_input;
+		    uint64_t, void *, struct netstack *) = eb->eb_input;
 		struct ether_header *eh;
 		uint64_t dst;
 
@@ -2501,7 +2537,7 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 
 		if (input == veb_vport_input)
 			input = veb_port_input;
-		m = (*input)(ifp, m, dst, eb->eb_port);
+		m = (*input)(ifp, m, dst, eb->eb_port, NULL);
 
 		error = 0;
 

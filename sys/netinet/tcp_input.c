@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_input.c,v 1.431 2025/02/17 08:56:33 mvs Exp $	*/
+/*	$OpenBSD: tcp_input.c,v 1.455 2025/06/30 12:43:22 mvs Exp $	*/
 /*	$NetBSD: tcp_input.c,v 1.23 1996/02/13 23:43:44 christos Exp $	*/
 
 /*
@@ -84,6 +84,7 @@
 #include <net/if_var.h>
 #include <net/route.h>
 
+#include <netinet/if_ether.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
@@ -99,9 +100,6 @@
 #if NPF > 0
 #include <net/pfvar.h>
 #endif
-
-int tcp_mss_adv(struct rtentry *, int);
-int tcp_flush_queue(struct tcpcb *);
 
 #ifdef INET6
 #include <netinet6/in6_var.h>
@@ -177,6 +175,9 @@ do { \
 	if_put(ifp); \
 } while (0)
 
+int	 tcp_input_solocked(struct mbuf **, int *, int, int, struct socket **);
+int	 tcp_mss_adv(struct rtentry *, int);
+int	 tcp_flush_queue(struct tcpcb *);
 void	 tcp_sack_partialack(struct tcpcb *, struct tcphdr *);
 void	 tcp_newreno_partialack(struct tcpcb *, struct tcphdr *);
 
@@ -335,7 +336,7 @@ tcp_flush_queue(struct tcpcb *tp)
 			m_freem(q->tcpqe_m);
 		else {
 			mtx_enter(&so->so_rcv.sb_mtx);
-			sbappendstream(so, &so->so_rcv, q->tcpqe_m);
+			sbappendstream(&so->so_rcv, q->tcpqe_m);
 			mtx_leave(&so->so_rcv.sb_mtx);
 		}
 		pool_put(&tcpqe_pool, q);
@@ -347,12 +348,53 @@ tcp_flush_queue(struct tcpcb *tp)
 	return (flags);
 }
 
+int
+tcp_input(struct mbuf **mp, int *offp, int proto, int af, struct netstack *ns)
+{
+	if (ns == NULL)
+		return tcp_input_solocked(mp, offp, proto, af, NULL);
+	(*mp)->m_pkthdr.ph_cookie = (void *)(long)(*offp);
+	switch (af) {
+	case AF_INET:
+		ml_enqueue(&ns->ns_tcp_ml, *mp);
+		break;
+#ifdef INET6
+	case AF_INET6:
+		ml_enqueue(&ns->ns_tcp6_ml, *mp);
+		break;
+#endif
+	default:
+		m_freemp(mp);
+	}
+	*mp = NULL;
+	return IPPROTO_DONE;
+}
+
+void
+tcp_input_mlist(struct mbuf_list *ml, int af)
+{
+	struct socket *so = NULL;
+	struct mbuf *m;
+
+	while ((m = ml_dequeue(ml)) != NULL) {
+		int off, nxt;
+
+		off = (long)m->m_pkthdr.ph_cookie;
+		m->m_pkthdr.ph_cookie = NULL;
+		nxt = tcp_input_solocked(&m, &off, IPPROTO_TCP, af, &so);
+		KASSERT(nxt == IPPROTO_DONE);
+	}
+
+	in_pcbsounlock(NULL, so);
+}
+
 /*
  * TCP input routine, follows pages 65-76 of the
  * protocol specification dated September, 1981 very closely.
  */
 int
-tcp_input(struct mbuf **mp, int *offp, int proto, int af)
+tcp_input_solocked(struct mbuf **mp, int *offp, int proto, int af,
+    struct socket **solocked)
 {
 	struct mbuf *m = *mp;
 	int iphlen = *offp;
@@ -406,8 +448,8 @@ tcp_input(struct mbuf **mp, int *offp, int proto, int af)
 	 * Get IP and TCP header together in first mbuf.
 	 * Note: IP leaves IP header in first mbuf.
 	 */
-	IP6_EXTHDR_GET(th, struct tcphdr *, m, iphlen, sizeof(*th));
-	if (!th) {
+	th = ip6_exthdr_get(mp, iphlen, sizeof(*th));
+	if (th == NULL) {
 		tcpstat_inc(tcps_rcvshort);
 		return IPPROTO_DONE;
 	}
@@ -469,8 +511,7 @@ tcp_input(struct mbuf **mp, int *offp, int proto, int af)
 			break;
 #ifdef INET6
 		case AF_INET6:
-			sum = in6_cksum(m, IPPROTO_TCP, sizeof(struct ip6_hdr),
-			    tlen);
+			sum = in6_cksum(m, IPPROTO_TCP, iphlen, tlen);
 			break;
 #endif
 		}
@@ -491,8 +532,8 @@ tcp_input(struct mbuf **mp, int *offp, int proto, int af)
 	}
 	tlen -= off;
 	if (off > sizeof(struct tcphdr)) {
-		IP6_EXTHDR_GET(th, struct tcphdr *, m, iphlen, off);
-		if (!th) {
+		th = ip6_exthdr_get(mp, iphlen, off);
+		if (th == NULL) {
 			tcpstat_inc(tcps_rcvshort);
 			return IPPROTO_DONE;
 		}
@@ -604,7 +645,25 @@ findpcb:
 		tcpstat_inc(tcps_noport);
 		goto dropwithreset_ratelim;
 	}
-
+	/*
+	 * Avoid needless lock and unlock operation when handling multiple
+	 * TCP packets from the same stream consecutively.
+	 */
+	if (solocked != NULL && *solocked != NULL &&
+	    sotoinpcb(*solocked) == inp) {
+		so = *solocked;
+		*solocked = NULL;
+	} else {
+		if (solocked != NULL && *solocked != NULL) {
+			in_pcbsounlock(NULL, *solocked);
+			*solocked = NULL;
+		}
+		so = in_pcbsolock(inp);
+	}
+	if (so == NULL) {
+		tcpstat_inc(tcps_closing);
+		goto dropwithreset_ratelim;
+	}
 	KASSERT(sotoinpcb(inp->inp_socket) == inp);
 	KASSERT(intotcpcb(inp) == NULL || intotcpcb(inp)->t_inpcb == inp);
 	soassertlocked(inp->inp_socket);
@@ -636,7 +695,6 @@ findpcb:
 	else
 		tiwin = th->th_win;
 
-	so = inp->inp_socket;
 	if (so->so_options & (SO_DEBUG|SO_ACCEPTCONN)) {
 		union syn_cache_sa src;
 		union syn_cache_sa dst;
@@ -725,6 +783,7 @@ findpcb:
 					 * in use for the reply,
 					 * do not free it.
 					 */
+					so = NULL;
 					m = *mp = NULL;
 					goto drop;
 				} else {
@@ -732,13 +791,12 @@ findpcb:
 					 * We have created a
 					 * full-blown connection.
 					 */
-					tp = NULL;
 					in_pcbunref(inp);
-					inp = in_pcbref(sotoinpcb(so));
+					/* syn_cache_get() has refcounted inp */
+					inp = sotoinpcb(so);
 					tp = intotcpcb(inp);
 					if (tp == NULL)
 						goto badsyn;	/*XXX*/
-
 				}
 				break;
 
@@ -844,6 +902,10 @@ findpcb:
 					tcpstat_inc(tcps_dropsyn);
 					goto drop;
 				}
+				if (solocked != NULL)
+					*solocked = so;
+				else
+					in_pcbsounlock(inp, so);
 				in_pcbunref(inp);
 				return IPPROTO_DONE;
 			}
@@ -1019,6 +1081,10 @@ findpcb:
 				if (so->so_snd.sb_cc ||
 				    tp->t_flags & TF_NEEDOUTPUT)
 					(void) tcp_output(tp);
+				if (solocked != NULL)
+					*solocked = so;
+				else
+					in_pcbsounlock(inp, so);
 				in_pcbunref(inp);
 				return IPPROTO_DONE;
 			}
@@ -1061,7 +1127,7 @@ findpcb:
 					tp->rfbuf_cnt += tlen;
 				m_adj(m, iphlen + off);
 				mtx_enter(&so->so_rcv.sb_mtx);
-				sbappendstream(so, &so->so_rcv, m);
+				sbappendstream(&so->so_rcv, m);
 				mtx_leave(&so->so_rcv.sb_mtx);
 			}
 			tp->t_flags |= TF_BLOCKOUTPUT;
@@ -1069,6 +1135,10 @@ findpcb:
 			tp->t_flags &= ~TF_BLOCKOUTPUT;
 			if (tp->t_flags & (TF_ACKNOW|TF_NEEDOUTPUT))
 				(void) tcp_output(tp);
+			if (solocked != NULL)
+				*solocked = so;
+			else
+				in_pcbsounlock(inp, so);
 			in_pcbunref(inp);
 			return IPPROTO_DONE;
 		}
@@ -1262,6 +1332,8 @@ trimthenstep6:
 			    ((arc4random() & 0x7fffffff) | 0x8000);
 			reuse = &iss;
 			tp = tcp_close(tp);
+			in_pcbsounlock(inp, so);
+			so = NULL;
 			in_pcbunref(inp);
 			inp = NULL;
 			goto findpcb;
@@ -1975,7 +2047,7 @@ dodata:							/* XXX */
 			else {
 				m_adj(m, hdroptlen);
 				mtx_enter(&so->so_rcv.sb_mtx);
-				sbappendstream(so, &so->so_rcv, m);
+				sbappendstream(&so->so_rcv, m);
 				mtx_leave(&so->so_rcv.sb_mtx);
 			}
 			tp->t_flags |= TF_BLOCKOUTPUT;
@@ -2066,6 +2138,10 @@ dodata:							/* XXX */
 	 */
 	if (tp->t_flags & (TF_ACKNOW|TF_NEEDOUTPUT))
 		(void) tcp_output(tp);
+	if (solocked != NULL)
+		*solocked = so;
+	else
+		in_pcbsounlock(inp, so);
 	in_pcbunref(inp);
 	return IPPROTO_DONE;
 
@@ -2095,6 +2171,10 @@ dropafterack:
 	m_freem(m);
 	tp->t_flags |= TF_ACKNOW;
 	(void) tcp_output(tp);
+	if (solocked != NULL)
+		*solocked = so;
+	else
+		in_pcbsounlock(inp, so);
 	in_pcbunref(inp);
 	return IPPROTO_DONE;
 
@@ -2130,6 +2210,7 @@ dropwithreset:
 		    (tcp_seq)0, TH_RST|TH_ACK, m->m_pkthdr.ph_rtableid, now);
 	}
 	m_freem(m);
+	in_pcbsounlock(inp, so);
 	in_pcbunref(inp);
 	return IPPROTO_DONE;
 
@@ -2141,6 +2222,7 @@ drop:
 		tcp_trace(TA_DROP, ostate, tp, otp, &saveti.caddr, 0, tlen);
 
 	m_freem(m);
+	in_pcbsounlock(inp, so);
 	in_pcbunref(inp);
 	return IPPROTO_DONE;
 }
@@ -2870,7 +2952,7 @@ tcp_mss(struct tcpcb *tp, int offer)
 	} else if (ifp->if_flags & IFF_LOOPBACK) {
 		mss = ifp->if_mtu - iphlen - sizeof(struct tcphdr);
 	} else if (tp->pf == AF_INET) {
-		if (ip_mtudisc)
+		if (atomic_load_int(&ip_mtudisc))
 			mss = ifp->if_mtu - iphlen - sizeof(struct tcphdr);
 	}
 #ifdef INET6
@@ -3176,8 +3258,6 @@ syn_cache_rm(struct syn_cache *sc)
 {
 	MUTEX_ASSERT_LOCKED(&syn_cache_mtx);
 
-	KASSERT(!ISSET(sc->sc_dynflags, SCF_DEAD));
-	SET(sc->sc_dynflags, SCF_DEAD);
 	TAILQ_REMOVE(&sc->sc_buckethead->sch_bucket, sc, sc_bucketq);
 	in_pcbunref(sc->sc_inplisten);
 	sc->sc_inplisten = NULL;
@@ -3382,7 +3462,8 @@ syn_cache_timer(void *arg)
 	int lastref, do_ecn = 0;
 
 	mtx_enter(&syn_cache_mtx);
-	if (ISSET(sc->sc_dynflags, SCF_DEAD))
+	inp = in_pcbref(sc->sc_inplisten);
+	if (inp == NULL)
 		goto freeit;
 
 	if (__predict_false(sc->sc_rxtshift == TCP_MAXRXTSHIFT)) {
@@ -3406,13 +3487,10 @@ syn_cache_timer(void *arg)
 	    TCPTV_REXMTMAX);
 	if (timeout_add_msec(&sc->sc_timer, sc->sc_rxtcur))
 		refcnt_take(&sc->sc_refcnt);
-	inp = in_pcbref(sc->sc_inplisten);
-	if (inp == NULL)
-		goto freeit;
 	mtx_leave(&syn_cache_mtx);
 
 	NET_LOCK_SHARED();
-	so = in_pcbsolock_ref(inp);
+	so = in_pcbsolock(inp);
 	if (so != NULL) {
 		now = tcp_now();
 #ifdef TCP_ECN
@@ -3421,7 +3499,7 @@ syn_cache_timer(void *arg)
 		(void) syn_cache_respond(sc, NULL, now, do_ecn);
 		tcpstat_inc(tcps_sc_retransmitted);
 	}
-	in_pcbsounlock_rele(inp, so);
+	in_pcbsounlock(inp, so);
 	NET_UNLOCK_SHARED();
 
 	in_pcbunref(inp);
@@ -3431,6 +3509,7 @@ syn_cache_timer(void *arg)
  dropit:
 	tcpstat_inc(tcps_sc_timed_out);
 	syn_cache_rm(sc);
+	in_pcbunref(inp);
 	/* Decrement reference of the timer and free object after remove. */
 	lastref = refcnt_rele(&sc->sc_refcnt);
 	KASSERT(lastref == 0);
@@ -3533,7 +3612,6 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	struct socket *listenso;
 	struct inpcb *inp, *listeninp;
 	struct tcpcb *tp = NULL;
-	struct mbuf *am;
 	u_int rtableid;
 
 	NET_ASSERT_LOCKED();
@@ -3544,6 +3622,7 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	sc = syn_cache_lookup(src, dst, &scp, inp->inp_rtableid);
 	if (sc == NULL) {
 		mtx_leave(&syn_cache_mtx);
+		in_pcbsounlock(inp, so);
 		return (NULL);
 	}
 
@@ -3557,6 +3636,7 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 		refcnt_take(&sc->sc_refcnt);
 		mtx_leave(&syn_cache_mtx);
 		(void) syn_cache_respond(sc, m, now, do_ecn);
+		in_pcbsounlock(inp, so);
 		syn_cache_put(sc);
 		return ((struct socket *)(-1));
 	}
@@ -3573,12 +3653,13 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	 */
 	listenso = so;
 	listeninp = inp;
+	inp = NULL;
 	so = sonewconn(listenso, SS_ISCONNECTED, M_DONTWAIT);
 	if (so == NULL)
 		goto resetandabort;
 	soassertlocked(so);
-	soref(so);
-	inp = sotoinpcb(so);
+	/* inpcb does refcount socket, both so and inp cannot go away */
+	inp = in_pcbref(sotoinpcb(so));
 	tp = intotcpcb(inp);
 
 #ifdef IPSEC
@@ -3618,24 +3699,14 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 		rtableid = divert->rdomain;
 	}
 #endif
-	in_pcbset_laddr(inp, dst, rtableid);
+	if (in_pcbset_addr(inp, src, dst, rtableid))
+		goto resetandabort;
 
 	/*
 	 * Give the new socket our cached route reference.
 	 */
 	inp->inp_route = sc->sc_route;		/* struct assignment */
 	sc->sc_route.ro_rt = NULL;
-
-	am = m_get(M_DONTWAIT, MT_SONAME);	/* XXX */
-	if (am == NULL)
-		goto resetandabort;
-	am->m_len = src->sa_len;
-	memcpy(mtod(am, caddr_t), src, src->sa_len);
-	if (in_pcbconnect(inp, am)) {
-		(void) m_free(am);
-		goto resetandabort;
-	}
-	(void) m_free(am);
 
 	tp->t_flags = intotcpcb(listeninp)->t_flags & (TF_NOPUSH|TF_NODELAY);
 	if (sc->sc_request_r_scale != 15) {
@@ -3697,7 +3768,7 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 		tp->rcv_adv = tp->rcv_nxt + sc->sc_win;
 	tp->last_ack_sent = tp->rcv_nxt;
 
-	in_pcbsounlock_rele(inp, so);
+	in_pcbsounlock(listeninp, listenso);
 	tcpstat_inc(tcps_sc_completed);
 	syn_cache_put(sc);
 	return (so);
@@ -3708,8 +3779,10 @@ resetandabort:
 abort:
 	if (tp != NULL)
 		tp = tcp_drop(tp, ECONNABORTED);	/* destroys socket */
+	in_pcbsounlock(inp, so);
+	in_pcbsounlock(listeninp, listenso);
+	in_pcbunref(inp);
 	m_freem(m);
-	in_pcbsounlock_rele(inp, so);
 	syn_cache_put(sc);
 	tcpstat_inc(tcps_sc_aborted);
 	return ((struct socket *)(-1));
@@ -3814,7 +3887,7 @@ syn_cache_add(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	struct mbuf *ipopts;
 	struct rtentry *rt = NULL;
 
-	NET_ASSERT_LOCKED();
+	soassertlocked(so);
 
 	tp = sototcpcb(so);
 
@@ -3990,9 +4063,8 @@ syn_cache_add(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	if (syn_cache_respond(sc, m, now, do_ecn) == 0) {
 		mtx_enter(&syn_cache_mtx);
 		/*
-		 * XXXSMP Currently exclusive netlock prevents another insert
-		 * after our syn_cache_lookup() and before syn_cache_insert().
-		 * Double insert should be handled and not rely on netlock.
+		 * Socket lock prevents another insert after our
+		 * syn_cache_lookup() and before syn_cache_insert().
 		 */
 		syn_cache_insert(sc, tp);
 		mtx_leave(&syn_cache_mtx);
@@ -4207,12 +4279,13 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m, uint64_t now,
 	switch (sc->sc_src.sa.sa_family) {
 	case AF_INET:
 		ip->ip_len = htons(tlen);
-		ip->ip_ttl = inp ? inp->inp_ip.ip_ttl : ip_defttl;
+		ip->ip_ttl = inp ?
+		    inp->inp_ip.ip_ttl : atomic_load_int(&ip_defttl);
 		if (inp != NULL)
 			ip->ip_tos = inp->inp_ip.ip_tos;
 
 		error = ip_output(m, sc->sc_ipopts, &sc->sc_route,
-		    (ip_mtudisc ? IP_MTUDISC : 0),  NULL,
+		    (atomic_load_int(&ip_mtudisc) ? IP_MTUDISC : 0),  NULL,
 		    inp ? &inp->inp_seclevel : NULL, 0);
 		break;
 #ifdef INET6
@@ -4231,3 +4304,275 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m, uint64_t now,
 	in_pcbunref(inp);
 	return (error);
 }
+
+#ifndef SMALL_KERNEL
+static int
+tcp_softlro_check(struct mbuf *m, struct ether_extracted *ext)
+{
+	/* Don't merge packets with invalid TCP checksum. */
+	if (!ISSET(m->m_pkthdr.csum_flags, M_TCP_CSUM_IN_OK))
+		return 0;
+
+	if (ext->ip4) {
+		/* Don't merge packets with invalid IP header checksum. */
+		if (!ISSET(m->m_pkthdr.csum_flags, M_IPV4_CSUM_IN_OK))
+			return 0;
+
+		/* Don't merge IPv4 packets with IP options. */
+		if (ext->iphlen != sizeof(struct ip))
+			return 0;
+	}
+
+	/* Check TCP protocol and header. */
+	if (!ext->tcp)
+		return 0;
+
+	/* Don't merge empty TCP segments. */
+	if (ext->paylen == 0)
+		return 0;
+
+	/* Just ACK and PUSH TCP flags are allowed. */
+	if (ISSET(ext->tcp->th_flags, TH_ACK|TH_PUSH) != ext->tcp->th_flags)
+		return 0;
+
+	/* TCP ACK flag has to be set. */
+	if (!ISSET(ext->tcp->th_flags, TH_ACK))
+		return 0;
+
+	/* Either no TCP options or timestamp as in RFC 1323 appendix A. */
+	if (ext->tcphlen > sizeof(struct tcphdr)) {
+		int optlen = ext->tcphlen - sizeof(struct tcphdr);
+		uint8_t *optp = (uint8_t *)(ext->tcp + 1);
+
+		/* Same logic as in TCP input quick retrieval. */
+		if ((optlen != TCPOLEN_TSTAMP_APPA &&
+		    (optlen <= TCPOLEN_TSTAMP_APPA ||
+		    optp[TCPOLEN_TSTAMP_APPA] != TCPOPT_EOL)) ||
+		    ((uint32_t *)optp)[0] != htonl(TCPOPT_TSTAMP_HDR))
+			return 0;
+	}
+
+	return 1;
+}
+
+static int
+tcp_softlro_compare(struct ether_extracted *head, struct ether_extracted *tail)
+{
+	/* Don't merge packets inside and outside of VLANs */
+	if (head->evh && tail->evh) {
+		/* Don't merge packets of different VLANs */
+		if (EVL_VLANOFTAG(head->evh->evl_tag) !=
+		    EVL_VLANOFTAG(tail->evh->evl_tag))
+			return 0;
+
+		/* Don't merge packets of different priorities */
+		if (EVL_PRIOFTAG(head->evh->evl_tag) !=
+		    EVL_PRIOFTAG(tail->evh->evl_tag))
+			return 0;
+	} else if (head->evh || tail->evh)
+		return 0;
+
+	/* Check TCP ports. */
+	if (head->tcp->th_sport != tail->tcp->th_sport ||
+	    head->tcp->th_dport != tail->tcp->th_dport)
+		return 0;
+
+	/* Check IP header. */
+	if (head->ip4 && tail->ip4) {
+		/* Check IPv4 addresses. */
+		if (head->ip4->ip_src.s_addr != tail->ip4->ip_src.s_addr ||
+		    head->ip4->ip_dst.s_addr != tail->ip4->ip_dst.s_addr)
+			return 0;
+
+		/* Check max. IPv4 length. */
+		if (head->iplen + tail->iplen > IP_MAXPACKET)
+			return 0;
+	} else if (head->ip6 && tail->ip6) {
+		/* Check IPv6 addresses. */
+		if (!IN6_ARE_ADDR_EQUAL(&head->ip6->ip6_src,
+		    &tail->ip6->ip6_src) ||
+		    !IN6_ARE_ADDR_EQUAL(&head->ip6->ip6_dst,
+		    &tail->ip6->ip6_dst))
+			return 0;
+
+		/* Check max. IPv6 length. */
+		if ((head->iplen - head->iphlen) +
+		    (tail->iplen - tail->iphlen) > IPV6_MAXPACKET)
+			return 0;
+	} else {
+		/* Address family does not match. */
+		return 0;
+	}
+
+	/* Check for contiguous segments. */
+	if (ntohl(head->tcp->th_seq) + head->paylen != ntohl(tail->tcp->th_seq))
+		return 0;
+
+	/* Ignore segments with different TCP options. */
+	if (head->tcphlen != tail->tcphlen)
+		return 0;
+
+	/* TCP timestamp options must match, type and length already checked. */
+	if (head->tcphlen > sizeof(struct tcphdr)) {
+		uint32_t *hoptp = (uint32_t *)(head->tcp + 1);
+		uint32_t *toptp = (uint32_t *)(tail->tcp + 1);
+
+		/* Tail timestamps must be more recent. */
+		if (TSTMP_LT(ntohl(hoptp[1]), ntohl(toptp[1])) ||
+		    TSTMP_LT(ntohl(hoptp[2]), ntohl(toptp[2])))
+			return 0;
+	}
+
+	return 1;
+}
+
+static void
+tcp_softlro_concat(struct mbuf *mhead, struct ether_extracted *head,
+    struct mbuf *mtail, struct ether_extracted *tail)
+{
+	struct mbuf *m;
+	unsigned int hdrlen;
+
+	/* Adjust IP header length. */
+	if (head->ip4) {
+		head->ip4->ip_len = htons(head->iplen + tail->paylen);
+	} else if (head->ip6) {
+		head->ip6->ip6_plen =
+		    htons(head->iplen - head->iphlen + tail->paylen);
+	}
+
+	/* Combine TCP flags from head and tail. */
+	if (ISSET(tail->tcp->th_flags, TH_PUSH))
+		SET(head->tcp->th_flags, TH_PUSH);
+
+	/* Adjust TCP header. */
+	head->tcp->th_win = tail->tcp->th_win;
+	head->tcp->th_ack = tail->tcp->th_ack;
+
+	/* Use more recent timestamps from tail. */
+	if (head->tcphlen > sizeof(struct tcphdr)) {
+		uint32_t *hoptp = (uint32_t *)(head->tcp + 1);
+		uint32_t *toptp = (uint32_t *)(tail->tcp + 1);
+
+		hoptp[1] = toptp[1];
+		hoptp[2] = toptp[2];
+	}
+
+	/* Calculate header length of tail packet. */
+	hdrlen = sizeof(*tail->eh);
+	if (tail->evh)
+		hdrlen = sizeof(*tail->evh);
+	hdrlen += tail->iphlen;
+	hdrlen += tail->tcphlen;
+
+	/* Skip protocol headers in tail. */
+	m_adj(mtail, hdrlen);
+	CLR(mtail->m_flags, M_PKTHDR);
+
+	/* Concatenate */
+	for (m = mhead; m->m_next != NULL; m = m->m_next)
+		;
+	m->m_next = mtail;
+	mhead->m_pkthdr.len += tail->paylen;
+
+	/* Flag mbuf as TSO packet with MSS. */
+	if (!ISSET(mhead->m_pkthdr.csum_flags, M_TCP_TSO)) {
+		/* Set CSUM_OUT flags in case of forwarding. */
+		SET(mhead->m_pkthdr.csum_flags, M_TCP_CSUM_OUT);
+		head->tcp->th_sum = 0;
+		if (head->ip4) {
+			SET(mhead->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT);
+			head->ip4->ip_sum = 0;
+		}
+
+		SET(mhead->m_pkthdr.csum_flags, M_TCP_TSO);
+		mhead->m_pkthdr.ph_mss = head->paylen;
+		tcpstat_inc(tcps_inswlro);
+		tcpstat_inc(tcps_inpktlro);	/* count head */
+	}
+	mhead->m_pkthdr.ph_mss = MAX(mhead->m_pkthdr.ph_mss, tail->paylen);
+	tcpstat_inc(tcps_inpktlro);	/* count tail */
+}
+
+void
+tcp_softlro_glue(struct mbuf_list *ml, struct mbuf *mtail, struct ifnet *ifp)
+{
+	struct ether_extracted head, tail;
+	struct mbuf *m, *mhead;
+	unsigned int headcnt, tailcnt;
+
+	if (!ISSET(ifp->if_xflags, IFXF_LRO))
+		goto dontmerge;
+
+	mtail->m_pkthdr.ph_mss = 0;
+
+	ether_extract_headers(mtail, &tail);
+
+	if (tail.tcp) {
+		int tcpdatalen;
+
+		/* Remove possible ethernet padding at the end. */
+		tcpdatalen = tail.iplen - tail.iphlen - tail.tcphlen;
+		if (tcpdatalen < tail.paylen ) {
+			m_adj(mtail, tcpdatalen - tail.paylen);
+			tail.paylen = tcpdatalen;
+		}
+	}
+
+	if (!tcp_softlro_check(mtail, &tail))
+		goto dontmerge;
+
+	tailcnt = 0;
+	for (m = mtail; m != NULL; m = m->m_next) {
+		if (tailcnt++ >= 8)
+			goto dontmerge;
+	}
+
+	mtail->m_pkthdr.ph_mss = tail.paylen;
+
+	for (mhead = ml->ml_head; mhead != NULL; mhead = mhead->m_nextpkt) {
+		/* This packet has been checked and was not mergable before. */
+		if (mhead->m_pkthdr.ph_mss == 0)
+			continue;
+
+		/* Use RSS hash to skip packets of different connections. */
+		if (ISSET(mhead->m_pkthdr.csum_flags, M_FLOWID) &&
+		    ISSET(mtail->m_pkthdr.csum_flags, M_FLOWID) &&
+		    mhead->m_pkthdr.ph_flowid != mtail->m_pkthdr.ph_flowid)
+			continue;
+
+		/* Don't merge packets inside and outside of VLANs */
+		if (ISSET(mhead->m_flags, M_VLANTAG) !=
+		    ISSET(mtail->m_flags, M_VLANTAG))
+			continue;
+
+		if (ISSET(mhead->m_flags, M_VLANTAG)) {
+			/* Don't merge packets of different VLANs */
+			if (EVL_VLANOFTAG(mhead->m_pkthdr.ether_vtag) !=
+			    EVL_VLANOFTAG(mtail->m_pkthdr.ether_vtag))
+				continue;
+
+			/* Don't merge packets of different priorities */
+			if (EVL_PRIOFTAG(mhead->m_pkthdr.ether_vtag) !=
+			    EVL_PRIOFTAG(mtail->m_pkthdr.ether_vtag))
+				continue;
+		}
+
+		ether_extract_headers(mhead, &head);
+		if (!tcp_softlro_compare(&head, &tail))
+			continue;
+
+		/* Limit mbuf chain to avoid m_defrag calls when forwarding. */
+		headcnt = tailcnt;
+		for (m = mhead; m != NULL; m = m->m_next) {
+			if (headcnt++ >= 8)
+				goto dontmerge;
+		}
+
+		tcp_softlro_concat(mhead, &head, mtail, &tail);
+		return;
+	}
+ dontmerge:
+	ml_enqueue(ml, mtail);
+}
+#endif

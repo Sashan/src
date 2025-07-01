@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket.c,v 1.374 2025/02/17 08:56:33 mvs Exp $	*/
+/*	$OpenBSD: uipc_socket.c,v 1.378 2025/05/23 23:41:46 dlg Exp $	*/
 /*	$NetBSD: uipc_socket.c,v 1.21 1996/02/04 02:17:52 christos Exp $	*/
 
 /*
@@ -431,17 +431,16 @@ discard:
 		struct socket *soback;
 
 		sounlock(so);
-		mtx_enter(&so->so_snd.sb_mtx);
 		/*
 		 * Concurrent sounsplice() locks `sb_mtx' mutexes on
 		 * both `so_snd' and `so_rcv' before unsplice sockets.
 		 */
-		if ((soback = so->so_sp->ssp_soback) == NULL) {
-			mtx_leave(&so->so_snd.sb_mtx);
-			goto notsplicedback;
-		}
-		soref(soback);
+		mtx_enter(&so->so_snd.sb_mtx);
+		soback = soref(so->so_sp->ssp_soback);
 		mtx_leave(&so->so_snd.sb_mtx);
+
+		if (soback == NULL)
+			goto notsplicedback;
 
 		/*
 		 * `so' can be only unspliced, and never spliced again.
@@ -1144,8 +1143,11 @@ dontblock:
 				moff += len;
 				orig_resid = 0;
 			} else {
-				if (mp)
+				if (mp) {
+					mtx_leave(&so->so_rcv.sb_mtx);
 					*mp = m_copym(m, 0, len, M_WAIT);
+					mtx_enter(&so->so_rcv.sb_mtx);
+				}
 				m->m_data += len;
 				m->m_len -= len;
 				so->so_rcv.sb_cc -= len;
@@ -1252,9 +1254,9 @@ soshutdown(struct socket *so, int how)
 		sorflush(so);
 		/* FALLTHROUGH */
 	case SHUT_WR:
-		solock(so);
+		solock_shared(so);
 		error = pru_shutdown(so);
-		sounlock(so);
+		sounlock_shared(so);
 		break;
 	default:
 		error = EINVAL;
@@ -1693,7 +1695,15 @@ somove(struct socket *so, int wait)
 				len -= size;
 				break;
 			}
+			if (wait == M_WAIT) {
+				mtx_leave(&sosp->so_snd.sb_mtx);
+				mtx_leave(&so->so_rcv.sb_mtx);
+			}
 			*mp = m_copym(so->so_rcv.sb_mb, 0, size, wait);
+			if (wait == M_WAIT) {
+				mtx_enter(&so->so_rcv.sb_mtx);
+				mtx_enter(&sosp->so_snd.sb_mtx);
+			}
 			if (*mp == NULL) {
 				len -= size;
 				break;
@@ -1861,8 +1871,10 @@ somove(struct socket *so, int wait)
 
 		return (0);
 	}
-	if (timerisset(&so->so_idletv))
-		timeout_add_tv(&so->so_idleto, &so->so_idletv);
+	if (timerisset(&so->so_idletv)) {
+		timeout_add_nsec(&so->so_idleto,
+		    TIMEVAL_TO_NSEC(&so->so_idletv));
+	}
 	return (1);
 }
 #endif /* SOCKET_SPLICE */

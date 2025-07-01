@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipsec_output.c,v 1.100 2025/02/14 13:14:13 dlg Exp $ */
+/*	$OpenBSD: ipsec_output.c,v 1.104 2025/06/21 14:21:17 mvs Exp $ */
 /*
  * The author of this code is Angelos D. Keromytis (angelos@cis.upenn.edu)
  *
@@ -51,10 +51,15 @@
 #include <crypto/cryptodev.h>
 #include <crypto/xform.h>
 
+/*
+ * Locks used to protect data:
+ *	a	atomic
+ */
+
 #ifdef ENCDEBUG
 #define DPRINTF(fmt, args...)						\
 	do {								\
-		if (encdebug)						\
+		if (atomic_load_int(&encdebug))				\
 			printf("%s: " fmt "\n", __func__, ## args);	\
 	} while (0)
 #else
@@ -62,8 +67,8 @@
 	do { } while (0)
 #endif
 
-int	udpencap_enable = 1;	/* enabled by default */
-int	udpencap_port = 4500;	/* triggers decapsulation */
+int	udpencap_enable = 1;	/* [a] enabled by default */
+int	udpencap_port = 4500;	/* [a] triggers decapsulation */
 
 /*
  * Loop over a tdb chain, taking into consideration protocol tunneling. The
@@ -91,7 +96,7 @@ ipsp_process_packet(struct mbuf *m, struct tdb *tdb, int af, int tunalready,
 #endif
 
 	/* Check that the transform is allowed by the administrator. */
-	if ((tdb->tdb_sproto == IPPROTO_ESP && !esp_enable) ||
+	if ((tdb->tdb_sproto == IPPROTO_ESP && !atomic_load_int(&esp_enable)) ||
 	    (tdb->tdb_sproto == IPPROTO_AH && !atomic_load_int(&ah_enable)) ||
 	    (tdb->tdb_sproto == IPPROTO_IPCOMP &&
 	    !atomic_load_int(&ipcomp_enable))) {
@@ -417,8 +422,10 @@ ipsp_process_done(struct mbuf *m, struct tdb *tdb)
 		struct mbuf *mi;
 		struct udphdr *uh;
 		int iphlen;
+		int udpencap_port_local = atomic_load_int(&udpencap_port);
 
-		if (!udpencap_enable || !udpencap_port) {
+		if (!atomic_load_int(&udpencap_enable) ||
+		    !udpencap_port_local) {
 			error = ENXIO;
 			goto drop;
 		}
@@ -445,7 +452,7 @@ ipsp_process_done(struct mbuf *m, struct tdb *tdb)
 			goto drop;
 		}
 		uh = (struct udphdr *)(mtod(mi, caddr_t) + roff);
-		uh->uh_sport = uh->uh_dport = htons(udpencap_port);
+		uh->uh_sport = uh->uh_dport = htons(udpencap_port_local);
 		if (tdb->tdb_udpencap_port)
 			uh->uh_dport = tdb->tdb_udpencap_port;
 
@@ -643,7 +650,8 @@ ipsec_adjust_mtu(struct mbuf *m, u_int32_t mtu)
 
 		mtu -= adjust;
 		tdbp->tdb_mtu = mtu;
-		tdbp->tdb_mtutimeout = gettime() + ip_mtudisc_timeout;
+		tdbp->tdb_mtutimeout = gettime() +
+		    atomic_load_int(&ip_mtudisc_timeout);
 		DPRINTF("spi %08x mtu %d adjust %ld mbuf %p",
 		    ntohl(tdbp->tdb_spi), tdbp->tdb_mtu, adjust, m);
 		tdb_unref(tdbp);

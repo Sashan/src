@@ -1,4 +1,4 @@
-/* $OpenBSD: intr.c,v 1.23 2024/08/05 13:55:34 kettenis Exp $ */
+/* $OpenBSD: intr.c,v 1.25 2025/05/10 10:11:02 visa Exp $ */
 /*
  * Copyright (c) 2011 Dale Rahn <drahn@openbsd.org>
  *
@@ -18,6 +18,8 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
+
+#include <uvm/uvm_extern.h>
 
 #include <arm/cpufunc.h>
 #include <machine/cpu.h>
@@ -62,6 +64,7 @@ void (*arm_intr_dispatch)(void *) = arm_dflt_intr;
 void
 arm_intr(void *frame)
 {
+	uvmexp.intrs++;
 	/* XXX - change this to have irq_dispatch use function pointer */
 	(*arm_intr_dispatch)(frame);
 }
@@ -720,10 +723,9 @@ arm_do_pending_intr(int pcpl)
 	}
 
 	do {
-		DO_SOFTINT(SI_SOFTTTY, IPL_SOFTTTY);
-		DO_SOFTINT(SI_SOFTNET, IPL_SOFTNET);
-		DO_SOFTINT(SI_SOFTCLOCK, IPL_SOFTCLOCK);
-		DO_SOFTINT(SI_SOFT, IPL_SOFT);
+		DO_SOFTINT(SOFTINTR_TTY, IPL_SOFTTTY);
+		DO_SOFTINT(SOFTINTR_NET, IPL_SOFTNET);
+		DO_SOFTINT(SOFTINTR_CLOCK, IPL_SOFTCLOCK);
 	} while (ci->ci_ipending & arm_smask[pcpl]);
 
 	/* Don't use splx... we are here already! */
@@ -762,14 +764,12 @@ arm_init_smask(void)
 
 	for (i = IPL_NONE; i <= IPL_HIGH; i++)  {
 		arm_smask[i] = 0;
-		if (i < IPL_SOFT)
-			arm_smask[i] |= SI_TO_IRQBIT(SI_SOFT);
 		if (i < IPL_SOFTCLOCK)
-			arm_smask[i] |= SI_TO_IRQBIT(SI_SOFTCLOCK);
+			arm_smask[i] |= SI_TO_IRQBIT(SOFTINTR_CLOCK);
 		if (i < IPL_SOFTNET)
-			arm_smask[i] |= SI_TO_IRQBIT(SI_SOFTNET);
+			arm_smask[i] |= SI_TO_IRQBIT(SOFTINTR_NET);
 		if (i < IPL_SOFTTTY)
-			arm_smask[i] |= SI_TO_IRQBIT(SI_SOFTTTY);
+			arm_smask[i] |= SI_TO_IRQBIT(SOFTINTR_TTY);
 	}
 }
 

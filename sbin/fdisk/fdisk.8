@@ -1,4 +1,4 @@
-.\"	$OpenBSD: fdisk.8,v 1.120 2024/09/29 18:00:38 jmc Exp $
+.\"	$OpenBSD: fdisk.8,v 1.128 2025/06/29 16:15:52 krw Exp $
 .\"
 .\"
 .\" Copyright (c) 1997 Tobias Weingartner
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: September 29 2024 $
+.Dd $Mdocdate: June 29 2025 $
 .Dt FDISK 8
 .Os
 .Sh NAME
@@ -24,11 +24,15 @@
 .Sh SYNOPSIS
 .Nm fdisk
 .Op Fl evy
-.Op Fl A  | g | i | u
+.Op Fl A | g | i | u
 .Op Fl b Ar blocks Ns Op @ Ns Ar offset Ns Op : Ns Ar type
 .Op Fl l Ar blocks | Fl c Ar cylinders Fl h Ar heads Fl s Ar sectors
 .Op Fl f Ar file
 .Ar disk
+.Nm fdisk
+.Fl R
+.Op Fl evy
+.Ar disk Op Ar file
 .Sh DESCRIPTION
 .Nm fdisk
 creates and edits MBR and GPT partition tables.
@@ -137,6 +141,33 @@ Treat
 as though it has a size of
 .Ar count
 blocks.
+.It Fl R Ar disk Op Ar file
+Creates a GPT or MBR partition table based on the contents of
+.Ar file .
+.Ar file
+contains the output of
+.Nm Fl v
+(e.g. the fdisk* files in /var/backups) or
+compact GPT partition descriptions of the form
+.Pp
+.Dl <id>:<type>[<start>:<size>]<attributes><name>
+.Pp
+where a new partition UUID is always generated and <attributes><name> is
+optional.
+For example:
+.Pp
+.Dl 0: EFI Sys [64:66560] 0x0 EFI System Area
+.Pp
+If <start> is 0 it is set to the first usable LBA of the largest
+chunk of free space.
+.Pp
+If
+.Ar file
+is not provided,
+.Nm
+attempts to fully restore a GPT if either a primary or secondary
+GPT exists on
+.Ar disk .
 .It Fl u
 Updates the MBR bootcode.
 If a bootcode file is present (see
@@ -176,7 +207,7 @@ If
 has a GPT a terse version of its contents is printed:
 .Bd -literal -offset 1n
 # fdisk sd0
-Disk: sd0       Usable LBA: 64 to 500118128 [500118192 Sectors]
+Disk: sd0	Usable LBA: 64 to 500118128 [500118192 Sectors]
    #: type                                 [       start:         size ]
 ------------------------------------------------------------------------
    1: EFI Sys                              [          64:          960 ]
@@ -190,8 +221,8 @@ does not have a GPT, the first block of
 is printed as an MBR:
 .Bd -literal -offset 1n
 # fdisk sd0
-Disk: sd0      geometry: 121601/255/63 [1953525168 Sectors]
-Offset: 0      Signature: 0xAA55
+Disk: sd0	geometry: 121601/255/63 [1953525168 Sectors]
+Offset: 0	Signature: 0xAA55
            Starting       Ending      LBA Info:
  #: id     C  H  S -      C   H  S [     start:       size ]
 ------------------------------------------------------------------------
@@ -218,7 +249,7 @@ option causes more information to be printed:
 .Bd -literal -offset 1n
 # fdisk -v sd0
 Primary GPT:
-Disk: sd0       Usable LBA: 64 to 500118128 [500118192 Sectors]
+Disk: sd0	Usable LBA: 64 to 500118128 [500118192 Sectors]
 GUID: f0418899-4976-4604-a783-3ebe135a8f12
    #: type                                 [       start:         size ]
       guid                                 name
@@ -229,7 +260,7 @@ GUID: f0418899-4976-4604-a783-3ebe135a8f12
       cd356d77-8369-44b4-996e-79e8b9a47bfe OpenBSD Area
 
 Secondary GPT:
-Disk: sd0       Usable LBA: 64 to 500118128 [500118192 Sectors]
+Disk: sd0	Usable LBA: 64 to 500118128 [500118192 Sectors]
 GUID: f0418899-4976-4604-a783-3ebe135a8f12
    #: type                                 [       start:         size ]
       guid                                 name
@@ -240,8 +271,8 @@ GUID: f0418899-4976-4604-a783-3ebe135a8f12
       cd356d77-8369-44b4-996e-79e8b9a47bfe OpenBSD Area
 
 MBR:
-Disk: sd0       geometry: 31130/255/63 [500118192 Sectors]
-Offset: 0       Signature: 0xAA55
+Disk: sd0	geometry: 31130/255/63 [500118192 Sectors]
+Offset: 0	Signature: 0xAA55
             Starting         Ending         LBA Info:
  #: id      C   H   S -      C   H   S [       start:        size ]
 -------------------------------------------------------------------------------
@@ -304,8 +335,19 @@ is specified a GPT partition table is initialized, including the
 protective MBR.
 .It Cm setpid Ar #
 Sets the identifier of the partition table entry.
-.It Cm edit Ar #
+.It Cm edit Ar # | Ar desc
 Edit an entry in the partition table.
+.Pp
+.Ar #
+(MBR or GPT) triggers interactive editing of the partition.
+.Pp
+.Ar desc
+(GPT only) immediately modifies the partition.
+.Ar desc
+is in the compact format supported by the
+.Fl R
+command line argument.
+.Pp
 The offset and size of the entry may be specified in CHS mode (MBR only),
 by using sector offsets and sizes, or by using
 the units

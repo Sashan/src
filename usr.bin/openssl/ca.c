@@ -1,4 +1,4 @@
-/* $OpenBSD: ca.c,v 1.60 2024/07/08 05:56:17 tb Exp $ */
+/* $OpenBSD: ca.c,v 1.62 2025/04/14 08:39:27 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -104,7 +104,6 @@
 #define ENV_POLICY      	"policy"
 #define ENV_EXTENSIONS      	"x509_extensions"
 #define ENV_CRLEXT      	"crl_extensions"
-#define ENV_MSIE_HACK		"msie_hack"
 #define ENV_NAMEOPT		"name_opt"
 #define ENV_CERTOPT		"cert_opt"
 #define ENV_EXTCOPY		"copy_extensions"
@@ -148,7 +147,6 @@ static int do_revoke(X509 *x509, CA_DB *db, int ext, char *extval);
 static int get_certificate_status(const char *serial, CA_DB *db);
 static int do_updatedb(CA_DB *db);
 static int check_time_format(const char *str);
-static char *bin2hex(unsigned char *, size_t);
 char *make_revocation_str(int rev_type, char *rev_arg);
 int make_revoked(X509_REVOKED *rev, const char *str);
 int old_entry_print(BIO *bp, ASN1_OBJECT *obj, ASN1_STRING *str);
@@ -182,7 +180,6 @@ static struct {
 	int keyform;
 	char *md;
 	int multirdn;
-	int msie_hack;
 	int notext;
 	char *outdir;
 	char *outfile;
@@ -450,11 +447,6 @@ static const struct option ca_options[] = {
 		.desc = "Message digest to use",
 		.type = OPTION_ARG,
 		.opt.arg = &cfg.md,
-	},
-	{
-		.name = "msie_hack",
-		.type = OPTION_FLAG,
-		.opt.flag = &cfg.msie_hack,
 	},
 	{
 		.name = "multivalue-rdn",
@@ -828,11 +820,6 @@ ca_main(int argc, char **argv)
 		ERR_clear_error();
 	if ((f != NULL) && ((*f == 'y') || (*f == 'Y')))
 		cfg.preserve = 1;
-	f = NCONF_get_string(conf, BASE_SECTION, ENV_MSIE_HACK);
-	if (f == NULL)
-		ERR_clear_error();
-	if ((f != NULL) && ((*f == 'y') || (*f == 'Y')))
-		cfg.msie_hack = 1;
 
 	f = NCONF_get_string(conf, cfg.section, ENV_NAMEOPT);
 
@@ -1254,22 +1241,30 @@ ca_main(int argc, char **argv)
 		if (cfg.verbose)
 			BIO_printf(bio_err, "writing new certificates\n");
 		for (i = 0; i < sk_X509_num(cert_sk); i++) {
-			ASN1_INTEGER *serialNumber;
-			int k;
+			BIGNUM *bn;
 			char *serialstr;
-			unsigned char *data;
 			char pempath[PATH_MAX];
+			int k;
 
 			x = sk_X509_value(cert_sk, i);
 
-			serialNumber = X509_get_serialNumber(x);
-			j = ASN1_STRING_length(serialNumber);
-			data = ASN1_STRING_data(serialNumber);
+			if ((bn = ASN1_INTEGER_to_BN(X509_get_serialNumber(x),
+			    NULL)) == NULL)
+				goto err;
 
-			if (j > 0)
-				serialstr = bin2hex(data, j);
-			else
+			if (BN_is_zero(bn)) {
+				/* For consistency, BN_bn2hex(0) is 0, not 00. */
 				serialstr = strdup("00");
+			} else {
+				/*
+				 * Historical behavior is to ignore the sign
+				 * that shouldn't be there anyway.
+				 */
+				BN_set_negative(bn, 0);
+				serialstr = BN_bn2hex(bn);
+			}
+			BN_free(bn);
+
 			if (serialstr != NULL) {
 				k = snprintf(pempath, sizeof(pempath),
 				    "%s/%s.pem", cfg.outdir, serialstr);
@@ -1674,7 +1669,7 @@ do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509, const EVP_MD *dgst,
 	X509_NAME_ENTRY *ne;
 	X509_NAME_ENTRY *tne, *push;
 	EVP_PKEY *pktmp;
-	int ok = -1, i, j, last, nid;
+	int ok = -1, i, j, last;
 	const char *p;
 	CONF_VALUE *cv;
 	OPENSSL_STRING row[DB_NUMBER];
@@ -1716,23 +1711,6 @@ do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509, const EVP_MD *dgst,
 		if (obj == NULL)
 			goto err;
 
-		if (cfg.msie_hack) {
-			/* assume all type should be strings */
-			nid = OBJ_obj2nid(X509_NAME_ENTRY_get_object(ne));
-			if (nid == NID_undef)
-				goto err;
-
-			if (str->type == V_ASN1_UNIVERSALSTRING)
-				ASN1_UNIVERSALSTRING_to_string(str);
-
-			if ((str->type == V_ASN1_IA5STRING) &&
-			    (nid != NID_pkcs9_emailAddress))
-				str->type = V_ASN1_T61STRING;
-
-			if ((nid == NID_pkcs9_emailAddress) &&
-			    (str->type == V_ASN1_PRINTABLESTRING))
-				str->type = V_ASN1_IA5STRING;
-		}
 		/* If no EMAIL is wanted in the subject */
 		if ((OBJ_obj2nid(obj) == NID_pkcs9_emailAddress) && (!email_dn))
 			continue;
@@ -2815,22 +2793,5 @@ unpack_revinfo(ASN1_TIME **prevtm, int *preason, ASN1_OBJECT **phold,
 	if (pinvtm == NULL)
 		ASN1_GENERALIZEDTIME_free(comp_time);
 
-	return ret;
-}
-
-static char *
-bin2hex(unsigned char *data, size_t len)
-{
-	char *ret = NULL;
-	char hex[] = "0123456789ABCDEF";
-	int i;
-
-	if ((ret = malloc(len * 2 + 1)) != NULL) {
-		for (i = 0; i < len; i++) {
-			ret[i * 2 + 0] = hex[data[i] >> 4];
-			ret[i * 2 + 1] = hex[data[i] & 0x0F];
-		}
-		ret[len * 2] = '\0';
-	}
 	return ret;
 }

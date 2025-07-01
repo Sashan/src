@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm.h,v 1.7 2024/08/27 09:16:03 bluhm Exp $ */
+/* $OpenBSD: vmm.h,v 1.10 2025/05/20 13:51:27 dv Exp $ */
 /*
  * Copyright (c) 2014-2023 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -50,6 +50,7 @@ struct vm_create_params {
 	struct vm_mem_range	vcp_memranges[VMM_MAX_MEM_RANGES];
 	char			vcp_name[VMM_MAX_NAME_LEN];
 	int			vcp_sev;
+	int			vcp_seves;
 
         /* Output parameter from VMM_IOC_CREATE */
         uint32_t		vcp_id;
@@ -94,6 +95,9 @@ struct vm_sharemem_params {
 	uint32_t		vsp_vm_id;
 	size_t			vsp_nmemranges;
 	struct vm_mem_range	vsp_memranges[VMM_MAX_MEM_RANGES];
+
+	/* Output parameters from VMM_IOC_SHAREMEM */
+	vaddr_t			vsp_va[VMM_MAX_MEM_RANGES];
 };
 
 struct vm_run_params {
@@ -137,7 +141,7 @@ struct vm_rwvmparams_params {
 #define VMM_IOC_READVMPARAMS _IOWR('V', 9, struct vm_rwvmparams_params)
 /* Set VM params */
 #define VMM_IOC_WRITEVMPARAMS _IOW('V', 10, struct vm_rwvmparams_params)
-#define VMM_IOC_SHAREMEM _IOW('V', 11, struct vm_sharemem_params)
+#define VMM_IOC_SHAREMEM _IOWR('V', 11, struct vm_sharemem_params)
 
 #ifdef _KERNEL
 
@@ -168,14 +172,17 @@ enum {
  *	V	vmm_softc's vm_lock
  */
 struct vm {
-	struct vmspace		 *vm_vmspace;		/* [K] */
-	vm_map_t		 vm_map;		/* [K] */
+	pmap_t			 vm_pmap;		/* [r] */
+
 	uint32_t		 vm_id;			/* [I] */
 	pid_t			 vm_creator_pid;	/* [I] */
+
 	size_t			 vm_nmemranges;		/* [I] */
 	size_t			 vm_memory_size;	/* [I] */
-	char			 vm_name[VMM_MAX_NAME_LEN];
 	struct vm_mem_range	 vm_memranges[VMM_MAX_MEM_RANGES];
+	struct uvm_object	*vm_memory_slot[VMM_MAX_MEM_RANGES]; /* [I] */
+
+	char			 vm_name[VMM_MAX_NAME_LEN];
 	struct refcnt		 vm_refcnt;		/* [a] */
 
 	struct vcpu_head	 vm_vcpu_list;		/* [v] */
@@ -226,6 +233,12 @@ struct vmm_softc {
 	uint16_t		max_vpid;	/* [I] */
 	uint8_t			vpids[512];	/* [p] bitmap of VPID/ASIDs */
 };
+
+extern struct vmm_softc *vmm_softc;
+extern struct pool vm_pool;
+extern struct pool vcpu_pool;
+extern struct cfdriver vmm_cd;
+extern const struct cfattach vmm_ca;
 
 int vmm_probe(struct device *, void *, void *);
 int vmm_activate(struct device *, int);

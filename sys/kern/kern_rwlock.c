@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_rwlock.c,v 1.55 2025/01/29 15:10:09 mpi Exp $	*/
+/*	$OpenBSD: kern_rwlock.c,v 1.57 2025/06/03 00:20:31 dlg Exp $	*/
 
 /*
  * Copyright (c) 2002, 2003 Artur Grabowski <art@openbsd.org>
@@ -27,10 +27,9 @@
 #include <sys/witness.h>
 
 #ifdef RWDIAG
-#include <sys/kernel.h> /* for hz */
-#define RW_SLEEP_TMO	10 * hz
+#define RW_SLEEP_TMO	10000000000ULL /* 10 seconds */
 #else
-#define RW_SLEEP_TMO	0
+#define RW_SLEEP_TMO	INFSLP
 #endif
 
 /*
@@ -302,11 +301,6 @@ rw_do_enter_write(struct rwlock *rwl, int flags)
 			rw_dec(&rwl->rwl_waiters);
 			return (error);
 		}
-		if (ISSET(flags, RW_SLEEPFAIL)) {
-			rw_dec(&rwl->rwl_waiters);
-			rw_exited(rwl);
-			return (EAGAIN);
-		}
 
 		owner = rw_cas(&rwl->rwl_owner, 0, self);
 	} while (owner != 0);
@@ -392,11 +386,9 @@ rw_do_enter_read(struct rwlock *rwl, int flags)
 			db_enter();
 		}
 #endif
-		if (ISSET(flags, RW_INTR) && (error != 0))
-			goto fail;
-		if (ISSET(flags, RW_SLEEPFAIL)) {
-			error = EAGAIN;
-			goto fail;
+		if (ISSET(flags, RW_INTR) && (error != 0)) {
+			rw_dec(&rwl->rwl_readers);
+			return (error);
 		}
 	} while (!rw_read_incr(rwl, 0));
 	rw_dec(&rwl->rwl_readers);
@@ -406,9 +398,6 @@ locked:
 	WITNESS_LOCK(&rwl->rwl_lock_obj, lop_flags);
 
 	return (0);
-fail:
-	rw_dec(&rwl->rwl_readers);
-	return (error);
 }
 
 static int

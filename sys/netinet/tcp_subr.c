@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_subr.c,v 1.208 2025/02/12 21:28:11 bluhm Exp $	*/
+/*	$OpenBSD: tcp_subr.c,v 1.214 2025/06/30 12:43:22 mvs Exp $	*/
 /*	$NetBSD: tcp_subr.c,v 1.22 1996/02/13 23:44:00 christos Exp $	*/
 
 /*
@@ -154,10 +154,10 @@ tcp_init(void)
 	    "tcpcb", NULL);
 	pool_init(&tcpqe_pool, sizeof(struct tcpqent), 0, IPL_SOFTNET, 0,
 	    "tcpqe", NULL);
-	pool_sethardlimit(&tcpqe_pool, tcp_reass_limit, NULL, 0);
+	pool_sethardlimit(&tcpqe_pool, tcp_reass_limit);
 	pool_init(&sackhl_pool, sizeof(struct sackhole), 0, IPL_SOFTNET, 0,
 	    "sackhl", NULL);
-	pool_sethardlimit(&sackhl_pool, tcp_sackhole_limit, NULL, 0);
+	pool_sethardlimit(&sackhl_pool, tcp_sackhole_limit);
 	in_pcbinit(&tcbtable, TCB_INITIAL_HASH_SIZE);
 #ifdef INET6
 	in_pcbinit(&tcb6table, TCB_INITIAL_HASH_SIZE);
@@ -408,11 +408,11 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 #endif /* INET6 */
 	case AF_INET:
 		ip->ip_len = htons(tlen);
-		ip->ip_ttl = ip_defttl;
+		ip->ip_ttl = atomic_load_int(&ip_defttl);
 		ip->ip_tos = 0;
 		ip_output(m, NULL,
 		    tp ? &tp->t_inpcb->inp_route : NULL,
-		    ip_mtudisc ? IP_MTUDISC : 0, NULL,
+		    atomic_load_int(&ip_mtudisc) ? IP_MTUDISC : 0, NULL,
 		    tp ? &tp->t_inpcb->inp_seclevel : NULL, 0);
 		break;
 	}
@@ -440,8 +440,6 @@ tcp_newtcpcb(struct inpcb *inp, int wait)
 	tp->t_inpcb = inp;
 	for (i = 0; i < TCPT_NTIMERS; i++)
 		TCP_TIMER_INIT(tp, i);
-	timeout_set_flags(&tp->t_timer_reaper, tcp_timer_reaper, tp,
-	    KCLOCK_NONE, TIMEOUT_PROC | TIMEOUT_MPSAFE);
 
 	tp->sack_enable = atomic_load_int(&tcp_do_sack);
 	tp->t_flags = atomic_load_int(&tcp_do_rfc1323) ?
@@ -471,7 +469,7 @@ tcp_newtcpcb(struct inpcb *inp, int wait)
 #endif
 	{
 		tp->pf = PF_INET;
-		inp->inp_ip.ip_ttl = ip_defttl;
+		inp->inp_ip.ip_ttl = atomic_load_int(&ip_defttl);
 	}
 
 	inp->inp_ppcb = (caddr_t)tp;
@@ -528,9 +526,8 @@ tcp_close(struct tcpcb *tp)
 	}
 
 	m_free(tp->t_template);
-	/* Free tcpcb after all pending timers have been run. */
-	timeout_add(&tp->t_timer_reaper, 0);
 	inp->inp_ppcb = NULL;
+	pool_put(&tcpcb_pool, tp);
 	soisdisconnected(so);
 	in_pcbdetach(inp);
 	tcpstat_inc(tcps_closed);
@@ -692,7 +689,7 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 			return;
 		}
 		if (inp != NULL)
-			so = in_pcbsolock_ref(inp);
+			so = in_pcbsolock(inp);
 		if (so != NULL)
 			tp = intotcpcb(inp);
 		if (tp != NULL) {
@@ -702,7 +699,7 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 			    SEQ_LT(seq, tp->snd_max))
 				notify(inp, inet6ctlerrmap[cmd]);
 		}
-		in_pcbsounlock_rele(inp, so);
+		in_pcbsounlock(inp, so);
 		in_pcbunref(inp);
 
 		if (tp == NULL &&
@@ -747,7 +744,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		return;
 	else if (PRC_IS_REDIRECT(cmd))
 		notify = in_pcbrtchange, ip = NULL;
-	else if (cmd == PRC_MSGSIZE && ip_mtudisc && ip) {
+	else if (cmd == PRC_MSGSIZE && atomic_load_int(&ip_mtudisc) && ip) {
 		struct inpcb *inp;
 		struct socket *so = NULL;
 		struct tcpcb *tp = NULL;
@@ -762,7 +759,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		    ip->ip_dst, th->th_dport, ip->ip_src, th->th_sport,
 		    rdomain);
 		if (inp != NULL)
-			so = in_pcbsolock_ref(inp);
+			so = in_pcbsolock(inp);
 		if (so != NULL)
 			tp = intotcpcb(inp);
 		if (tp != NULL &&
@@ -779,7 +776,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 			 */
 			mtu = (u_int)ntohs(icp->icmp_nextmtu);
 			if (mtu >= tp->t_pmtud_mtu_sent) {
-				in_pcbsounlock_rele(inp, so);
+				in_pcbsounlock(inp, so);
 				in_pcbunref(inp);
 				return;
 			}
@@ -800,7 +797,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 				 */
 				if (tp->t_flags & TF_PMTUD_PEND) {
 					if (SEQ_LT(tp->t_pmtud_th_seq, seq)) {
-						in_pcbsounlock_rele(inp, so);
+						in_pcbsounlock(inp, so);
 						in_pcbunref(inp);
 						return;
 					}
@@ -810,17 +807,17 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 				tp->t_pmtud_nextmtu = icp->icmp_nextmtu;
 				tp->t_pmtud_ip_len = icp->icmp_ip.ip_len;
 				tp->t_pmtud_ip_hl = icp->icmp_ip.ip_hl;
-				in_pcbsounlock_rele(inp, so);
+				in_pcbsounlock(inp, so);
 				in_pcbunref(inp);
 				return;
 			}
 		} else {
 			/* ignore if we don't have a matching connection */
-			in_pcbsounlock_rele(inp, so);
+			in_pcbsounlock(inp, so);
 			in_pcbunref(inp);
 			return;
 		}
-		in_pcbsounlock_rele(inp, so);
+		in_pcbsounlock(inp, so);
 		in_pcbunref(inp);
 		notify = tcp_mtudisc, ip = NULL;
 	} else if (cmd == PRC_MTUINC)
@@ -840,7 +837,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		    ip->ip_dst, th->th_dport, ip->ip_src, th->th_sport,
 		    rdomain);
 		if (inp != NULL)
-			so = in_pcbsolock_ref(inp);
+			so = in_pcbsolock(inp);
 		if (so != NULL)
 			tp = intotcpcb(inp);
 		if (tp != NULL) {
@@ -849,7 +846,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 			    SEQ_LT(seq, tp->snd_max))
 				notify(inp, errno);
 		}
-		in_pcbsounlock_rele(inp, so);
+		in_pcbsounlock(inp, so);
 		in_pcbunref(inp);
 
 		if (tp == NULL &&
@@ -1021,7 +1018,7 @@ tcp_signature_tdb_zeroize(struct tdb *tdbp)
 
 int
 tcp_signature_tdb_input(struct mbuf **mp, struct tdb *tdbp, int skip,
-    int protoff)
+    int protoff, struct netstack *sn)
 {
 	m_freemp(mp);
 	return (IPPROTO_DONE);

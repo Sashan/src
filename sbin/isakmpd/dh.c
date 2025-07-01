@@ -1,4 +1,4 @@
-/*	$OpenBSD: dh.c,v 1.27 2023/03/31 07:28:46 tb Exp $	*/
+/*	$OpenBSD: dh.c,v 1.29 2025/04/30 03:53:21 tb Exp $	*/
 
 /*
  * Copyright (c) 2010-2014 Reyk Floeter <reyk@openbsd.org>
@@ -221,7 +221,6 @@ struct group_id ike_groups[] = {
 	{ GROUP_ECP, 19, 256, NULL, NULL, NID_X9_62_prime256v1 },
 	{ GROUP_ECP, 20, 384, NULL, NULL, NID_secp384r1 },
 	{ GROUP_ECP, 21, 521, NULL, NULL, NID_secp521r1 },
-	{ GROUP_ECP, 25, 192, NULL, NULL, NID_X9_62_prime192v1 },
 	{ GROUP_ECP, 26, 224, NULL, NULL, NID_secp224r1 },
 	{ GROUP_ECP, 27, 224, NULL, NULL, NID_brainpoolP224r1 },
 	{ GROUP_ECP, 28, 256, NULL, NULL, NID_brainpoolP256r1 },
@@ -581,9 +580,9 @@ ec_raw2point(struct group *group, u_int8_t *buf, size_t len)
 {
 	const EC_GROUP	*ecgroup = NULL;
 	EC_POINT	*point = NULL;
+	EC_POINT	*ret = NULL;
 	BN_CTX		*bnctx = NULL;
 	BIGNUM		*x = NULL, *y = NULL;
-	int		 ret = -1;
 	size_t		 eclen;
 	size_t		 xlen, ylen;
 
@@ -611,10 +610,12 @@ ec_raw2point(struct group *group, u_int8_t *buf, size_t len)
 	if (!EC_POINT_set_affine_coordinates(ecgroup, point, x, y, bnctx))
 		goto done;
 
-	ret = 0;
+	/* success */
+	ret = point;
+	point = NULL;	/* owned by caller */
+
  done:
-	if (ret != 0 && point != NULL)
-		EC_POINT_clear_free(point);
+	EC_POINT_clear_free(point);
 	/* Make sure to erase sensitive data */
 	if (x != NULL)
 		BN_clear(x);
@@ -623,5 +624,5 @@ ec_raw2point(struct group *group, u_int8_t *buf, size_t len)
 	BN_CTX_end(bnctx);
 	BN_CTX_free(bnctx);
 
-	return (point);
+	return (ret);
 }

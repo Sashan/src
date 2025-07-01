@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip_divert.h,v 1.26 2024/07/12 19:50:35 bluhm Exp $ */
+/*      $OpenBSD: ip_divert.h,v 1.30 2025/06/23 12:05:46 bluhm Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -46,6 +46,10 @@ struct divstat {
 
 #include <sys/percpu.h>
 
+#define DIVERT_SENDSPACE	(65536 + 100)
+#define DIVERT_RECVSPACE	(65536 + 100)
+#define DIVERT_HASHSIZE		128
+
 enum divstat_counters {
 	divs_ipackets,
 	divs_noport,
@@ -63,18 +67,27 @@ divstat_inc(enum divstat_counters c)
 	counters_inc(divcounters, c);
 }
 
-extern struct	inpcbtable	divbtable;
-
-extern const struct pr_usrreqs divert_usrreqs;
+extern u_int divert_sendspace;
+extern u_int divert_recvspace;
+extern struct inpcbtable divbtable, divb6table;
+extern const struct pr_usrreqs divert_usrreqs, divert6_usrreqs;
 
 void	 divert_init(void);
 void	 divert_packet(struct mbuf *, int, u_int16_t);
 int	 divert_sysctl(int *, u_int, void *, size_t *, void *, size_t);
+int	 divert_sysctl_divstat(void *, size_t *, void *);
 int	 divert_attach(struct socket *, int, int);
 int	 divert_detach(struct socket *);
 int	 divert_bind(struct socket *, struct mbuf *, struct proc *);
 int	 divert_shutdown(struct socket *);
 int	 divert_send(struct socket *, struct mbuf *, struct mbuf *,
 	     struct mbuf *);
+
+void	 divert6_init(void);
+void	 divert6_packet(struct mbuf *, int, u_int16_t);
+int	 divert6_attach(struct socket *, int, int);
+int	 divert6_send(struct socket *, struct mbuf *, struct mbuf *,
+	     struct mbuf *);
+
 #endif /* _KERNEL */
 #endif /* _IP_DIVERT_H_ */

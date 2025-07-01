@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip_divert.c,v 1.99 2025/01/23 12:51:51 bluhm Exp $ */
+/*      $OpenBSD: ip_divert.c,v 1.106 2025/06/23 12:05:46 bluhm Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -49,22 +49,12 @@
 struct	inpcbtable	divbtable;
 struct	cpumem		*divcounters;
 
-#ifndef DIVERT_SENDSPACE
-#define DIVERT_SENDSPACE	(65536 + 100)
-#endif
 u_int   divert_sendspace = DIVERT_SENDSPACE;	/* [a] */
-#ifndef DIVERT_RECVSPACE
-#define DIVERT_RECVSPACE	(65536 + 100)
-#endif
 u_int   divert_recvspace = DIVERT_RECVSPACE;	/* [a] */
 
-#ifndef DIVERTHASHSIZE
-#define DIVERTHASHSIZE	128
-#endif
-
 const struct sysctl_bounded_args divertctl_vars[] = {
-	{ DIVERTCTL_RECVSPACE, &divert_recvspace, 0, INT_MAX },
-	{ DIVERTCTL_SENDSPACE, &divert_sendspace, 0, INT_MAX },
+	{ DIVERTCTL_RECVSPACE, &divert_recvspace, 0, SB_MAX },
+	{ DIVERTCTL_SENDSPACE, &divert_sendspace, 0, SB_MAX },
 };
 
 const struct pr_usrreqs divert_usrreqs = {
@@ -78,14 +68,12 @@ const struct pr_usrreqs divert_usrreqs = {
 	.pru_peeraddr	= in_peeraddr,
 };
 
-int divbhashsize = DIVERTHASHSIZE;
-
 int	divert_output(struct inpcb *, struct mbuf *, struct mbuf *,
 	    struct mbuf *);
 void
 divert_init(void)
 {
-	in_pcbinit(&divbtable, divbhashsize);
+	in_pcbinit(&divbtable, DIVERT_HASHSIZE);
 	divcounters = counters_alloc(divs_ncounters);
 }
 
@@ -168,7 +156,7 @@ divert_output(struct inpcb *inp, struct mbuf *m, struct mbuf *nam,
 			error = ENETDOWN;
 			goto fail;
 		}
-		ipv4_input(ifp, m);
+		ipv4_input(ifp, m, NULL);
 		if_put(ifp);
 	} else {
 		m->m_pkthdr.ph_rtableid = inp->inp_rtableid;
@@ -245,7 +233,7 @@ divert_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 
 	so = inp->inp_socket;
 	mtx_enter(&so->so_rcv.sb_mtx);
-	if (sbappendaddr(so, &so->so_rcv, sintosa(&sin), m, NULL) == 0) {
+	if (sbappendaddr(&so->so_rcv, sintosa(&sin), m, NULL) == 0) {
 		mtx_leave(&so->so_rcv.sb_mtx);
 		divstat_inc(divs_fullsock);
 		goto bad;
@@ -257,8 +245,7 @@ divert_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 	return;
 
  bad:
-	if (inp != NULL)
-		in_pcbunref(inp);
+	in_pcbunref(inp);
 	m_freem(m);
 }
 

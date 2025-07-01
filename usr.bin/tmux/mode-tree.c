@@ -1,4 +1,4 @@
-/* $OpenBSD: mode-tree.c,v 1.74 2025/02/10 08:18:23 nicm Exp $ */
+/* $OpenBSD: mode-tree.c,v 1.76 2025/04/02 09:31:00 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -58,6 +58,7 @@ struct mode_tree_data {
 	mode_tree_menu_cb         menucb;
 	mode_tree_height_cb       heightcb;
 	mode_tree_key_cb	  keycb;
+	mode_tree_swap_cb	  swapcb;
 
 	struct mode_tree_list	  children;
 	struct mode_tree_list	  saved;
@@ -101,6 +102,7 @@ struct mode_tree_item {
 
 	int				 draw_as_parent;
 	int				 no_tag;
+	int				 align;
 
 	struct mode_tree_list		 children;
 	TAILQ_ENTRY(mode_tree_item)	 entry;
@@ -287,6 +289,35 @@ mode_tree_down(struct mode_tree_data *mtd, int wrap)
 	return (1);
 }
 
+static void
+mode_tree_swap(struct mode_tree_data *mtd, int direction)
+{
+	u_int	current_depth = mtd->line_list[mtd->current].depth;
+	u_int	swap_with, swap_with_depth;
+
+	if (mtd->swapcb == NULL)
+		return;
+
+	/* Find the next line at the same depth with the same parent . */
+	swap_with = mtd->current;
+	do {
+		if (direction < 0 && swap_with < (u_int)-direction)
+			return;
+		if (direction > 0 && swap_with + direction >= mtd->line_size)
+			return;
+		swap_with += direction;
+		swap_with_depth = mtd->line_list[swap_with].depth;
+	} while (swap_with_depth > current_depth);
+	if (swap_with_depth != current_depth)
+		return;
+
+	if (mtd->swapcb(mtd->line_list[mtd->current].item->itemdata,
+	    mtd->line_list[swap_with].item->itemdata)) {
+		mtd->current = swap_with;
+		mode_tree_build(mtd);
+	}
+}
+
 void *
 mode_tree_get_current(struct mode_tree_data *mtd)
 {
@@ -410,9 +441,9 @@ struct mode_tree_data *
 mode_tree_start(struct window_pane *wp, struct args *args,
     mode_tree_build_cb buildcb, mode_tree_draw_cb drawcb,
     mode_tree_search_cb searchcb, mode_tree_menu_cb menucb,
-    mode_tree_height_cb heightcb, mode_tree_key_cb keycb, void *modedata,
-    const struct menu_item *menu, const char **sort_list, u_int sort_size,
-    struct screen **s)
+    mode_tree_height_cb heightcb, mode_tree_key_cb keycb,
+    mode_tree_swap_cb swapcb, void *modedata, const struct menu_item *menu,
+    const char **sort_list, u_int sort_size, struct screen **s)
 {
 	struct mode_tree_data	*mtd;
 	const char		*sort;
@@ -455,6 +486,7 @@ mode_tree_start(struct window_pane *wp, struct args *args,
 	mtd->menucb = menucb;
 	mtd->heightcb = heightcb;
 	mtd->keycb = keycb;
+	mtd->swapcb = swapcb;
 
 	TAILQ_INIT(&mtd->children);
 
@@ -636,6 +668,16 @@ mode_tree_no_tag(struct mode_tree_item *mti)
 	mti->no_tag = 1;
 }
 
+/*
+ * Set the alignment of mti->name: -1 to align left, 0 (default) to not align,
+ * or 1 to align right.
+ */
+void
+mode_tree_align(struct mode_tree_item *mti, int align)
+{
+	mti->align = align;
+}
+
 void
 mode_tree_remove(struct mode_tree_data *mtd, struct mode_tree_item *mti)
 {
@@ -662,7 +704,7 @@ mode_tree_draw(struct mode_tree_data *mtd)
 	char			*text, *start, *key;
 	const char		*tag, *symbol;
 	size_t			 size, n;
-	int			 keylen, pad, namelen[mtd->maxdepth + 1];
+	int			 keylen, pad, alignlen[mtd->maxdepth + 1];
 
 	if (mtd->line_size == 0)
 		return;
@@ -687,12 +729,13 @@ mode_tree_draw(struct mode_tree_data *mtd)
 	}
 
 	for (i = 0; i < mtd->maxdepth + 1; i++)
-		namelen[i] = 0;
+		alignlen[i] = 0;
 	for (i = 0; i < mtd->line_size; i++) {
 		line = &mtd->line_list[i];
 		mti = line->item;
-		if ((int)strlen(mti->name) > namelen[line->depth])
-			namelen[line->depth] = strlen(mti->name);
+		if (mti->align &&
+		    (int)strlen(mti->name) > alignlen[line->depth])
+			alignlen[line->depth] = strlen(mti->name);
 	}
 
 	for (i = 0; i < mtd->line_size; i++) {
@@ -745,7 +788,7 @@ mode_tree_draw(struct mode_tree_data *mtd)
 		else
 			tag = "";
 		xasprintf(&text, "%-*s%s%*s%s%s", keylen, key, start,
-		    namelen[line->depth], mti->name, tag,
+		    mti->align * alignlen[line->depth], mti->name, tag,
 		    (mti->text != NULL) ? ": " : "" );
 		width = utf8_cstrwidth(text);
 		if (width > w)
@@ -1146,6 +1189,14 @@ mode_tree_key(struct mode_tree_data *mtd, struct client *c, key_code *key,
 	case KEYC_WHEELDOWN_PANE:
 	case 'n'|KEYC_CTRL:
 		mode_tree_down(mtd, 1);
+		break;
+	case KEYC_UP|KEYC_SHIFT:
+	case 'K':
+		mode_tree_swap(mtd, -1);
+		break;
+	case KEYC_DOWN|KEYC_SHIFT:
+	case 'J':
+		mode_tree_swap(mtd, 1);
 		break;
 	case KEYC_PPAGE:
 	case 'b'|KEYC_CTRL:

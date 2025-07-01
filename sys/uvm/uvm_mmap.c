@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_mmap.c,v 1.193 2024/12/14 12:07:38 mvs Exp $	*/
+/*	$OpenBSD: uvm_mmap.c,v 1.202 2025/06/13 10:48:56 mpi Exp $	*/
 /*	$NetBSD: uvm_mmap.c,v 1.49 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -607,14 +607,23 @@ sys_pinsyscalls(struct proc *p, void *v, register_t *retval)
 	} */ *uap = v;
 	struct process *pr = p->p_p;
 	struct vm_map *map = &p->p_vmspace->vm_map;
-	int npins, error = 0, i;
+	int npins, error = 0, i, map_flags;
 	vaddr_t base;
 	size_t len;
 	u_int *pins;
 
-	if (pr->ps_libcpin.pn_start ||
-	    (pr->ps_vmspace->vm_map.flags & VM_MAP_PINSYSCALL_ONCE))
+	/* Must be called before any threads are created */
+	if (P_HASSIBLING(p))
 		return (EPERM);
+
+	/* Only allow libc syscall pinning once per process */
+	mtx_enter(&pr->ps_vmspace->vm_map.flags_lock);
+	map_flags = pr->ps_vmspace->vm_map.flags;
+	pr->ps_vmspace->vm_map.flags |= VM_MAP_PINSYSCALL_ONCE;
+	mtx_leave(&pr->ps_vmspace->vm_map.flags_lock);
+	if (map_flags & VM_MAP_PINSYSCALL_ONCE)
+		return (EPERM);
+
 	base = (vaddr_t)SCARG(uap, base);
 	len = (vsize_t)SCARG(uap, len);
 	if (base > SIZE_MAX - len)
@@ -622,12 +631,10 @@ sys_pinsyscalls(struct proc *p, void *v, register_t *retval)
 	if (base < map->min_offset || base+len > map->max_offset)
 		return (EINVAL);
 
-	/* XXX MP unlock */
-
 	npins = SCARG(uap, npins);
 	if (npins < 1 || npins > SYS_MAXSYSCALL)
 		return (E2BIG);
-	pins = malloc(npins * sizeof(u_int), M_PINSYSCALL, M_WAITOK|M_ZERO);
+	pins = mallocarray(npins, sizeof(u_int), M_PINSYSCALL, M_WAITOK|M_ZERO);
 	if (pins == NULL)
 		return (ENOMEM);
 	error = copyin(SCARG(uap, pins), pins, npins * sizeof(u_int));
@@ -668,8 +675,8 @@ int
 sys_mimmutable(struct proc *p, void *v, register_t *retval)
 {
 	struct sys_mimmutable_args /* {
-		immutablearg(void *) addr;
-		immutablearg(size_t) len;
+		syscallarg(void *) addr;
+		syscallarg(size_t) len;
 	} */ *uap = v;
 	vaddr_t addr;
 	vsize_t size, pageoff;
@@ -1006,10 +1013,8 @@ uvm_mmapanon(vm_map_t map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
 	if ((flags & MAP_FIXED) == 0 && size >= __LDPGSZ)
 		align = __LDPGSZ;
 	if ((flags & MAP_SHARED) == 0)
-		/* XXX: defer amap create */
 		uvmflag |= UVM_FLAG_COPYONW;
 	else
-		/* shared: create amap now */
 		uvmflag |= UVM_FLAG_OVERLAY;
 	if (flags & MAP_STACK)
 		uvmflag |= UVM_FLAG_STACK;

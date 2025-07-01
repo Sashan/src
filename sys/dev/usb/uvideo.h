@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvideo.h,v 1.63 2025/01/16 22:58:19 kirill Exp $ */
+/*	$OpenBSD: uvideo.h,v 1.65 2025/04/19 19:35:32 kirill Exp $ */
 
 /*
  * Copyright (c) 2007 Robert Nagy <robert@openbsd.org>
@@ -412,6 +412,16 @@ struct usb_video_stream_header {
 	/* TODO complete struct */
 } __packed;
 
+/* Table 3-19: Color Matching Descriptor */
+struct usb_video_colorformat_desc {
+	uByte	bLength;
+	uByte	bDescriptorType;
+	uByte	bDescriptorSubtype;
+	uByte	bColorPrimaries;
+	uByte	bTransferCharacteristics;
+	uByte	bMatrixCoefficients;
+} __packed;
+
 /* Table 3-1: Motion-JPEG Video Format Descriptor */
 struct usb_video_format_mjpeg_desc {
 	uByte	bLength;
@@ -530,6 +540,7 @@ struct uvideo_frame_buffer {
 	int		 sample;
 	uint8_t		 fid;
 	uint8_t		 error;
+	uint8_t		 mmap_q_full;
 	int		 offset;
 	int		 buf_size;
 	uint8_t		*buf;
@@ -551,6 +562,10 @@ typedef SIMPLEQ_HEAD(, uvideo_mmap) q_mmap;
 
 struct uvideo_format_group {
 	uint32_t				 pixelformat;
+	int					 has_colorformat;
+	uint32_t				 colorspace;
+	uint32_t				 xfer_func;
+	uint32_t				 ycbcr_enc;
 	uint8_t					 format_dfidx;
 	struct uvideo_format_desc		*format;
 	/* frame descriptors for mjpeg and uncompressed are identical */

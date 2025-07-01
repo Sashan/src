@@ -1,4 +1,4 @@
-/* $OpenBSD: asn_mime.c,v 1.35 2025/01/17 05:02:18 tb Exp $ */
+/* $OpenBSD: asn_mime.c,v 1.37 2025/06/02 12:18:21 jsg Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -59,10 +59,10 @@
 
 #include <openssl/asn1.h>
 #include <openssl/asn1t.h>
-#include <openssl/err.h>
 #include <openssl/x509.h>
 
 #include "asn1_local.h"
+#include "err_local.h"
 #include "evp_local.h"
 
 /* Generalised MIME like utilities for streaming ASN1. Although many
@@ -507,8 +507,9 @@ SMIME_read_ASN1(BIO *bio, BIO **bcont, const ASN1_ITEM *it)
 			*bcont = sk_BIO_value(parts, 0);
 			BIO_free(asnin);
 			sk_BIO_free(parts);
-		} else sk_BIO_pop_free(parts, BIO_vfree);
-			return val;
+		} else
+			sk_BIO_pop_free(parts, BIO_vfree);
+		return val;
 	}
 
 	/* OK, if not multipart/signed try opaque signature */

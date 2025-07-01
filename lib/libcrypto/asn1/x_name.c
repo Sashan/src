@@ -1,4 +1,4 @@
-/* $OpenBSD: x_name.c,v 1.44 2024/07/08 14:48:49 beck Exp $ */
+/* $OpenBSD: x_name.c,v 1.46 2025/05/10 05:54:38 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -61,10 +61,10 @@
 #include <string.h>
 
 #include <openssl/asn1t.h>
-#include <openssl/err.h>
 #include <openssl/x509.h>
 
 #include "asn1_local.h"
+#include "err_local.h"
 #include "x509_local.h"
 
 typedef STACK_OF(X509_NAME_ENTRY) STACK_OF_X509_NAME_ENTRY;
@@ -414,8 +414,10 @@ x509_name_encode(X509_NAME *a)
 			if (!entries)
 				goto memerr;
 			if (!sk_STACK_OF_X509_NAME_ENTRY_push(intname.s,
-			    entries))
+			    entries)) {
+				sk_X509_NAME_ENTRY_free(entries);
 				goto memerr;
+			}
 			set = entry->set;
 		}
 		if (entries == NULL /* if entry->set is bogusly -1 */ ||

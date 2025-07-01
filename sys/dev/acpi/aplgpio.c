@@ -1,4 +1,4 @@
-/*	$OpenBSD: aplgpio.c,v 1.6 2022/10/20 20:40:57 kettenis Exp $	*/
+/*	$OpenBSD: aplgpio.c,v 1.8 2025/06/16 15:44:35 kettenis Exp $	*/
 /*
  * Copyright (c) 2016 Mark Kettenis
  * Copyright (c) 2019 James Hastings
@@ -40,6 +40,7 @@
 struct aplgpio_intrhand {
 	int (*ih_func)(void *);
 	void *ih_arg;
+	int ih_ipl;
 };
 
 struct aplgpio_softc {
@@ -75,7 +76,7 @@ const char *aplgpio_hids[] = {
 
 int	aplgpio_read_pin(void *, int);
 void	aplgpio_write_pin(void *, int, int);
-void	aplgpio_intr_establish(void *, int, int, int (*)(void *), void *);
+void	aplgpio_intr_establish(void *, int, int, int, int (*)(void *), void *);
 void	aplgpio_intr_enable(void *, int);
 void	aplgpio_intr_disable(void *, int);
 int	aplgpio_intr(void *);
@@ -205,7 +206,7 @@ aplgpio_write_pin(void *cookie, int pin, int value)
 }
 
 void
-aplgpio_intr_establish(void *cookie, int pin, int flags,
+aplgpio_intr_establish(void *cookie, int pin, int flags, int level,
     int (*func)(void *), void *arg)
 {
 	struct aplgpio_softc *sc = cookie;
@@ -215,6 +216,7 @@ aplgpio_intr_establish(void *cookie, int pin, int flags,
 
 	sc->sc_pin_ih[pin].ih_func = func;
 	sc->sc_pin_ih[pin].ih_arg = arg;
+	sc->sc_pin_ih[pin].ih_ipl = level & ~IPL_WAKEUP;
 
 	reg = bus_space_read_4(sc->sc_memt, sc->sc_memh,
 	    APLGPIO_PAD_CFG0 + pin * 8);
@@ -269,9 +271,10 @@ int
 aplgpio_intr(void *arg)
 {
 	struct aplgpio_softc *sc = arg;
+	struct aplgpio_intrhand *ih;
 	uint32_t status, enable;
 	int rc = 0;
-	int pin;
+	int pin, s;
 
 	for (pin = 0; pin < sc->sc_npins; pin++) {
 		if (pin % 32 == 0) {
@@ -284,8 +287,12 @@ aplgpio_intr(void *arg)
 			status &= enable;
 		}
 		if (status & (1 << (pin % 32))) {
-			if (sc->sc_pin_ih[pin].ih_func)
-				sc->sc_pin_ih[pin].ih_func(sc->sc_pin_ih[pin].ih_arg);
+			ih = &sc->sc_pin_ih[pin];
+			if (ih->ih_func) {
+				s = splraise(ih->ih_ipl);
+				ih->ih_func(ih->ih_arg);
+				splx(s);
+			}
 			rc = 1;
 		}
 	}

@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_asn1.c,v 1.110 2025/01/25 10:27:58 tb Exp $ */
+/* $OpenBSD: ec_asn1.c,v 1.112 2025/05/10 05:54:38 tb Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project.
  */
@@ -66,12 +66,12 @@
 #include <openssl/asn1.h>
 #include <openssl/bn.h>
 #include <openssl/ec.h>
-#include <openssl/err.h>
 #include <openssl/asn1t.h>
 #include <openssl/objects.h>
 
 #include "asn1_local.h"
 #include "ec_local.h"
+#include "err_local.h"
 
 int
 EC_GROUP_get_basis_type(const EC_GROUP *group)
@@ -701,26 +701,16 @@ static int
 ec_asn1_encode_field_element(const EC_GROUP *group, const BIGNUM *bn,
     ASN1_OCTET_STRING *os)
 {
-	int len;
-
 	/* Zero-pad field element to byte length of p per SEC 1, 2.3.5. */
-	len = (EC_GROUP_get_degree(group) + 7) / 8;
-	return ec_asn1_encode_bn(group, bn, len, os);
+	return ec_asn1_encode_bn(group, bn, BN_num_bytes(group->p), os);
 }
 
 static int
 ec_asn1_encode_private_key(const EC_GROUP *group, const BIGNUM *bn,
     ASN1_OCTET_STRING *os)
 {
-	const BIGNUM *order;
-
-	if ((order = EC_GROUP_get0_order(group)) == NULL) {
-		ECerror(EC_R_INVALID_GROUP_ORDER);
-		return 0;
-	}
-
 	/* Zero-pad private key to byte length of order per SEC 1, C.4. */
-	return ec_asn1_encode_bn(group, bn, BN_num_bytes(order), os);
+	return ec_asn1_encode_bn(group, bn, BN_num_bytes(group->order), os);
 }
 
 static int

@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-json.c,v 1.51 2024/11/13 12:51:04 tb Exp $ */
+/*	$OpenBSD: output-json.c,v 1.53 2025/04/03 14:29:44 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -58,6 +58,7 @@ outputheader_json(struct stats *st)
 	json_do_int("bgpsec_pubkeys", st->repo_tal_stats.brks);
 	json_do_int("certificates", st->repo_tal_stats.certs);
 	json_do_int("invalidcertificates", st->repo_tal_stats.certs_fail);
+	json_do_int("nonfunctionalcas", st->repo_tal_stats.certs_nonfunc);
 	json_do_int("taks", st->repo_tal_stats.taks);
 	json_do_int("tals", st->tals);
 	json_do_int("invalidtals", talsz - st->tals);
@@ -145,11 +146,13 @@ output_spl(struct vsp_tree *vsps)
 
 int
 output_json(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
-    struct vap_tree *vaps, struct vsp_tree *vsps, struct stats *st)
+    struct vap_tree *vaps, struct vsp_tree *vsps, struct nca_tree *ncas,
+    struct stats *st)
 {
-	char		 buf[64];
-	struct vrp	*v;
-	struct brk	*b;
+	char			 buf[64];
+	struct vrp		*v;
+	struct brk		*b;
+	struct nonfunc_ca	*nca;
 
 	json_do_start(out);
 	outputheader_json(st);
@@ -176,6 +179,18 @@ output_json(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
 		json_do_string("pubkey", b->pubkey);
 		json_do_string("ta", taldescs[b->talid]);
 		json_do_int("expires", b->expires);
+		json_do_end();
+	}
+	json_do_end();
+
+	json_do_array("nonfunc_cas");
+	RB_FOREACH(nca, nca_tree, ncas) {
+		json_do_object("nca", 1);
+		json_do_string("location", nca->location);
+		json_do_string("ta", taldescs[nca->talid]);
+		json_do_string("caRepository", nca->carepo);
+		json_do_string("rpkiManifest", nca->mfturi);
+		json_do_string("ski", nca->ski);
 		json_do_end();
 	}
 	json_do_end();

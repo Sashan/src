@@ -1,4 +1,4 @@
-/* $OpenBSD: dec_axppci_33.c,v 1.23 2014/05/08 20:46:49 miod Exp $ */
+/* $OpenBSD: dec_axppci_33.c,v 1.25 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: dec_axppci_33.c,v 1.44 2000/05/22 20:13:32 thorpej Exp $ */
 
 /*
@@ -77,7 +77,7 @@ const struct alpha_variation_table dec_axppci_33_variations[] = {
 static struct lca_config *lca_preinit(void);
 
 static struct lca_config *
-lca_preinit()
+lca_preinit(void)
 {
 	extern struct lca_config lca_configuration;
 
@@ -96,7 +96,7 @@ lca_preinit()
 #define	NSIO_IDE_ENABLE 0x40
 
 void
-dec_axppci_33_init()
+dec_axppci_33_init(void)
 {
 	int cfg0val;
 	u_int64_t variation;
@@ -140,7 +140,7 @@ dec_axppci_33_init()
 }
 
 static void
-dec_axppci_33_cons_init()
+dec_axppci_33_cons_init(void)
 {
 	struct ctb *ctb;
 	struct lca_config *lcp;
@@ -150,7 +150,7 @@ dec_axppci_33_cons_init()
 	ctb = (struct ctb *)(((caddr_t)hwrpb) + hwrpb->rpb_ctb_off);
 
 	switch (ctb->ctb_term_type) {
-	case CTB_PRINTERPORT: 
+	case CTB_PRINTERPORT:
 		/* serial console ... */
 		/* XXX */
 		{
@@ -199,9 +199,7 @@ dec_axppci_33_cons_init()
 }
 
 static void
-dec_axppci_33_device_register(dev, aux)
-	struct device *dev;
-	void *aux;
+dec_axppci_33_device_register(struct device *dev, void *aux)
 {
 	static int found, initted, diskboot, netboot;
 	static struct device *pcidev, *ctrlrdev;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.236 2025/01/03 10:14:32 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.243 2025/06/30 14:20:26 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -129,20 +129,43 @@ struct cert {
 	int		 talid; /* cert is covered by which TAL */
 	int		 certid;
 	unsigned int	 repoid; /* repository of this cert file */
+	char		*path; /* filename without .rrdp and .rsync prefix */
 	char		*repo; /* CA repository (rsync:// uri) */
 	char		*mft; /* manifest (rsync:// uri) */
 	char		*notify; /* RRDP notify (https:// uri) */
 	char		*crl; /* CRL location (rsync:// or NULL) */
+	char		*signedobj; /* rsync access location for EE certs. */
 	char		*aia; /* AIA (or NULL, for trust anchor) */
 	char		*aki; /* AKI (or NULL, for trust anchor) */
 	char		*ski; /* SKI */
-	enum cert_purpose	 purpose; /* BGPSec or CA */
+	enum cert_purpose	 purpose; /* EE, BGPsec, CA, or TA */
 	char		*pubkey; /* Subject Public Key Info */
 	X509		*x509; /* the cert */
 	time_t		 notbefore; /* cert's Not Before */
 	time_t		 notafter; /* cert's Not After */
 	time_t		 expires; /* when the signature path expires */
 };
+
+/*
+ * Non-functional CA tree element.
+ * Initially all CA and TA certs are added to this tree.
+ * They are removed once they are the issuer of a valid mft.
+ */
+struct nonfunc_ca {
+	RB_ENTRY(nonfunc_ca)	 entry;
+	char			*location;
+	char			*carepo;
+	char			*mfturi;
+	char			*ski;
+	int			 certid;
+	int			 talid;
+};
+
+/*
+ * Tree of nonfunc CAs, sorted by certid.
+ */
+RB_HEAD(nca_tree, nonfunc_ca);
+RB_PROTOTYPE(nca_tree, nonfunc_ca, entry, ncacmp);
 
 /*
  * The TAL file conforms to RFC 7730.
@@ -588,6 +611,8 @@ enum stype {
 	STYPE_PROVIDERS,
 	STYPE_OVERFLOW,
 	STYPE_SEQNUM_GAP,
+	STYPE_FUNC,
+	STYPE_NONFUNC,
 };
 
 struct repo;
@@ -601,6 +626,7 @@ RB_HEAD(filepath_tree, filepath);
 struct repotalstats {
 	uint32_t	 certs; /* certificates */
 	uint32_t	 certs_fail; /* invalid certificate */
+	uint32_t	 certs_nonfunc; /* non-functional CA certificates */
 	uint32_t	 mfts; /* total number of manifests */
 	uint32_t	 mfts_gap; /* manifests with sequence gaps */
 	uint32_t	 mfts_fail; /* failing syntactic parse */
@@ -656,6 +682,7 @@ struct stats {
 
 struct ibuf;
 struct msgbuf;
+struct ibufqueue;
 
 /* global variables */
 extern int verbose;
@@ -687,6 +714,9 @@ struct cert	*ta_parse(const char *, struct cert *, const unsigned char *,
 		    size_t);
 struct cert	*cert_read(struct ibuf *);
 void		 cert_insert_brks(struct brk_tree *, struct cert *);
+void		 cert_insert_nca(struct nca_tree *, const struct cert *,
+		    struct repo *);
+void		 cert_remove_nca(struct nca_tree *, int, struct repo *);
 
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
@@ -696,7 +726,8 @@ struct mft	*mft_parse(X509 **, const char *, int, const unsigned char *,
 struct mft	*mft_read(struct ibuf *);
 int		 mft_compare_issued(const struct mft *, const struct mft *);
 int		 mft_compare_seqnum(const struct mft *, const struct mft *);
-int		 mft_seqnum_gap_present(const struct mft *, const struct mft *);
+int		 mft_seqnum_gap_present(const struct mft *, const struct mft *,
+		    BN_CTX *);
 
 void		 roa_buffer(struct ibuf *, const struct roa *);
 void		 roa_free(struct roa *);
@@ -824,7 +855,7 @@ int		 constraints_validate(const char *, const struct cert *);
 void		 entity_free(struct entity *);
 void		 entity_read_req(struct ibuf *, struct entity *);
 void		 entityq_flush(struct entityq *, struct repo *);
-void		 proc_parser(int) __attribute__((noreturn));
+void		 proc_parser(int, int) __attribute__((noreturn));
 void		 proc_filemode(int) __attribute__((noreturn));
 
 /* Rsync-specific. */
@@ -902,6 +933,7 @@ void		 io_simple_buffer(struct ibuf *, const void *, size_t);
 void		 io_buf_buffer(struct ibuf *, const void *, size_t);
 void		 io_str_buffer(struct ibuf *, const char *);
 void		 io_close_buffer(struct msgbuf *, struct ibuf *);
+void		 io_close_queue(struct ibufqueue *, struct ibuf *);
 void		 io_read_buf(struct ibuf *, void *, size_t);
 void		 io_read_str(struct ibuf *, char **);
 void		 io_read_buf_alloc(struct ibuf *, void **, size_t *);
@@ -921,7 +953,6 @@ int		 x509_get_notafter(X509 *, const char *, time_t *);
 int		 x509_get_crl(X509 *, const char *, char **);
 char		*x509_get_pubkey(X509 *, const char *);
 char		*x509_pubkey_get_ski(X509_PUBKEY *, const char *);
-enum cert_purpose	 x509_get_purpose(X509 *, const char *);
 int		 x509_get_time(const ASN1_TIME *, time_t *);
 char		*x509_convert_seqnum(const char *, const char *,
 		    const ASN1_INTEGER *);
@@ -965,18 +996,24 @@ extern int	 outformats;
 #define FORMAT_OMETRIC	0x10
 
 int		 outputfiles(struct vrp_tree *v, struct brk_tree *b,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 int		 outputheader(FILE *, struct stats *);
 int		 output_bgpd(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 int		 output_bird(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 int		 output_csv(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 int		 output_json(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 int		 output_ometric(FILE *, struct vrp_tree *, struct brk_tree *,
-		    struct vap_tree *, struct vsp_tree *, struct stats *);
+		    struct vap_tree *, struct vsp_tree *, struct nca_tree *,
+		    struct stats *);
 
 void		 logx(const char *fmt, ...)
 		    __attribute__((format(printf, 1, 2)));

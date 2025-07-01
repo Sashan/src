@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched.h,v 1.73 2024/07/08 14:46:47 mpi Exp $	*/
+/*	$OpenBSD: sched.h,v 1.77 2025/06/09 10:57:46 claudio Exp $	*/
 /* $NetBSD: sched.h,v 1.2 1999/02/28 18:14:58 ross Exp $ */
 
 /*-
@@ -97,6 +97,7 @@ struct cpustats {
 
 #include <sys/clockintr.h>
 #include <sys/queue.h>
+#include <sys/pclock.h>
 
 #define	SCHED_NQS	32			/* 32 run queues. */
 
@@ -104,16 +105,17 @@ struct smr_entry;
 
 /*
  * Per-CPU scheduler state.
+ *	o	owned (modified only) by this CPU
  */
 struct schedstate_percpu {
 	struct proc *spc_idleproc;	/* idle proc for this cpu */
 	TAILQ_HEAD(prochead, proc) spc_qs[SCHED_NQS];
-	LIST_HEAD(,proc) spc_deadproc;
+	TAILQ_HEAD(,proc) spc_deadproc;
 	struct timespec spc_runtime;	/* time curproc started running */
 	volatile int spc_schedflags;	/* flags; see below */
 	u_int spc_schedticks;		/* ticks for schedclock() */
+	struct pc_lock spc_cp_time_lock;
 	u_int64_t spc_cp_time[CPUSTATES]; /* CPU state statistics */
-	u_char spc_curpriority;		/* usrpri of curproc */
 
 	struct clockintr spc_itimer;	/* [o] itimer_update handle */
 	struct clockintr spc_profclock;	/* [o] profclock handle */
@@ -131,6 +133,7 @@ struct schedstate_percpu {
 	u_char spc_smrexpedite;		/* if set, dispatch smr entries
 					 * without delay */
 	u_char spc_smrgp;		/* this CPU's view of grace period */
+	volatile u_char spc_curpriority; /* [o] usrpri of curproc */
 };
 
 /* spc_flags */
@@ -156,6 +159,7 @@ void scheduler_start(void);
 void userret(struct proc *p);
 
 struct cpu_info;
+void sched_init(void);
 void sched_init_cpu(struct cpu_info *);
 void sched_idle(void *);
 void sched_exit(struct proc *);
@@ -185,7 +189,6 @@ void sched_stop_secondary_cpus(void);
 #define cpu_is_idle(ci)	((ci)->ci_schedstate.spc_whichqs == 0)
 int	cpu_is_online(struct cpu_info *);
 
-void sched_init_runqueues(void);
 void setrunqueue(struct cpu_info *, struct proc *, uint8_t);
 void remrunqueue(struct proc *);
 

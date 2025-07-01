@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.93 2025/02/04 18:16:56 denis Exp $ */
+/*	$OpenBSD: util.c,v 1.95 2025/03/26 15:29:30 claudio Exp $ */
 
 /*
  * Copyright (c) 2006 Claudio Jeker <claudio@openbsd.org>
@@ -30,7 +30,6 @@
 
 #include "bgpd.h"
 #include "rde.h"
-#include "log.h"
 
 const char *
 log_addr(const struct bgpd_addr *addr)
@@ -93,11 +92,11 @@ log_evpnaddr(const struct bgpd_addr *addr, struct sockaddr *sa,
 	uint32_t	vni;
 	uint8_t		len;
 
-	switch(addr->evpn.type) {
+	switch (addr->evpn.type) {
 	case EVPN_ROUTE_TYPE_2:
 		memcpy(&vni, addr->labelstack, addr->labellen);
 		snprintf(buf, sizeof(buf), "[2]:[%s]:[%s]:[%d]:[48]:[%s]",
-		    log_rd(addr->rd),log_esi(addr->evpn.esi), htonl(vni)>>8,
+		    log_rd(addr->rd), log_esi(addr->evpn.esi), htonl(vni) >> 8,
 		    log_mac(addr->evpn.mac));
 		if (sa != NULL) {
 			len = strlen(buf);
@@ -108,7 +107,7 @@ log_evpnaddr(const struct bgpd_addr *addr, struct sockaddr *sa,
 		break;
 	case EVPN_ROUTE_TYPE_3:
 		if (sa != NULL) {
-	  		memcpy(&vni, addr->labelstack, addr->labellen);
+			memcpy(&vni, addr->labelstack, addr->labellen);
 			snprintf(buf, sizeof(buf), "[3]:[%s]:[%d]:[%s]",
 			    log_rd(addr->rd),
 			    sa->sa_family == AF_INET ? 32 : 128,
@@ -903,8 +902,8 @@ nlri_get_evpn(struct ibuf *buf, struct bgpd_addr *prefix,
 
 	switch (type) {
 	case EVPN_ROUTE_TYPE_2:
-        	if (ibuf_get_ibuf(buf, nlrilen, &evpnbuf) == -1)
-	                return (-1); 
+		if (ibuf_get_ibuf(buf, nlrilen, &evpnbuf) == -1)
+			return (-1);
 		prefix->evpn.type = EVPN_ROUTE_TYPE_2;
 		/* RD */
 		if (ibuf_get_h64(&evpnbuf, &prefix->rd) == -1)
@@ -952,8 +951,8 @@ nlri_get_evpn(struct ibuf *buf, struct bgpd_addr *prefix,
 			return (-1);
 		break;
 	case EVPN_ROUTE_TYPE_3:
-        	if (ibuf_get_ibuf(buf, nlrilen, &evpnbuf) == -1)
-	                return (-1); 
+		if (ibuf_get_ibuf(buf, nlrilen, &evpnbuf) == -1)
+			return (-1);
 		prefix->evpn.type = EVPN_ROUTE_TYPE_3;
 		/* RD */
 		if (ibuf_get_h64(&evpnbuf, &prefix->rd) == -1)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.514 2025/02/12 19:33:20 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.519 2025/03/21 01:06:48 jsg Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -23,15 +23,13 @@
 #include <sys/queue.h>
 #include <sys/tree.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/if_ether.h>
 
-#include <poll.h>
-#include <stdarg.h>
 #include <stdint.h>
-
 #include <imsg.h>
+
+#include "monotime.h"
 
 #define	BGP_VERSION			4
 #define	RTR_MAX_VERSION			2
@@ -281,7 +279,7 @@ struct rde_prefixset {
 	char				name[SET_NAME_LEN];
 	struct trie_head		th;
 	SIMPLEQ_ENTRY(rde_prefixset)	entry;
-	time_t				lastchange;
+	monotime_t			lastchange;
 	int				dirty;
 };
 SIMPLEQ_HEAD(rde_prefixset_head, rde_prefixset);
@@ -506,6 +504,7 @@ struct peer_config {
 	uint16_t		 max_out_prefix_restart;
 	uint16_t		 holdtime;
 	uint16_t		 min_holdtime;
+	uint16_t		 connectretry;
 	uint16_t		 staletime;
 	uint16_t		 local_short_as;
 	uint16_t		 remote_port;
@@ -896,7 +895,7 @@ struct ctl_show_nexthop {
 
 struct ctl_show_set {
 	char			name[SET_NAME_LEN];
-	time_t			lastchange;
+	monotime_t		lastchange;
 	size_t			v4_cnt;
 	size_t			v6_cnt;
 	size_t			as_cnt;
@@ -935,7 +934,7 @@ struct ctl_show_rib {
 	struct bgpd_addr	prefix;
 	struct bgpd_addr	remote_addr;
 	char			descr[PEER_DESCR_LEN];
-	time_t			age;
+	monotime_t		lastchange;
 	uint32_t		remote_id;
 	uint32_t		path_id;
 	uint32_t		local_pref;
@@ -1331,7 +1330,7 @@ struct as_set {
 	char				 name[SET_NAME_LEN];
 	SIMPLEQ_ENTRY(as_set)		 entry;
 	struct set_table		*set;
-	time_t				 lastchange;
+	monotime_t			 lastchange;
 	int				 dirty;
 };
 
@@ -1450,6 +1449,7 @@ struct mrt_config {
 
 /* prototypes */
 /* bgpd.c */
+struct pollfd;
 void		 send_nexthop_update(struct kroute_nexthop *);
 void		 send_imsg_session(int, pid_t, void *, uint16_t);
 int		 send_network(int, struct network_config *,
@@ -1591,11 +1591,7 @@ int	trie_roa_check(struct trie_head *, struct bgpd_addr *, uint8_t,
 void	trie_dump(struct trie_head *);
 int	trie_equal(struct trie_head *, struct trie_head *);
 
-/* timer.c */
-time_t			 getmonotime(void);
-
 /* util.c */
-char		*ibuf_get_string(struct ibuf *, size_t);
 const char	*log_addr(const struct bgpd_addr *);
 const char	*log_evpnaddr(const struct bgpd_addr *, struct sockaddr *,
 		    socklen_t);

@@ -1,4 +1,4 @@
-.\" $OpenBSD: imsg_init.3,v 1.41 2024/11/26 13:57:31 claudio Exp $
+.\" $OpenBSD: imsg_init.3,v 1.46 2025/06/13 18:34:00 schwarze Exp $
 .\"
 .\" Copyright (c) 2023 Claudio Jeker <claudio@openbsd.org>
 .\" Copyright (c) 2010 Nicholas Marriott <nicm@openbsd.org>
@@ -15,7 +15,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: November 26 2024 $
+.Dd $Mdocdate: June 13 2025 $
 .Dt IMSG_ADD 3
 .Os
 .Sh NAME
@@ -27,18 +27,22 @@
 .Nm imsg_create ,
 .Nm imsg_forward ,
 .Nm imsg_free ,
-.Nm imsg_get ,
+.Nm imsg_get_buf ,
 .Nm imsg_get_data ,
 .Nm imsg_get_fd ,
 .Nm imsg_get_ibuf ,
 .Nm imsg_get_id ,
-.Nm imsg_get_ibuf ,
 .Nm imsg_get_len ,
 .Nm imsg_get_pid ,
+.Nm imsg_get_strbuf ,
 .Nm imsg_get_type ,
+.Nm imsg_ibufq_pop ,
+.Nm imsg_ibufq_push ,
+.Nm imsg_set_maxsize ,
 .Nm imsgbuf_allow_fdpass ,
 .Nm imsgbuf_clear ,
 .Nm imsgbuf_flush ,
+.Nm imsgbuf_get ,
 .Nm imsgbuf_init ,
 .Nm imsgbuf_queuelen ,
 .Nm imsgbuf_read ,
@@ -46,7 +50,7 @@
 .Nm imsgbuf_write
 .Nd IPC messaging functions
 .Sh SYNOPSIS
-.In sys/queue.h
+.Lb libutil
 .In imsg.h
 .Fd #define IMSG_HEADER_SIZE sizeof(struct imsg_hdr)
 .Fd #define MAX_IMSGSIZE 16384
@@ -60,15 +64,15 @@
 .Ft int
 .Fn imsg_compose_ibuf "struct imsgbuf *imsgbuf" "uint32_t type" \
     "uint32_t id" "pid_t pid" "struct ibuf *buf"
-.Ft "struct ibuf *"
+.Ft struct ibuf *
 .Fn imsg_create "struct imsgbuf *imsgbuf" "uint32_t type" "uint32_t id" \
     "pid_t pid" "size_t datalen"
 .Ft int
 .Fn imsg_forward "struct imsgbuf *imsgbuf" "struct imsg *msg"
 .Ft void
 .Fn imsg_free "struct imsg *imsg"
-.Ft ssize_t
-.Fn imsg_get "struct imsgbuf *imsgbuf" "struct imsg *imsg"
+.Ft int
+.Fn imsg_get_buf "struct imsg *imsg" "void *data" "size_t len"
 .Ft int
 .Fn imsg_get_data "struct imsg *imsg" "void *data" "size_t len"
 .Ft int
@@ -81,8 +85,16 @@
 .Fn imsg_get_len "struct imsg *imsg"
 .Ft pid_t
 .Fn imsg_get_pid "struct imsg *imsg"
+.Ft int
+.Fn imsg_get_strbuf "struct imsg *imsg" "char *str" "size_t len"
 .Ft uint32_t
 .Fn imsg_get_type "struct imsg *imsg"
+.Ft int
+.Fn imsg_ibufq_pop "struct ibufqueue *bufq" "struct imsg *imsg"
+.Ft void
+.Fn imsg_ibufq_push "struct ibufqueue *bufq" "struct imsg *imsg"
+.Ft int
+.Fn imsg_set_maxsize "struct ibuf *msg" "size_t max"
 .Ft void
 .Fn imsgbuf_allow_fdpass "struct imsgbuf *imsgbuf"
 .Ft void
@@ -90,13 +102,15 @@
 .Ft int
 .Fn imsgbuf_flush "struct imsgbuf *imsgbuf"
 .Ft int
+.Fn imsgbuf_get "struct imsgbuf *imsgbuf" "struct imsg *imsg"
+.Ft int
 .Fn imsgbuf_init "struct imsgbuf *imsgbuf" "int fd"
 .Ft uint32_t
 .Fn imsgbuf_queuelen "struct imsgbuf *imsgbuf"
 .Ft int
 .Fn imsgbuf_read "struct imsgbuf *imsgbuf"
 .Ft int
-.Fn imsgbuf_set_maxsize "struct imsgbuf *imsgbuf" "uint32_t maxsize"
+.Fn imsgbuf_set_maxsize "struct imsgbuf *imsgbuf" "uint32_t max"
 .Ft int
 .Fn imsgbuf_write "struct imsgbuf *imsgbuf"
 .In sys/uio.h
@@ -113,9 +127,6 @@ whole.
 They are commonly used in privilege separated processes, where processes with
 different rights are required to cooperate.
 .Pp
-A program using these functions should be linked with
-.Em -lutil .
-.Pp
 .Fn imsgbuf_init
 initializes
 .Fa imsgbuf
@@ -130,13 +141,9 @@ enables file descriptor passing in both directions for this
 .Fa imsgbuf .
 .Pp
 .Fn imsgbuf_set_maxsize
-changes the default maximum imsg size from
-.Dv MAX_IMSGSIZE
+changes the default maximum payload size
 to
-.Fa maxsize .
-.Fa maxsize
-must be bigger than
-.Dv IMSG_HEADER_SIZE .
+.Fa max .
 It returns 0 if successful and -1 on failure.
 .Pp
 The
@@ -189,6 +196,18 @@ is set to indicate the error.
 should not be called on non-blocking sockets since it will busy loop if the
 socket is not available.
 .Pp
+.Fn imsgbuf_get
+fills in an individual imsg pending on
+.Fa imsgbuf
+into the structure pointed to by
+.Fa imsg .
+It returns 1 on success, 0 if no messages are ready, or \-1 for an error.
+Received messages are returned as a
+.Em struct imsg ,
+which must be freed by
+.Fn imsg_free
+when no longer required.
+.Pp
 .Fn imsgbuf_queuelen
 returns the number of messages ready to be sent.
 This function returns 0 if no messages are pending for transmission.
@@ -232,6 +251,13 @@ It returns
 if it succeeds, otherwise
 .Fa msg
 is freed and \-1 is returned.
+.Pp
+.Fn imsg_set_maxsize
+reduces the maximum payload of
+.Fa msg
+to
+.Fa max .
+The routine returns 0 if it succeeds, \-1 otherwise.
 .Pp
 .Fn imsg_close
 completes creation of
@@ -286,19 +312,6 @@ It is possible to call
 .Fn imsg_forward
 more than once per message.
 .Pp
-.Fn imsg_get
-fills in an individual imsg pending on
-.Fa imsgbuf
-into the structure pointed to by
-.Fa imsg .
-It returns the total size of the message, 0 if no messages are ready, or \-1
-for an error.
-Received messages are returned as a
-.Em struct imsg ,
-which must be freed by
-.Fn imsg_free
-when no longer required.
-.Pp
 The accessors
 .Fn imsg_get_type ,
 .Fn imsg_get_pid ,
@@ -345,6 +358,41 @@ is called and there is no need to call
 .Fn ibuf_free
 on this stack based buffer.
 The function returns 0 on success, \-1 otherwise.
+.Pp
+.Fn imsg_get_buf
+and
+.Fn imsg_get_strbuf
+read
+.Fa len
+bytes from the
+.Fa imsg
+and copy them into
+.Fa buf
+or
+.Fa str ,
+respectively.
+.Fn imsg_get_strbuf
+ensures that
+.Fa str
+is NUL-terminated.
+The functions return 0 on success, \-1 otherwise.
+.Pp
+.Fn imsg_set_maxsize
+reduces the maximum payload of
+.Fa msg
+to
+.Fa max .
+The routine returns 0 if it succeeds, \-1 otherwise.
+.Pp
+.Fn imsg_ibufq_pop
+and
+.Fn imsg_ibufq_push
+allow to requeue an imsg onto the ibufqueue
+.Fa bufq .
+.Fn imsg_ibufq_pop
+returns 1 on success, 0 if no messages are ready, or \-1 for an error.
+See
+.Xr ibufq_new 3 for more info.
 .Pp
 MAX_IMSGSIZE is defined as the maximum size of a single imsg, currently
 16384 bytes.
@@ -421,14 +469,13 @@ When the socket is ready for writing, queued messages are transmitted with
 And when ready for reading, messages are first received using
 .Fn imsgbuf_read
 and then extracted with
-.Fn imsg_get :
+.Fn imsgbuf_get :
 .Bd -literal -offset indent
 void
 dispatch_imsg(struct imsgbuf *imsgbuf)
 {
 	struct imsg	imsg;
-	ssize_t         n;
-	int		idata;
+	int		n, idata;
 
 	switch (imsgbuf_read(imsgbuf)) {
 	case -1:
@@ -440,8 +487,9 @@ dispatch_imsg(struct imsgbuf *imsgbuf)
 	}
 
 	for (;;) {
-		if ((n = imsg_get(imsgbuf, &imsg)) == -1) {
+		if ((n = imsgbuf_get(imsgbuf, &imsg)) == -1) {
 			/* handle read error */
+			break;
 		}
 		if (n == 0)	/* no more messages */
 			return;

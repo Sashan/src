@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.c,v 1.198 2024/10/24 03:14:37 djm Exp $ */
+/* $OpenBSD: misc.c,v 1.200 2025/05/22 03:53:46 dtucker Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2005-2020 Damien Miller.  All rights reserved.
@@ -2159,7 +2159,7 @@ int
 safe_path(const char *name, struct stat *stp, const char *pw_dir,
     uid_t uid, char *err, size_t errlen)
 {
-	char buf[PATH_MAX], homedir[PATH_MAX];
+	char buf[PATH_MAX], buf2[PATH_MAX], homedir[PATH_MAX];
 	char *cp;
 	int comparehome = 0;
 	struct stat st;
@@ -2185,7 +2185,12 @@ safe_path(const char *name, struct stat *stp, const char *pw_dir,
 
 	/* for each component of the canonical path, walking upwards */
 	for (;;) {
-		if ((cp = dirname(buf)) == NULL) {
+		/*
+		 * POSIX allows dirname to modify its argument and return a
+		 * pointer into it, so make a copy to avoid overlapping strlcpy.
+		 */
+		strlcpy(buf2, buf, sizeof(buf2));
+		if ((cp = dirname(buf2)) == NULL) {
 			snprintf(err, errlen, "dirname() failed");
 			return -1;
 		}
@@ -2984,4 +2989,19 @@ signal_is_crash(int sig)
 		return 1;
 	}
 	return 0;
+}
+
+char *
+get_homedir(void)
+{
+	char *cp;
+	struct passwd *pw;
+
+	if ((cp = getenv("HOME")) != NULL && *cp != '\0')
+		return xstrdup(cp);
+
+	if ((pw = getpwuid(getuid())) != NULL && *pw->pw_dir != '\0')
+		return xstrdup(pw->pw_dir);
+
+	return NULL;
 }

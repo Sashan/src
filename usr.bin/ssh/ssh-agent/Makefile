@@ -1,9 +1,9 @@
-#	$OpenBSD: Makefile,v 1.40 2024/04/04 16:00:51 semarie Exp $
+#	$OpenBSD: Makefile,v 1.42 2025/05/06 15:15:05 deraadt Exp $
 
 .PATH:		${.CURDIR}/..
 
 SRCS=	ssh-agent.c ${SRCS_PKCS11_CLIENT}
-SRCS+=	compat.c fatal.c readpass.c utf8.c
+SRCS+=	compat.c fatal.c readpass.c utf8.c misc-agent.c
 SRCS+=	${SRCS_BASE} ${SRCS_KEY} ${SRCS_KEYP} ${SRCS_KRL} ${SRCS_UTL}
 SRCS+=	${SRCS_SK_CLIENT}
 
@@ -27,7 +27,7 @@ install.sh: Makefile
 	echo "set -o errexit" > $@
 	echo "${CC} ${LDFLAGS} ${LDSTATIC} -o ${PROG}" \
 	    "\`echo " ${OBJS} "| tr ' ' '\\\n' | sort -R\`" ${LDADD} >> $@
-	echo "./${PROG} /usr/bin/true" >> $@
+	echo "./${PROG} -T /usr/bin/true" >> $@
 	echo "install -c -s -o ${BINOWN} -g ${BINGRP} -m ${BINMODE} ${PROG} " \
 	    "${BINDIR}/${PROG}" >> $@
 

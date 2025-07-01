@@ -1,4 +1,4 @@
-/*	$OpenBSD: cmd.c,v 1.180 2024/03/01 17:48:03 krw Exp $	*/
+/*	$OpenBSD: cmd.c,v 1.185 2025/06/26 13:33:44 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -68,7 +68,7 @@ Xreinit(const char *args, struct mbr *mbr)
 
 	if (dogpt) {
 		GPT_init(GHANDGP);
-		GPT_print("s", TERSE);
+		GPT_print("s");
 	} else {
 		MBR_init(mbr);
 		MBR_print(mbr, "s");
@@ -270,6 +270,15 @@ Xedit(const char *args, struct mbr *mbr)
 	struct prt		 oldprt;
 	int			 pn;
 
+	if (gh.gh_sig == GPTSIGNATURE && strchr(args, ':')) {
+		if (GPT_recover_partition(args, "", "") == 0)
+			return CMD_DIRTY;	/* New UUID was generated. */
+		else {
+			printf("invalid description or insufficient space\n");
+			return CMD_CONT;
+		}
+	}
+
 	pn = parsepn(args);
 	if (pn == -1)
 		return CMD_CONT;
@@ -297,12 +306,12 @@ gsetpid(const int pn)
 	int32_t			 is_nil;
 	uint32_t		 status;
 
-	GPT_print_parthdr(TERSE);
-	GPT_print_part(pn, "s", TERSE);
+	GPT_print_parthdr();
+	GPT_print_part(pn, "s");
 
 	if (PRT_protected_uuid(&gp[pn].gp_type)) {
 		printf("can't edit partition type %s\n",
-		    PRT_uuid_to_desc(&gp[pn].gp_type));
+		    PRT_uuid_to_desc(&gp[pn].gp_type, 0));
 		return -1;
 	}
 
@@ -310,7 +319,7 @@ gsetpid(const int pn)
 	gp[pn].gp_type = *ask_uuid(&gp[pn].gp_type);
 	if (PRT_protected_uuid(&gp[pn].gp_type) && is_nil == 0) {
 		printf("can't change partition type to %s\n",
-		    PRT_uuid_to_desc(&gp[pn].gp_type));
+		    PRT_uuid_to_desc(&gp[pn].gp_type, 0));
 		return -1;
 	}
 
@@ -407,7 +416,7 @@ int
 Xprint(const char *args, struct mbr *mbr)
 {
 	if (gh.gh_sig == GPTSIGNATURE)
-		GPT_print(args, VERBOSE);
+		GPT_print(args);
 	else if (MBR_valid_prt(mbr))
 		MBR_print(mbr, args);
 	else {
@@ -604,9 +613,8 @@ ask_pid(const int dflt)
 		if (strlen(lbuf) == 0)
 			return dflt;
 		if (strcmp(lbuf, "?") == 0) {
-			PRT_print_mbrmenu(lbuf, sizeof(lbuf));
-			if (strlen(lbuf) == 0)
-				continue;
+			PRT_print_mbrmenu();
+			continue;
 		}
 
 		num = hex_octet(lbuf);
@@ -623,17 +631,10 @@ ask_uuid(const struct uuid *olduuid)
 	char			 lbuf[LINEBUFSZ];
 	static struct uuid	 uuid;
 	const char		*guid;
-	char			*dflt;
+	const char		*dflt;
 	uint32_t		 status;
 
-	dflt = PRT_uuid_to_menudflt(olduuid);
-	if (dflt == NULL) {
-		if (asprintf(&dflt, "00") == -1) {
-			warn("asprintf()");
-			goto done;
-		}
-	}
-
+	dflt = PRT_uuid_to_desc(olduuid, 1);	/* guid, menu id or "00". */
 	for (;;) {
 		printf("Partition id ('0' to disable) [01 - FF, <uuid>]: [%s] ",
 		    dflt);
@@ -641,15 +642,14 @@ ask_uuid(const struct uuid *olduuid)
 		string_from_line(lbuf, sizeof(lbuf), TRIMMED);
 
 		if (strcmp(lbuf, "?") == 0) {
-			PRT_print_gptmenu(lbuf, sizeof(lbuf));
-			if (strlen(lbuf) == 0)
-				continue;
+			PRT_print_gptmenu();
+			continue;
 		} else if (strlen(lbuf) == 0) {
 			uuid = *olduuid;
 			goto done;
 		}
 
-		guid = PRT_menuid_to_guid(hex_octet(lbuf));
+		guid = PRT_desc_to_guid(lbuf);
 		if (guid == NULL)
 			guid = lbuf;
 
@@ -661,6 +661,5 @@ ask_uuid(const struct uuid *olduuid)
 	}
 
  done:
-	free(dflt);
 	return &uuid;
 }

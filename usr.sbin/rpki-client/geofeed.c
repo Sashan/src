@@ -1,4 +1,4 @@
-/*	$OpenBSD: geofeed.c,v 1.17 2024/11/12 09:23:07 tb Exp $ */
+/*	$OpenBSD: geofeed.c,v 1.19 2025/06/27 09:40:34 tb Exp $ */
 /*
  * Copyright (c) 2022 Job Snijders <job@fastly.com>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -81,6 +81,8 @@ geofeed_parse_geoip(struct geofeed *geofeed, char *cidr, char *loc)
 	geoip->ip->ip = *ipaddr;
 	geoip->ip->afi = afi;
 
+	free(ipaddr);
+
 	if ((geoip->loc = strdup(loc)) == NULL)
 		err(1, NULL);
 
@@ -91,7 +93,7 @@ geofeed_parse_geoip(struct geofeed *geofeed, char *cidr, char *loc)
 }
 
 /*
- * Parse a full RFC 9092 file.
+ * Parse a full RFC 9632 file.
  * Returns the Geofeed, or NULL if the object was malformed.
  */
 struct geofeed *

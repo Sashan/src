@@ -1,4 +1,4 @@
-/*	$OpenBSD: part.c,v 1.164 2023/06/19 23:11:57 krw Exp $	*/
+/*	$OpenBSD: part.c,v 1.172 2025/06/22 12:23:08 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -627,20 +627,20 @@ struct menu_item {
 
 const struct menu_item menu_items[] = {
 	{ 0x00,	0x00,	"Unused",	UNUSED_GUID },
-	{ 0x01,	0x01,	"DOS FAT-12",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x01,	0x01,	"FAT12",	MICROSOFT_BASIC_DATA_GUID },
 	{ 0x02,	0x02,	"XENIX /",	NULL },
 	{ 0x03,	0x03,	"XENIX /usr",	NULL },
-	{ 0x04,	0x04,	"DOS FAT-16",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x04,	0x04,	"FAT16",	MICROSOFT_BASIC_DATA_GUID },
 	{ 0x05,	0x05,	"Extended DOS",	NULL },
-	{ 0x06,	0x06,	"DOS > 32MB",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x06,	0x06,	"FAT16B",	MICROSOFT_BASIC_DATA_GUID },
 	{ 0x07,	0x07,	"NTFS",		MICROSOFT_BASIC_DATA_GUID },
 	{ 0x08,	0x08,	"AIX fs",	NULL },
 	{ 0x09,	0x09,	"AIX/Coherent",	NULL },
 	{ 0x0A,	0x0A,	"OS/2 Bootmgr",	NULL },
-	{ 0x0B,	0x0B,	"Win95 FAT-32",	MICROSOFT_BASIC_DATA_GUID },
-	{ 0x0C,	0x0C,	"Win95 FAT32L",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x0B,	0x0B,	"FAT32",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x0C,	0x0C,	"FAT32 (LBA)",	MICROSOFT_BASIC_DATA_GUID },
 	{ 0x0D,   -1,	"BIOS boot",	BIOS_BOOT_GUID },
-	{ 0x0E,	0x0E,	"DOS FAT-16",	MICROSOFT_BASIC_DATA_GUID },
+	{ 0x0E,	0x0E,	"FAT16B (LBA)",	MICROSOFT_BASIC_DATA_GUID },
 	{ 0x0F,	0x0F,	"Extended LBA",	NULL },
 	{ 0x10,	0x10,	"OPUS",		NULL },
 	{ 0x11,	0x11,	"OS/2 hidden",	MICROSOFT_BASIC_DATA_GUID },
@@ -734,8 +734,7 @@ const struct menu_item menu_items[] = {
 void			 chs_to_dp(const unsigned char, const struct chs *,
     uint8_t *, uint8_t *, uint8_t *);
 const struct gpt_type	*find_gpt_type(const struct uuid *);
-const struct menu_item	*find_gpt_menuitem(const struct gpt_type *);
-const char		*find_gpt_desc(const struct gpt_type *);
+const struct menu_item	*find_gpt_menuitem(const char *);
 int			 gpt_item(const unsigned int);
 
 const struct mbr_type	*find_mbr_type(const int);
@@ -745,8 +744,8 @@ int			 mbr_item(const unsigned int);
 
 void			 print_menu(int (*)(const unsigned int),
     const unsigned int);
-int			 nth_menu_item(int (*)(const unsigned int),
-    const unsigned int, unsigned int);
+const struct menu_item	*nth_menu_item(int (*)(const unsigned int),
+    unsigned int);
 
 void
 chs_to_dp(const unsigned char prt_id, const struct chs *chs, uint8_t *dp_cyl,
@@ -776,47 +775,27 @@ find_gpt_type(const struct uuid *uuid)
 	unsigned int		 i;
 	uint32_t		 status;
 
-	if (uuid != NULL) {
-		uuid_to_string(uuid, &guid, &status);
-		if (status == uuid_s_ok) {
-			for (i = 0; i < nitems(gpt_types) && gt == NULL; i++) {
-				if (strcasecmp(gpt_types[i].gt_guid, guid) == 0)
-					gt = &gpt_types[i];
-			}
+	uuid_to_string(uuid, &guid, &status);
+	if (status == uuid_s_ok) {
+		for (i = 0; i < nitems(gpt_types) && gt == NULL; i++) {
+			if (strcasecmp(gpt_types[i].gt_guid, guid) == 0)
+				gt = &gpt_types[i];
 		}
-		free(guid);
 	}
+	free(guid);
 
 	return gt;
 }
 
 const struct menu_item *
-find_gpt_menuitem(const struct gpt_type *gt)
+find_gpt_menuitem(const char *guid)
 {
 	unsigned int		i;
 
-	if (gt != NULL) {
-		for (i = 0; i < nitems(menu_items); i++) {
-			if (gpt_item(i) == 0 &&
-			    strcasecmp(menu_items[i].mi_guid, gt->gt_guid) == 0)
-				return &menu_items[i];
-		}
-	}
-
-	return NULL;
-}
-
-const char *
-find_gpt_desc(const struct gpt_type *gt)
-{
-	const struct menu_item	*mi;
-
-	if (gt != NULL) {
-		if (gt->gt_desc != NULL)
-			return gt->gt_desc;
-		mi = find_gpt_menuitem(gt);
-		if (mi)
-			return mi->mi_name;
+	for (i = 0; i < nitems(menu_items); i++) {
+		if (gpt_item(i) == 0 &&
+		    strcasecmp(menu_items[i].mi_guid, guid) == 0)
+			return &menu_items[i];
 	}
 
 	return NULL;
@@ -885,46 +864,38 @@ mbr_item(const unsigned int item)
 void
 print_menu(int (*test)(const unsigned int), const unsigned int columns)
 {
-	int			 col, col0;
-	unsigned int		 count, i, j, rows;
+	const struct menu_item	 *mi;
+	unsigned int		  i, j, rows;
 
-	count = 0;
-	for (i = 0; i < nitems(menu_items); i++)
-		if (test(i) == 0)
-			count++;
-	rows = (count + columns - 1) / columns;
+	for (i = 0, j= 0; i < nitems(menu_items); i++)
+		j += test(i) == 0;
+	rows = (j + columns - 1) / columns;
 
-	col0 = -1;
 	for (i = 0; i < rows; i++) {
-		col0 = nth_menu_item(test, col0, 1);
-		printf("%02X %-15s", menu_items[col0].mi_menuid,
-		    menu_items[col0].mi_name);
-		for (j = 1; j < columns; j++) {
-			col = nth_menu_item(test, col0, j * rows);
-			if (col == -1)
+		for (j = 0; j < columns; j++) {
+			mi = nth_menu_item(test, i + j * rows);
+			if (mi == NULL)
 				break;
-			printf("%02X %-15s", menu_items[col].mi_menuid,
-			    menu_items[col].mi_name);
+			printf("%02X %-15s", mi->mi_menuid, mi->mi_name);
 		}
 		printf("\n");
 	}
 }
 
-int
-nth_menu_item(int (*test)(const unsigned int), const unsigned int last,
-    unsigned int n)
+const struct menu_item *
+nth_menu_item(int (*test)(const unsigned int), unsigned int n)
 {
 	unsigned int			i;
 
-	for (i = last + 1; i < nitems(menu_items); i++) {
+	for (i = 0; i < nitems(menu_items); i++) {
 		if (test(i) == 0) {
-			n--;
 			if (n == 0)
-				return i;
+				return &menu_items[i];
+			n--;
 		}
 	}
 
-	return -1;
+	return NULL;
 }
 
 int
@@ -951,25 +922,21 @@ PRT_protected_uuid(const struct uuid *uuid)
 }
 
 void
-PRT_print_mbrmenu(char *lbuf, size_t lbuflen)
+PRT_print_mbrmenu(void)
 {
 #define	MBR_MENU_COLUMNS	4
 
 	printf("Choose from the following Partition id values:\n");
 	print_menu(mbr_item,  MBR_MENU_COLUMNS);
-
-	memset(lbuf, 0, lbuflen);	/* Just continue. */
 }
 
 void
-PRT_print_gptmenu(char *lbuf, size_t lbuflen)
+PRT_print_gptmenu(void)
 {
 #define	GPT_MENU_COLUMNS	4
 
 	printf("Choose from the following Partition id values:\n");
 	print_menu(gpt_item, GPT_MENU_COLUMNS);
-
-	memset(lbuf, 0, lbuflen);	/* Just continue. */
 }
 
 void
@@ -1095,53 +1062,62 @@ PRT_lba_to_chs(const struct prt *prt, struct chs *start, struct chs *end)
 }
 
 const char *
-PRT_uuid_to_desc(const struct uuid *uuid)
+PRT_uuid_to_desc(const struct uuid *uuid, int menuid)
 {
-	static char		 guid[UUID_STR_LEN + 1];
-	const char		*desc;
-	char			*str;
-	uint32_t		 status;
-
-	desc = find_gpt_desc(find_gpt_type(uuid));
-	if (desc != NULL)
-		return desc;
-
-	uuid_to_string(uuid, &str, &status);
-	if (status == uuid_s_ok)
-		strlcpy(guid, str, sizeof(guid));
-	else
-		strlcpy(guid, "<Bad UUID>", sizeof(guid));
-	free(str);
-
-	return guid;
-}
-
-char *
-PRT_uuid_to_menudflt(const struct uuid *uuid)
-{
+	static char		 id[UUID_STR_LEN + 1];
+	char			*guid;
+	const struct gpt_type	*gt;
 	const struct menu_item	*mi;
-	char			*dflt;
 	uint32_t		 status;
 
-	mi = find_gpt_menuitem(find_gpt_type(uuid));
-	if (mi == NULL) {
-		uuid_to_string(uuid, &dflt, &status);
-		if (status != uuid_s_ok)
-			return NULL;
-	} else if (asprintf(&dflt, "%02X", mi->mi_menuid) == -1) {
-		return NULL;
+	gt = find_gpt_type(uuid);
+	if (gt) {
+		mi = find_gpt_menuitem(gt->gt_guid);
+		if (mi && menuid) {
+			snprintf(id, sizeof(id), "%02X", mi->mi_menuid);
+			return id;
+		}
+		if (gt->gt_desc)
+			return gt->gt_desc;
+		else if (mi)
+			return mi->mi_name;
+		else
+			return gt->gt_guid;
 	}
 
-	return dflt;
+	uuid_to_string(uuid, &guid, &status);
+	if (status == uuid_s_ok)
+		strlcpy(id, guid, sizeof(id));
+	free(guid);
+	return status == uuid_s_ok ? id : "00";
 }
 
+/*
+ * Accept gt_desc, gt_guid, mi_name or mi_menuid and return the
+ * associated GUID. Or NULL if none found.
+ */
 const char *
-PRT_menuid_to_guid(const int menuid)
+PRT_desc_to_guid(const char *desc)
 {
+	char			octet[3];
 	unsigned int		i;
+	int			menuid = -1;
+
+	for (i = 0; i < nitems(gpt_types); i++) {
+		if (gpt_types[i].gt_desc &&
+		    strcasecmp(gpt_types[i].gt_desc, desc) == 0)
+			return gpt_types[i].gt_guid;
+		if (strcasecmp(gpt_types[i].gt_guid, desc) == 0)
+			return gpt_types[i].gt_guid;
+	}
+
+	if (strlcpy(octet, desc, sizeof(octet)) < sizeof(octet))
+		menuid = hex_octet(octet);
 
 	for (i = 0; i < nitems(menu_items); i++) {
-		if (gpt_item(i) == 0 && menu_items[i].mi_menuid == menuid)
+		if (gpt_item(i) == 0 &&
+		    (strcasecmp(menu_items[i].mi_name, desc) == 0 ||
+		     menu_items[i].mi_menuid == menuid))
 			return menu_items[i].mi_guid;
 	}
 

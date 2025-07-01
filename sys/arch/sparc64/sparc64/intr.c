@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.c,v 1.68 2024/11/08 08:44:07 miod Exp $	*/
+/*	$OpenBSD: intr.c,v 1.72 2025/06/28 11:34:21 miod Exp $	*/
 /*	$NetBSD: intr.c,v 1.39 2001/07/19 23:38:11 eeh Exp $ */
 
 /*
@@ -53,9 +53,6 @@
 #include <machine/ctlreg.h>
 #include <machine/instr.h>
 #include <machine/trap.h>
-
-/* Grab interrupt map stuff (what is it doing there???) */
-#include <sparc64/dev/iommureg.h>
 
 /*
  * The following array is to used by locore.s to map interrupt packets
@@ -283,10 +280,18 @@ intr_barrier(void *cookie)
 void *
 softintr_establish(int level, void (*fun)(void *), void *arg)
 {
-	struct intrhand *ih;
+	level &= ~IPL_MPSAFE;
 
 	if (level == IPL_TTY)
 		level = IPL_SOFTTTY;
+
+	return softintr_establish_raw(level, fun, arg);
+}
+
+void *
+softintr_establish_raw(int level, void (*fun)(void *), void *arg)
+{
+	struct intrhand *ih;
 
 	ih = malloc(sizeof(*ih), M_DEVBUF, M_WAITOK | M_ZERO);
 	ih->ih_fun = (int (*)(void *))fun;	/* XXX */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.114 2025/02/12 16:49:56 claudio Exp $ */
+/*	$OpenBSD: config.c,v 1.116 2025/03/26 15:28:13 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -18,13 +18,13 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 
 #include <errno.h>
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <stddef.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_ipcp.c,v 1.23 2025/01/29 10:16:05 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_ipcp.c,v 1.27 2025/06/25 11:38:21 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2024 Internet Initiative Japan Inc.
@@ -87,6 +87,8 @@ struct assigned_ipv4 {
 	struct in_addr			 nas_ipv4;
 	struct in6_addr			 nas_ipv6;
 	char				 nas_id[256];
+	uint32_t			 nas_port;
+	char				 nas_port_id[256];
 	const char			*tun_type;
 	union {
 		struct sockaddr_in	 sin4;
@@ -180,6 +182,9 @@ struct assigned_ipv4
 		    struct in_addr);
 static struct assigned_ipv4
 		*ipcp_ipv4_find(struct module_ipcp *, struct in_addr);
+static struct assigned_ipv4
+		*ipcp_ipv4_check_valid(struct module_ipcp *,
+		    struct assigned_ipv4 *);
 static void	 ipcp_ipv4_delete(struct module_ipcp *,
 		    struct assigned_ipv4 *, const char *);
 static void	 ipcp_ipv4_release(struct module_ipcp *,
@@ -740,7 +745,7 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 	bool			 found = false;
 	char			 username[256], buf[128];
 	struct user		*user = NULL;
-	struct assigned_ipv4	*assigned = NULL, *assign;
+	struct assigned_ipv4	*assigned = NULL, *assign, *assignt;
 
 	ipcp_update_time(self);
 
@@ -772,6 +777,28 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 	if ((addr = TAILQ_FIRST(&self->addrs)) != NULL) {
 		/* The address assignment is configured */
 
+		struct in_addr		 nas_ipv4;
+		struct in6_addr		 nas_ipv6;
+		char			 nas_id[256];
+		uint32_t		 nas_port;
+		char			 nas_port_id[256];
+
+		memset(&nas_ipv4, 0, sizeof(nas_ipv4));
+		memset(&nas_ipv6, 0, sizeof(nas_ipv6));
+		memset(nas_id, 0, sizeof(nas_id));
+		memset(&nas_port, 0, sizeof(nas_port));
+		memset(nas_port_id, 0, sizeof(nas_port_id));
+
+		radius_get_ipv4_attr(radreq, RADIUS_TYPE_NAS_IP_ADDRESS,
+		    &nas_ipv4);
+		radius_get_ipv6_attr(radreq, RADIUS_TYPE_NAS_IPV6_ADDRESS,
+		    &nas_ipv6);
+		radius_get_string_attr(radreq, RADIUS_TYPE_NAS_IDENTIFIER,
+		    nas_id, sizeof(nas_id));
+		radius_get_uint32_attr(radreq, RADIUS_TYPE_NAS_PORT, &nas_port);
+		radius_get_string_attr(radreq, RADIUS_TYPE_NAS_PORT_ID,
+		    nas_port_id, sizeof(nas_port_id));
+
 		if ((user = ipcp_user_get(self, username)) == NULL) {
 			log_warn("%s: ipcp_user_get()", __func__);
 			goto fatal;
@@ -786,16 +813,41 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 				goto reject;
 			}
 		}
-		if (self->user_max_sessions != 0) {
-			n = 0;
-			TAILQ_FOREACH(assign, &user->ipv4s, next)
-				n++;
-			if (n >= self->user_max_sessions) {
-				log_info("q=%u user=%s rejected: number of "
-				    "sessions per a user reached the limit(%d)",
-				    q_id, user->name, self->user_max_sessions);
-				goto reject;
+
+		n = 0;
+		TAILQ_FOREACH_SAFE(assign, &user->ipv4s, next, assignt) {
+			assign = ipcp_ipv4_check_valid(self, assign);
+			if (assign == NULL)
+				continue;
+			/*
+			 * This assigned IP is for the same NAS Port,
+			 * reuse it.
+			 */
+			if (assign->start.tv_sec == 0 &&
+			    memcmp(&assign->nas_ipv4, &nas_ipv4,
+			    sizeof(struct in_addr)) == 0 &&
+			    memcmp(&assign->nas_ipv6, &nas_ipv6,
+			    sizeof(struct in6_addr)) == 0 && memcmp(
+			    assign->nas_id, nas_id, sizeof(nas_id)) == 0 &&
+			    assign->nas_port == nas_port &&
+			    memcmp(assign->nas_port_id, nas_port_id,
+			    sizeof(nas_port_id)) == 0) {
+				addr4 = assign->ipv4;
+				assigned = assign;
+				assigned->authtime = self->uptime;
+				log_info("q=%u Reassign %s for %s", q_id,
+				    inet_ntop(AF_INET, &addr4, buf,
+				    sizeof(buf)), username);
+				goto reassign;
 			}
+			n++;
+		}
+		if (self->user_max_sessions != 0 &&
+		    n >= self->user_max_sessions) {
+			log_info("q=%u user=%s rejected: number of sessions "
+			    "per a user reached the limit(%d)", q_id,
+			    user->name, self->user_max_sessions);
+			goto reject;
 		}
 
 		msraserr = 716;
@@ -875,11 +927,12 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		}
 		radius_set_ipv4_attr(radres, RADIUS_TYPE_FRAMED_IP_NETMASK,
 		    mask4);
+		log_info("q=%u Assign %s for %s", q_id,
+		    inet_ntop(AF_INET, &addr4, buf, sizeof(buf)), username);
+ reassign:
 		radius_del_attr_all(radres, RADIUS_TYPE_FRAMED_IP_ADDRESS);
 		radius_put_ipv4_attr(radres, RADIUS_TYPE_FRAMED_IP_ADDRESS,
 		    addr4);
-		log_info("q=%u Assign %s for %s", q_id,
-		    inet_ntop(AF_INET, &addr4, buf, sizeof(buf)), username);
 		if (radius_has_attr(radreq, RADIUS_TYPE_USER_PASSWORD))
 			strlcpy(assigned->auth_method, "PAP",
 			    sizeof(assigned->auth_method));
@@ -898,12 +951,12 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 			strlcpy(assigned->auth_method, "EAP",
 			    sizeof(assigned->auth_method));
 
-		radius_get_ipv4_attr(radreq, RADIUS_TYPE_NAS_IP_ADDRESS,
-		    &assigned->nas_ipv4);
-		radius_get_ipv6_attr(radreq, RADIUS_TYPE_NAS_IPV6_ADDRESS,
-		    &assigned->nas_ipv6);
-		radius_get_string_attr(radreq, RADIUS_TYPE_NAS_IDENTIFIER,
-		    assigned->nas_id, sizeof(assigned->nas_id));
+		assigned->nas_ipv4 = nas_ipv4;
+		assigned->nas_ipv6 = nas_ipv6;
+		memcpy(assigned->nas_id, nas_id, sizeof(assign->nas_id));
+		assigned->nas_port = nas_port;
+		memcpy(assigned->nas_port_id, nas_port_id,
+		    sizeof(assign->nas_port_id));
 	}
 
 	if (self->name_server[0].s_addr != 0) {
@@ -1133,11 +1186,12 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 		if (!self->no_session_timeout && (self->session_timeout > 0 ||
 		    assign->session_timeout > 0)) {
 			assign->timeout = assign->start;
-			if (self->session_timeout > 0)
-				assign->timeout.tv_sec += self->session_timeout;
-			else
+			/* prefer the value from the RADIUS attribute */
+			if (assign->session_timeout > 0)
 				assign->timeout.tv_sec +=
 				    assign->session_timeout;
+			else
+				assign->timeout.tv_sec += self->session_timeout;
 		}
 		assign->nas_ipv4 = nas_ipv4;
 		assign->nas_ipv6 = nas_ipv6;
@@ -1150,8 +1204,6 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 		    &uval) == 0)
 			assign->tun_type = radius_tunnel_type_string(uval,
 			    NULL);
-		if (assign->tun_type == NULL)
-			assign->tun_type = "";
 
 		/*
 		 * Get "tunnel from" from Tunnel-Client-Endpoint or Calling-
@@ -1192,9 +1244,10 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 		log_info("q=%u Start seq=%u user=%s duration=%dsec "
 		    "session=%s tunnel=%s from=%s auth=%s ip=%s", q_id,
 		    assign->seq, assign->user->name, delay, assign->session_id,
-		    assign->tun_type, print_addr((struct sockaddr *)
-		    &assign->tun_client, buf1, sizeof(buf1)),
-		    assign->auth_method, inet_ntop(AF_INET, &addr4, buf,
+		    (assign->tun_type != NULL)? assign->tun_type : "",
+		    print_addr((struct sockaddr *)&assign->tun_client, buf1,
+		    sizeof(buf1)), assign->auth_method, inet_ntop(AF_INET,
+		    &addr4, buf,
 		    sizeof(buf)));
 	} else if (type == RADIUS_ACCT_STATUS_TYPE_STOP) {
 		memset(&stat, 0, sizeof(stat));
@@ -1230,8 +1283,9 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 		    "datain=%"PRIu64"bytes,%" PRIu32"packets dataout=%"PRIu64
 		    "bytes,%"PRIu32"packets cause=\"%s\"", q_id,
 		    assign->seq, assign->user->name, dur.tv_sec,
-		    assign->session_id, assign->tun_type, print_addr(
-		    (struct sockaddr *)&assign->tun_client, buf1, sizeof(buf1)),
+		    assign->session_id, (assign->tun_type != NULL)?
+		    assign->tun_type : "", print_addr((struct sockaddr *)
+		    &assign->tun_client, buf1, sizeof(buf1)),
 		    assign->auth_method, inet_ntop(AF_INET, &addr4, buf,
 		    sizeof(buf)), stat.ibytes, stat.ipackets, stat.obytes,
 		    stat.opackets, stat.cause);
@@ -1280,23 +1334,32 @@ struct assigned_ipv4 *
 ipcp_ipv4_find(struct module_ipcp *self, struct in_addr ina)
 {
 	struct assigned_ipv4	 key, *ret;
-	struct timespec		 dif;
 
 	key.ipv4 = ina;
 	ret = RB_FIND(assigned_ipv4_tree, &self->ipv4s, &key);
-	if (ret != NULL && ret->start.tv_sec == 0) {
+	ret = ipcp_ipv4_check_valid(self, ret);
+	return (ret);
+}
+
+struct assigned_ipv4 *
+ipcp_ipv4_check_valid(struct module_ipcp *self, struct assigned_ipv4 *ip)
+{
+	struct timespec		 dif;
+
+	if (ip != NULL && ip->start.tv_sec == 0) {
 		/* not yet assigned */
-		timespecsub(&self->uptime, &ret->authtime, &dif);
+		timespecsub(&self->uptime, &ip->authtime, &dif);
 		if (dif.tv_sec >= self->start_wait) {
 			/* assumed NAS finally didn't use the address */
-			TAILQ_REMOVE(&ret->user->ipv4s, ret, next);
-			RB_REMOVE(assigned_ipv4_tree, &self->ipv4s, ret);
-			free(ret);
-			ret = NULL;
+			TAILQ_REMOVE(&ip->user->ipv4s, ip, next);
+			RB_REMOVE(assigned_ipv4_tree, &self->ipv4s, ip);
+			free(ip);
 			self->nsessions--;
+			return (NULL);
 		}
 	}
-	return (ret);
+
+	return (ip);
 }
 
 void
@@ -1462,6 +1525,7 @@ ipcp_put_db(struct module_ipcp *self, struct assigned_ipv4 *assigned)
 	struct radiusd_ipcp_db_record
 				 record;
 
+	memset(&record, 0, sizeof(record));
 	strlcpy(keybuf, "ipv4/", sizeof(keybuf));
 	inet_ntop(AF_INET, &assigned->ipv4, keybuf + 5, sizeof(keybuf) - 5);
 	key.data = keybuf;

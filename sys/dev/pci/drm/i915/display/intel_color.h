@@ -11,7 +11,6 @@
 struct intel_atomic_state;
 struct intel_crtc_state;
 struct intel_crtc;
-#define drm_i915_private inteldrm_softc
 struct drm_i915_private;
 struct drm_property_blob;
 
@@ -29,6 +28,7 @@ void intel_color_commit_noarm(const struct intel_crtc_state *crtc_state);
 void intel_color_commit_arm(const struct intel_crtc_state *crtc_state);
 void intel_color_post_update(const struct intel_crtc_state *crtc_state);
 void intel_color_load_luts(const struct intel_crtc_state *crtc_state);
+void intel_color_modeset(const struct intel_crtc_state *crtc_state);
 void intel_color_get_config(struct intel_crtc_state *crtc_state);
 bool intel_color_lut_equal(const struct intel_crtc_state *crtc_state,
 			   const struct drm_property_blob *blob1,

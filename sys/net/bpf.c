@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.231 2025/02/05 18:29:17 mvs Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.233 2025/06/12 20:37:58 deraadt Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -1749,13 +1749,22 @@ bpfsattach(caddr_t *bpfp, const char *name, u_int dlt, u_int hdrlen)
 	return (bp);
 }
 
-void
-bpfattach(caddr_t *driverp, struct ifnet *ifp, u_int dlt, u_int hdrlen)
+void *
+bpfxattach(caddr_t *driverp, const char *name, struct ifnet *ifp,
+    u_int dlt, u_int hdrlen)
 {
 	struct bpf_if *bp;
 
-	bp = bpfsattach(driverp, ifp->if_xname, dlt, hdrlen);
+	bp = bpfsattach(driverp, name, dlt, hdrlen);
 	bp->bif_ifp = ifp;
+
+	return (bp);
+}
+
+void
+bpfattach(caddr_t *driverp, struct ifnet *ifp, u_int dlt, u_int hdrlen)
+{
+	bpfxattach(driverp, ifp->if_xname, ifp, dlt, hdrlen);
 }
 
 /* Detach an interface from its attached bpf device.  */
@@ -1799,6 +1808,7 @@ bpfsdetach(void *p)
 	free(bp, M_DEVBUF, sizeof(*bp));
 }
 
+#ifndef SMALL_KERNEL
 int
 bpf_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
@@ -1820,6 +1830,7 @@ bpf_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 
 	/* NOTREACHED */
 }
+#endif /* SMALL_KERNEL */
 
 struct bpf_d *
 bpfilter_lookup(int unit)

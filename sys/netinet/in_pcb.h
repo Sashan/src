@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.h,v 1.165 2025/02/12 21:28:11 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.h,v 1.170 2025/06/08 17:06:19 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.h,v 1.14 1996/02/13 23:42:00 christos Exp $	*/
 
 /*
@@ -81,7 +81,6 @@
  *	t	inpt_mtx		pcb table mutex
  *	L	pf_inp_mtx		link pf to inp mutex
  *	s	so_lock			socket rwlock
- *	f	inp_sofree_mtx		socket detach and lock
  */
 
 /*
@@ -138,9 +137,8 @@ struct inpcb {
 #define	inp_laddr6	inp_laddru.iau_addr6
 	u_int16_t inp_fport;		/* [t] foreign port */
 	u_int16_t inp_lport;		/* [t] local port */
-	struct	  socket *inp_socket;	/* [f] back pointer to socket */
-	struct	  mutex inp_sofree_mtx;	/* protect socket free */
-	caddr_t	  inp_ppcb;		/* pointer to per-protocol pcb */
+	struct	  socket *inp_socket;	/* [I] back pointer to socket */
+	caddr_t	  inp_ppcb;		/* [s] pointer to per-protocol pcb */
 	struct    route inp_route;	/* [s] cached route */
 	struct    refcnt inp_refcnt;	/* refcount PCB, delay memory free */
 	int	  inp_flags;		/* generic IP/datagram flags */
@@ -170,7 +168,7 @@ struct inpcb {
 	struct	icmp6_filter *inp_icmp6filt;
 	struct	pf_state_key *inp_pf_sk; /* [L] */
 	struct	mbuf *(*inp_upcall)(void *, struct mbuf *,
-		    struct ip *, struct ip6_hdr *, void *, int);
+	    struct ip *, struct ip6_hdr *, void *, int, struct netstack *);
 	void	*inp_upcall_arg;
 	u_int	inp_rtableid;		/* [t] */
 	int	inp_pipex;		/* pipex indication */
@@ -311,8 +309,8 @@ int	 in_pcbaddrisavail(const struct inpcb *, struct sockaddr_in *, int,
 int	 in_pcbconnect(struct inpcb *, struct mbuf *);
 void	 in_pcbdetach(struct inpcb *);
 struct socket *
-	 in_pcbsolock_ref(struct inpcb *);
-void	 in_pcbsounlock_rele(struct inpcb *, struct socket *);
+	 in_pcbsolock(struct inpcb *);
+void	 in_pcbsounlock(struct inpcb *, struct socket *);
 struct inpcb *
 	 in_pcbref(struct inpcb *);
 void	 in_pcbunref(struct inpcb *);
@@ -323,8 +321,8 @@ struct inpcb *
 void	 in_pcb_iterator_abort(struct inpcbtable *, struct inpcb *,
 	    struct inpcb_iterator *);
 struct inpcb *
-	 in_pcblookup(struct inpcbtable *, struct in_addr,
-			       u_int, struct in_addr, u_int, u_int);
+	 in_pcblookup(struct inpcbtable *, struct in_addr, u_int,
+	    struct in_addr, u_int, u_int);
 struct inpcb *
 	 in_pcblookup_listen(struct inpcbtable *, struct in_addr, u_int,
 	    struct mbuf *, u_int);
@@ -361,7 +359,8 @@ int	 in_sockaddr(struct socket *, struct mbuf *);
 int	 in_peeraddr(struct socket *, struct mbuf *);
 int	 in_baddynamic(u_int16_t, u_int16_t);
 int	 in_rootonly(u_int16_t, u_int16_t);
-int	 in_pcbselsrc(struct in_addr *, struct sockaddr_in *, struct inpcb *);
+int	 in_pcbselsrc(struct in_addr *, const struct sockaddr_in *,
+	    struct inpcb *);
 struct rtentry *
 	in_pcbrtentry(struct inpcb *);
 
@@ -373,7 +372,10 @@ void	in6_pcbnotify(struct inpcbtable *, const struct sockaddr_in6 *,
 	void (*)(struct inpcb *, int));
 int	in6_selecthlim(const struct inpcb *);
 int	in_pcbset_rtableid(struct inpcb *, u_int);
-void	in_pcbset_laddr(struct inpcb *, const struct sockaddr *, u_int);
+int	in_pcbset_addr(struct inpcb *, const struct sockaddr *,
+	    const struct sockaddr *, u_int);
+int	in6_pcbset_addr(struct inpcb *, const struct sockaddr_in6 *,
+	    const struct sockaddr_in6 *, u_int);
 void	in_pcbunset_faddr(struct inpcb *);
 void	in_pcbunset_laddr(struct inpcb *);
 

@@ -1,4 +1,4 @@
-/*	$Id: http.c,v 1.32 2022/12/14 18:32:26 florian Exp $ */
+/*	$Id: http.c,v 1.35 2025/06/10 16:00:28 florian Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -59,34 +59,10 @@ struct	http {
 	struct source	   src;    /* endpoint (raw) host */
 	char		  *path;   /* path to request */
 	char		  *host;   /* name of endpoint host */
-	struct tls	  *ctx;    /* if TLS */
-	writefp		   writer; /* write function */
-	readfp		   reader; /* read function */
+	struct tls	  *ctx;    /* TLS context */
 };
 
 struct tls_config *tlscfg;
-
-static ssize_t
-dosysread(char *buf, size_t sz, const struct http *http)
-{
-	ssize_t	 rc;
-
-	rc = read(http->fd, buf, sz);
-	if (rc == -1)
-		warn("%s: read", http->src.ip);
-	return rc;
-}
-
-static ssize_t
-dosyswrite(const void *buf, size_t sz, const struct http *http)
-{
-	ssize_t	 rc;
-
-	rc = write(http->fd, buf, sz);
-	if (rc == -1)
-		warn("%s: write", http->src.ip);
-	return rc;
-}
 
 static ssize_t
 dotlsread(char *buf, size_t sz, const struct http *http)
@@ -119,7 +95,7 @@ dotlswrite(const void *buf, size_t sz, const struct http *http)
 }
 
 int
-http_init(void)
+http_init(int insecure)
 {
 	if (tlscfg != NULL)
 		return 0;
@@ -133,6 +109,10 @@ http_init(void)
 	if (tls_config_set_ca_file(tlscfg, tls_default_ca_cert_file()) == -1) {
 		warn("tls_config_set_ca_file: %s", tls_config_error(tlscfg));
 		goto err;
+	}
+	if (insecure) {
+		tls_config_insecure_noverifycert(tlscfg);
+		tls_config_insecure_noverifyname(tlscfg);
 	}
 
 	return 0;
@@ -151,7 +131,7 @@ http_read(char *buf, size_t sz, const struct http *http)
 
 	xfer = 0;
 	do {
-		if ((ssz = http->reader(buf, sz, http)) < 0)
+		if ((ssz = dotlsread(buf, sz, http)) < 0)
 			return -1;
 		if (ssz == 0)
 			break;
@@ -170,7 +150,7 @@ http_write(const char *buf, size_t sz, const struct http *http)
 
 	xfer = sz;
 	while (sz > 0) {
-		if ((ssz = http->writer(buf, sz, http)) < 0)
+		if ((ssz = dotlswrite(buf, sz, http)) < 0)
 			return -1;
 		sz -= ssz;
 		buf += (size_t)ssz;
@@ -291,17 +271,6 @@ again:
 		goto err;
 	}
 
-	/* If necessary, do our TLS setup. */
-
-	if (port != 443) {
-		http->writer = dosyswrite;
-		http->reader = dosysread;
-		return http;
-	}
-
-	http->writer = dotlswrite;
-	http->reader = dotlsread;
-
 	if ((http->ctx = tls_client()) == NULL) {
 		warn("tls_client");
 		goto err;
@@ -334,26 +303,26 @@ http_open(const struct http *http, int headreq, const void *p, size_t psz)
 		if (headreq)
 			c = asprintf(&req,
 			    "HEAD %s HTTP/1.0\r\n"
-			    "Host: %s\r\n"
+			    "Host: %s:%d\r\n"
 			    "User-Agent: OpenBSD-acme-client\r\n"
 			    "\r\n",
-			    http->path, http->host);
+			    http->path, http->host, http->port);
 		else
 			c = asprintf(&req,
 			    "GET %s HTTP/1.0\r\n"
-			    "Host: %s\r\n"
+			    "Host: %s:%d\r\n"
 			    "User-Agent: OpenBSD-acme-client\r\n"
 			    "\r\n",
-			    http->path, http->host);
+			    http->path, http->host, http->port);
 	} else {
 		c = asprintf(&req,
 		    "POST %s HTTP/1.0\r\n"
-		    "Host: %s\r\n"
+		    "Host: %s:%d\r\n"
 		    "Content-Length: %zu\r\n"
 		    "Content-Type: application/jose+json\r\n"
 		    "User-Agent: OpenBSD-acme-client\r\n"
 		    "\r\n",
-		    http->path, http->host, psz);
+		    http->path, http->host, http->port, psz);
 	}
 
 	if (c == -1) {

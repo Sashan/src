@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.464 2025/02/14 13:29:00 ratchov Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.479 2025/06/22 11:34:40 bluhm Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -172,6 +172,10 @@ int hw_sysctl_locked(int *, u_int, void *, size_t *,void *, size_t,
 
 int (*cpu_cpuspeed)(int *);
 
+#ifndef SMALL_KERNEL
+static void sysctl_ci_cp_time(struct cpu_info *, uint64_t *);
+#endif
+
 /*
  * Lock to avoid too many processes vslocking a large amount of memory
  * at the same time.
@@ -260,20 +264,18 @@ sys_sysctl(struct proc *p, void *v, register_t *retval)
 		dolock = 0;
 		fn = hw_sysctl;
 		break;
-	case CTL_VM:
-		fn = uvm_sysctl;
-		break;
 	case CTL_NET:
 		dolock = 0;
 		fn = net_sysctl;
 		break;
-	case CTL_FS:
-		dolock = 0;
-		fn = fs_sysctl;
+#ifndef SMALL_KERNEL
+	case CTL_VM:
+		fn = uvm_sysctl;
 		break;
 	case CTL_VFS:
 		fn = vfs_sysctl;
 		break;
+#endif /* SMALL_KERNEL */
 	case CTL_MACHDEP:
 		fn = cpu_sysctl;
 		break;
@@ -405,11 +407,21 @@ kern_sysctl_dirs(int top_name, int *name, u_int namelen,
 	int error;
 
 	switch (top_name) {
+#ifndef SMALL_KERNEL
+	case KERN_FILE:
+		return (sysctl_file(name, namelen, oldp, oldlenp, p));
 	case KERN_MALLOCSTATS:
 		return (sysctl_malloc(name, namelen, oldp, oldlenp,
 		    newp, newlen, p));
+	case KERN_CPTIME2:
+		return (sysctl_cptime2(name, namelen, oldp, oldlenp,
+		    newp, newlen));
 	case KERN_POOL:
 		return (sysctl_dopool(name, namelen, oldp, oldlenp));
+	case KERN_CPUSTATS:
+		return (sysctl_cpustats(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif /* SMALL_KERNEL */
 #if NAUDIO > 0
 	case KERN_AUDIO:
 		return (sysctl_audio(name, namelen, oldp, oldlenp,
@@ -451,17 +463,25 @@ kern_sysctl_dirs_locked(int top_name, int *name, u_int namelen,
 		     newp, newlen, oldp, oldlenp, p));
 	case KERN_PROC_VMMAP:
 		return (sysctl_proc_vmmap(name, namelen, oldp, oldlenp, p));
-	case KERN_FILE:
-		return (sysctl_file(name, namelen, oldp, oldlenp, p));
-#endif
+	case KERN_INTRCNT:
+		return (sysctl_intrcnt(name, namelen, oldp, oldlenp));
+	case KERN_WATCHDOG:
+		return (sysctl_wdog(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+	case KERN_EVCOUNT:
+		return (evcount_sysctl(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+	case KERN_CLOCKINTR:
+		return sysctl_clockintr(name, namelen, oldp, oldlenp, newp,
+		    newlen);
+	case KERN_TTY:
+		return (sysctl_tty(name, namelen, oldp, oldlenp,
+		    newp, newlen));
 #if defined(GPROF) || defined(DDBPROF)
 	case KERN_PROF:
 		return (sysctl_doprof(name, namelen, oldp, oldlenp,
 		    newp, newlen));
 #endif
-	case KERN_TTY:
-		return (sysctl_tty(name, namelen, oldp, oldlenp,
-		    newp, newlen));
 #if defined(SYSVMSG) || defined(SYSVSEM) || defined(SYSVSHM)
 	case KERN_SYSVIPC_INFO:
 		return (sysctl_sysvipc(name, namelen, oldp, oldlenp));
@@ -476,36 +496,16 @@ kern_sysctl_dirs_locked(int top_name, int *name, u_int namelen,
 		return (sysctl_sysvshm(name, namelen, oldp, oldlenp,
 		    newp, newlen));
 #endif
-#ifndef SMALL_KERNEL
-	case KERN_INTRCNT:
-		return (sysctl_intrcnt(name, namelen, oldp, oldlenp));
-	case KERN_WATCHDOG:
-		return (sysctl_wdog(name, namelen, oldp, oldlenp,
-		    newp, newlen));
-#endif
-#ifndef SMALL_KERNEL
-	case KERN_EVCOUNT:
-		return (evcount_sysctl(name, namelen, oldp, oldlenp,
-		    newp, newlen));
-#endif
 	case KERN_TIMECOUNTER:
 		return (sysctl_tc(name, namelen, oldp, oldlenp, newp, newlen));
-	case KERN_CPTIME2:
-		return (sysctl_cptime2(name, namelen, oldp, oldlenp,
-		    newp, newlen));
 #ifdef WITNESS
 	case KERN_WITNESSWATCH:
 		return witness_sysctl_watch(oldp, oldlenp, newp, newlen);
 	case KERN_WITNESS:
 		return witness_sysctl(name, namelen, oldp, oldlenp,
 		    newp, newlen);
-#endif
-	case KERN_CPUSTATS:
-		return (sysctl_cpustats(name, namelen, oldp, oldlenp,
-		    newp, newlen));
-	case KERN_CLOCKINTR:
-		return sysctl_clockintr(name, namelen, oldp, oldlenp, newp,
-		    newlen);
+#endif /* WITNESS */
+#endif /* SMALL_KERNEL */
 	default:
 		return (ENOTDIR);	/* overloaded */
 	}
@@ -527,9 +527,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		    oldp, oldlenp, newp, newlen, p));
 
 	switch (name[0]) {
-	case KERN_ALLOWKMEM:
-		return (sysctl_securelevel_int(oldp, oldlenp, newp, newlen,
-		    &allowkmem));
 	case KERN_OSTYPE:
 		return (sysctl_rdstring(oldp, oldlenp, newp, ostype));
 	case KERN_OSRELEASE:
@@ -538,8 +535,60 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstring(oldp, oldlenp, newp, osversion));
 	case KERN_VERSION:
 		return (sysctl_rdstring(oldp, oldlenp, newp, version));
-	case KERN_NUMVNODES:  /* XXX numvnodes is a long */
-		return (sysctl_rdint(oldp, oldlenp, newp, numvnodes));
+	case KERN_CONSBUF:
+		if ((error = suser(p)))
+			return (error);
+		/* FALLTHROUGH */
+	case KERN_MSGBUF: {
+		extern struct mutex log_mtx;
+		const size_t hlen = offsetof(struct msgbuf, msg_bufc);
+		struct msgbuf ump, *mp = (name[0] == KERN_MSGBUF) ?
+		    msgbufp : consbufp;
+
+		/*
+		 * deal with cases where the message buffer has
+		 * become corrupted.
+		 */
+		if (!mp || mp->msg_magic != MSG_MAGIC)
+			return (ENXIO);
+		if (newp)
+			return (EPERM);
+		if (oldp) {
+			if ((hlen + mp->msg_bufs) > *oldlenp)
+				return (ENOMEM);
+		} else
+			return (0);
+
+		mtx_enter(&log_mtx);
+		memset(&ump, 0, sizeof(ump));
+		ump.msg_magic = mp->msg_magic;
+		ump.msg_bufs = mp->msg_bufs;
+		ump.msg_bufx = mp->msg_bufx;
+		ump.msg_bufr = mp->msg_bufr;
+		ump.msg_bufd = mp->msg_bufd;
+		mtx_leave(&log_mtx);
+
+		/* copy header... */
+		if ((error = copyout(&ump, oldp, hlen)))
+			return (error);
+		/* ...and the data. */
+		error = copyout(mp->msg_bufc, oldp + hlen, mp->msg_bufs);
+
+		return (error);
+	}
+	case KERN_CONSBUFSIZE:
+	case KERN_MSGBUFSIZE: {
+		struct msgbuf *mp = (name[0] == KERN_MSGBUFSIZE) ?
+		    msgbufp : consbufp;
+
+		/*
+		 * deal with cases where the message buffer has
+		 * become corrupted.
+		 */
+		if (!mp || mp->msg_magic != MSG_MAGIC)
+			return (ENXIO);
+		return (sysctl_rdint(oldp, oldlenp, newp, mp->msg_bufs));
+	}
 #if NDT > 0
 	case KERN_ALLOWDT:
 		return (sysctl_securelevel_int(oldp, oldlenp, newp, newlen,
@@ -549,6 +598,12 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_int(oldp, oldlenp, newp, newlen, &hostid));
 	case KERN_CLOCKRATE:
 		return (sysctl_clockrate(oldp, oldlenp, newp));
+#ifndef SMALL_KERNEL
+	case KERN_ALLOWKMEM:
+		return (sysctl_securelevel_int(oldp, oldlenp, newp, newlen,
+		    &allowkmem));
+	case KERN_NUMVNODES:  /* XXX numvnodes is a long */
+		return (sysctl_rdint(oldp, oldlenp, newp, numvnodes));
 	case KERN_BOOTTIME: {
 		struct timeval bt;
 		memset(&bt, 0, sizeof bt);
@@ -556,43 +611,70 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstruct(oldp, oldlenp, newp, &bt, sizeof bt));
 	}
 	case KERN_MBSTAT: {
-		uint64_t counters[MBSTAT_COUNT];
+		uint64_t counters[mbs_ncounters];
 		struct mbstat mbs;
 		unsigned int i;
 
 		memset(&mbs, 0, sizeof(mbs));
-		counters_read(mbstat, counters, MBSTAT_COUNT, NULL);
-		for (i = 0; i < MBSTAT_TYPES; i++)
+		counters_read(mbstat, counters, mbs_ncounters, NULL);
+		for (i = 0; i < MT_NTYPES; i++)
 			mbs.m_mtypes[i] = counters[i];
-
-		mbs.m_drops = counters[MBSTAT_DROPS];
-		mbs.m_wait = counters[MBSTAT_WAIT];
-		mbs.m_drain = counters[MBSTAT_DRAIN];
-		mbs.m_defrag_alloc = counters[MBSTAT_DEFRAG_ALLOC];
-		mbs.m_prepend_alloc = counters[MBSTAT_PREPEND_ALLOC];
-		mbs.m_pullup_alloc = counters[MBSTAT_PULLUP_ALLOC];
-		mbs.m_pullup_copy = counters[MBSTAT_PULLUP_COPY];
-		mbs.m_pulldown_alloc = counters[MBSTAT_PULLDOWN_ALLOC];
-		mbs.m_pulldown_copy = counters[MBSTAT_PULLDOWN_COPY];
-
+#define ASSIGN(name) do { mbs.m_##name = counters[mbs_##name]; } while (0)
+		ASSIGN(drops);
+		ASSIGN(wait);
+		ASSIGN(drain);
+		ASSIGN(defrag_alloc);
+		ASSIGN(prepend_alloc);
+		ASSIGN(pullup_alloc);
+		ASSIGN(pullup_copy);
+		ASSIGN(pulldown_alloc);
+		ASSIGN(pulldown_copy);
+#undef ASSIGN
 		return (sysctl_rdstruct(oldp, oldlenp, newp,
 		    &mbs, sizeof(mbs)));
 	}
-	case KERN_MSGBUFSIZE:
-	case KERN_CONSBUFSIZE: {
-		struct msgbuf *mp;
-		mp = (name[0] == KERN_MSGBUFSIZE) ? msgbufp : consbufp;
-		/*
-		 * deal with cases where the message buffer has
-		 * become corrupted.
-		 */
-		if (!mp || mp->msg_magic != MSG_MAGIC)
-			return (ENXIO);
-		return (sysctl_rdint(oldp, oldlenp, newp, mp->msg_bufs));
+	case KERN_CPTIME:
+	{
+		CPU_INFO_ITERATOR cii;
+		struct cpu_info *ci;
+		long cp_time[CPUSTATES];
+		int i, n = 0;
+
+		memset(cp_time, 0, sizeof(cp_time));
+
+		CPU_INFO_FOREACH(cii, ci) {
+			uint64_t ci_cp_time[CPUSTATES];
+
+			if (!cpu_is_online(ci))
+				continue;
+
+			n++;
+			sysctl_ci_cp_time(ci, ci_cp_time);
+			for (i = 0; i < CPUSTATES; i++)
+				cp_time[i] += ci_cp_time[i];
+		}
+
+		for (i = 0; i < CPUSTATES; i++)
+			cp_time[i] /= n;
+
+		return (sysctl_rdstruct(oldp, oldlenp, newp, &cp_time,
+		    sizeof(cp_time)));
+	}
+	case KERN_POOL_DEBUG: {
+		extern int pool_debug;
+		int oldval, newval;
+
+		oldval = newval = atomic_load_int(&pool_debug);
+
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &newval);
+		if (error == 0 && oldval != newval &&
+		    oldval == atomic_cas_uint(&pool_debug, oldval, newval))
+			pool_reclaim_all();
+
+		return (error);
 	}
 	case KERN_TIMEOUT_STATS:
 		return (timeout_sysctl(oldp, oldlenp, newp, newlen));
-	case KERN_OSREV:
 	case KERN_MAXPROC:
 	case KERN_MAXFILES:
 	case KERN_NFILES:
@@ -602,24 +684,26 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case KERN_NGROUPS:
 	case KERN_JOB_CONTROL:
 	case KERN_SAVED_IDS:
-	case KERN_MAXPARTITIONS:
-	case KERN_RAWPARTITION:
-	case KERN_MAXTHREAD:
-	case KERN_NTHREADS:
-	case KERN_SOMAXCONN:
-	case KERN_SOMINCONN:
-	case KERN_NOSUIDCOREDUMP:
 	case KERN_FSYNC:
 	case KERN_SYSVMSG:
 	case KERN_SYSVSEM:
 	case KERN_SYSVSHM:
-	case KERN_FSCALE:
-	case KERN_CCPU:
-	case KERN_NPROCS:
+	case KERN_SOMAXCONN:
+	case KERN_SOMINCONN:
+	case KERN_NOSUIDCOREDUMP:
 	case KERN_WXABORT:
 	case KERN_NETLIVELOCKS:
 	case KERN_GLOBAL_PTRACE:
 	case KERN_AUTOCONF_SERIAL:
+#endif /* SMALL_KERNEL */
+	case KERN_OSREV:
+	case KERN_MAXPARTITIONS:
+	case KERN_RAWPARTITION:
+	case KERN_MAXTHREAD:
+	case KERN_NTHREADS:
+	case KERN_FSCALE:
+	case KERN_CCPU:
+	case KERN_NPROCS:
 		return (sysctl_bounded_arr(kern_vars, nitems(kern_vars), name,
 		    namelen, oldp, oldlenp, newp, newlen));
 	}
@@ -638,9 +722,8 @@ int
 kern_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen, struct proc *p)
 {
-	int error, stackgap;
+	int error;
 	dev_t dev;
-	extern int pool_debug;
 
 	switch (name[0]) {
 	case KERN_SECURELVL:
@@ -660,53 +743,16 @@ kern_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		if (newp && !error)
 			domainnamelen = newlen;
 		return (error);
-	case KERN_CONSBUF:
-		if ((error = suser(p)))
-			return (error);
-		/* FALLTHROUGH */
-	case KERN_MSGBUF: {
-		struct msgbuf *mp;
-		mp = (name[0] == KERN_MSGBUF) ? msgbufp : consbufp;
-		/*
-		 * deal with cases where the message buffer has
-		 * become corrupted.
-		 */
-		if (!mp || mp->msg_magic != MSG_MAGIC)
-			return (ENXIO);
-		return (sysctl_rdstruct(oldp, oldlenp, newp, mp,
-		    mp->msg_bufs + offsetof(struct msgbuf, msg_bufc)));
-	}
-	case KERN_CPTIME:
-	{
-		CPU_INFO_ITERATOR cii;
-		struct cpu_info *ci;
-		long cp_time[CPUSTATES];
-		int i, n = 0;
-
-		memset(cp_time, 0, sizeof(cp_time));
-
-		CPU_INFO_FOREACH(cii, ci) {
-			if (!cpu_is_online(ci))
-				continue;
-			n++;
-			for (i = 0; i < CPUSTATES; i++)
-				cp_time[i] += ci->ci_schedstate.spc_cp_time[i];
-		}
-
-		for (i = 0; i < CPUSTATES; i++)
-			cp_time[i] /= n;
-
-		return (sysctl_rdstruct(oldp, oldlenp, newp, &cp_time,
-		    sizeof(cp_time)));
-	}
+#ifndef SMALL_KERNEL
 	case KERN_NCHSTATS:
 		return (sysctl_rdstruct(oldp, oldlenp, newp, &nchstats,
 		    sizeof(struct nchstats)));
 	case KERN_FORKSTAT:
 		return (sysctl_rdstruct(oldp, oldlenp, newp, &forkstat,
 		    sizeof(struct forkstat)));
-	case KERN_STACKGAPRANDOM:
-		stackgap = stackgap_random;
+	case KERN_STACKGAPRANDOM: {
+		int stackgap = stackgap_random;
+
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &stackgap);
 		if (error)
 			return (error);
@@ -718,6 +764,7 @@ kern_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 			return (EINVAL);
 		stackgap_random = stackgap;
 		return (0);
+	    }
 	case KERN_MAXCLUSTERS: {
 		int val = nmbclust;
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
@@ -745,25 +792,17 @@ kern_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		}
 		return(0);
 	}
+#endif /* SMALL_KERNEL */
+#if NPF > 0
+	case KERN_PFSTATUS:
+		return (pf_sysctl(oldp, oldlenp, newp, newlen));
+#endif
 	case KERN_CONSDEV:
 		if (cn_tab != NULL)
 			dev = cn_tab->cn_dev;
 		else
 			dev = NODEV;
 		return sysctl_rdstruct(oldp, oldlenp, newp, &dev, sizeof(dev));
-	case KERN_POOL_DEBUG: {
-		int old_pool_debug = pool_debug;
-
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &pool_debug);
-		if (error == 0 && pool_debug != old_pool_debug)
-			pool_reclaim_all();
-		return (error);
-	}
-#if NPF > 0
-	case KERN_PFSTATUS:
-		return (pf_sysctl(oldp, oldlenp, newp, newlen));
-#endif
 	case KERN_UTC_OFFSET:
 		return (sysctl_utc_offset(oldp, oldlenp, newp, newlen));
 	default:
@@ -820,19 +859,19 @@ hw_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdint(oldp, oldlenp, newp,
 		    ptoa(physmem - uvmexp.wired)));
 	case HW_DISKNAMES:
+#ifndef	SMALL_KERNEL
 	case HW_DISKSTATS:
 	case HW_CPUSPEED:
-#ifndef	SMALL_KERNEL
 	case HW_SENSORS:
 	case HW_SETPERF:
 	case HW_PERFPOLICY:
 	case HW_BATTERY:
-#endif /* !SMALL_KERNEL */
 	case HW_ALLOWPOWERDOWN:
 	case HW_UCOMNAMES:
 #ifdef __HAVE_CPU_TOPOLOGY
 	case HW_SMT:
 #endif
+#endif /* !SMALL_KERNEL */
 	{
 		size_t savelen = *oldlenp;
 		if ((err = sysctl_vslock(oldp, savelen)))
@@ -886,7 +925,7 @@ int
 hw_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen, struct proc *p)
 {
-	int err, cpuspeed;
+	int err;
 
 	switch (name[0]) {
 	case HW_DISKNAMES:
@@ -898,20 +937,22 @@ hw_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 			    disknames));
 		else
 			return (sysctl_rdstring(oldp, oldlenp, newp, ""));
+#ifndef SMALL_KERNEL
 	case HW_DISKSTATS:
 		err = sysctl_diskinit(1, p);
 		if (err)
 			return err;
 		return (sysctl_rdstruct(oldp, oldlenp, newp, diskstats,
 		    disk_count * sizeof(struct diskstats)));
-	case HW_CPUSPEED:
+	case HW_CPUSPEED: {
+		int cpuspeed;
 		if (!cpu_cpuspeed)
 			return (EOPNOTSUPP);
 		err = cpu_cpuspeed(&cpuspeed);
 		if (err)
 			return err;
 		return (sysctl_rdint(oldp, oldlenp, newp, cpuspeed));
-#ifndef SMALL_KERNEL
+	    }
 	case HW_SENSORS:
 		return (sysctl_sensors(name + 1, namelen - 1, oldp, oldlenp,
 		    newp, newlen));
@@ -919,7 +960,6 @@ hw_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return (sysctl_hwsetperf(oldp, oldlenp, newp, newlen));
 	case HW_PERFPOLICY:
 		return (sysctl_hwperfpolicy(oldp, oldlenp, newp, newlen));
-#endif /* !SMALL_KERNEL */
 	case HW_ALLOWPOWERDOWN:
 		return (sysctl_securelevel_int(oldp, oldlenp, newp, newlen,
 		    &allowpowerdown));
@@ -929,16 +969,15 @@ hw_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		str = sysctl_ucominit();
 #endif	/* NUCOM > 0 */
 		return (sysctl_rdstring(oldp, oldlenp, newp, str));
-	}
+	    }
 #ifdef __HAVE_CPU_TOPOLOGY
 	case HW_SMT:
 		return (sysctl_hwsmt(oldp, oldlenp, newp, newlen));
 #endif
-#ifndef SMALL_KERNEL
 	case HW_BATTERY:
 		return (sysctl_hwbattery(name + 1, namelen - 1, oldp, oldlenp,
 		    newp, newlen));
-#endif
+#endif /* SMALL_KERNEL */
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -946,7 +985,6 @@ hw_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 }
 
 #ifndef SMALL_KERNEL
-
 int hw_battery_chargemode;
 int hw_battery_chargestart;
 int hw_battery_chargestop;
@@ -1034,7 +1072,7 @@ sysctl_hwbattery(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	/* NOTREACHED */
 }
 
-#endif
+#endif	/* SMALL_KERNEL */
 
 #ifdef DEBUG_SYSCTL
 /*
@@ -1112,7 +1150,7 @@ sysctl_int_lower(void *oldp, size_t *oldlenp, void *newp, size_t newlen,
 		oldval = atomic_load_int(valp);
 
 		if ((error = copyout(&oldval, oldp, sizeof(int))))
-			return (error);	
+			return (error);
 	}
 
 	return (0);
@@ -1180,7 +1218,7 @@ sysctl_securelevel(void *oldp, size_t *oldlenp, void *newp, size_t newlen,
 		oldval = atomic_load_int(&securelevel);
 
 		if ((error = copyout(&oldval, oldp, sizeof(int))))
-			return (error);	
+			return (error);
 	}
 
 	return (0);
@@ -1543,7 +1581,8 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 			if (so->so_type == SOCK_RAW)
 				kf->inp_proto = inpcb->inp_ip.ip_p;
 			if (so->so_proto->pr_protocol == IPPROTO_TCP) {
-				struct tcpcb *tcpcb = (void *)inpcb->inp_ppcb;
+				struct tcpcb *tcpcb = intotcpcb(inpcb);
+
 				kf->t_rcv_wnd = tcpcb->rcv_wnd;
 				kf->t_snd_wnd = tcpcb->snd_wnd;
 				kf->t_snd_cwnd = tcpcb->snd_cwnd;
@@ -1571,9 +1610,11 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 			if (so->so_type == SOCK_RAW)
 				kf->inp_proto = inpcb->inp_ipv6.ip6_nxt;
 			if (so->so_proto->pr_protocol == IPPROTO_TCP) {
-				struct tcpcb *tcpcb = (void *)inpcb->inp_ppcb;
+				struct tcpcb *tcpcb = intotcpcb(inpcb);
+
 				kf->t_rcv_wnd = tcpcb->rcv_wnd;
 				kf->t_snd_wnd = tcpcb->snd_wnd;
+				kf->t_snd_cwnd = tcpcb->snd_cwnd;
 				kf->t_state = tcpcb->t_state;
 			}
 			break;
@@ -1697,17 +1738,18 @@ do {									\
 	mtx_enter(&(table)->inpt_mtx);					\
 	while ((inp = in_pcb_iterator(table, inp, &iter)) != NULL) {	\
 		if (buflen >= elem_size && elem_count > 0) {		\
-			mtx_enter(&inp->inp_sofree_mtx);		\
-			so = soref(inp->inp_socket);			\
-			mtx_leave(&inp->inp_sofree_mtx);		\
-			if (so == NULL)					\
-				continue;				\
 			mtx_leave(&(table)->inpt_mtx);			\
-			solock_shared(so);				\
+			NET_LOCK_SHARED();				\
+			so = in_pcbsolock(inp);				\
+			if (so == NULL)	{				\
+				NET_UNLOCK_SHARED();			\
+				mtx_enter(&(table)->inpt_mtx);		\
+				continue;				\
+			}						\
 			fill_file(kf, NULL, NULL, 0, NULL, NULL, p,	\
 			    so, show_pointers);				\
-			sounlock_shared(so);				\
-			sorele(so);					\
+			in_pcbsounlock(inp, so);			\
+			NET_UNLOCK_SHARED();				\
 			error = copyout(kf, dp, outsize);		\
 			mtx_enter(&(table)->inpt_mtx);			\
 			if (error) {					\
@@ -1751,8 +1793,11 @@ do {									\
 					if (af == AF_INET || af == AF_INET6)
 						skip = 1;
 				}
-				if (!skip)
+				if (!skip) {
+					KERNEL_LOCK();
 					FILLIT(fp, NULL, 0, NULL, NULL);
+					KERNEL_UNLOCK();
+				}
 			}
 		}
 		break;
@@ -1763,6 +1808,7 @@ do {									\
 			break;
 		}
 		matched = 0;
+		KERNEL_LOCK();
 		LIST_FOREACH(pr, &allprocess, ps_list) {
 			/*
 			 * skip system, exiting, embryonic and undead
@@ -1800,10 +1846,12 @@ do {									\
 			if (arg >= 0)
 				break;
 		}
+		KERNEL_UNLOCK();
 		if (!matched)
 			error = ESRCH;
 		break;
 	case KERN_FILE_BYUID:
+		KERNEL_LOCK();
 		LIST_FOREACH(pr, &allprocess, ps_list) {
 			/*
 			 * skip system, exiting, embryonic and undead
@@ -1834,6 +1882,7 @@ do {									\
 
 			refcnt_rele_wake(&pr->ps_refcnt);
 		}
+		KERNEL_UNLOCK();
 		break;
 	default:
 		error = EINVAL;
@@ -2504,7 +2553,7 @@ done:
 
 	return (error);
 }
-#endif
+#endif /* SMALL_KERNEL */
 
 /*
  * Initialize disknames/diskstats for export by sysctl. If update is set,
@@ -2731,13 +2780,11 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 #endif /* SYSVMSG || SYSVSEM || SYSVSHM */
 
 #ifndef	SMALL_KERNEL
-
 int
 sysctl_intrcnt(int *name, u_int namelen, void *oldp, size_t *oldlenp)
 {
 	return (evcount_sysctl(name, namelen, oldp, oldlenp, NULL, 0));
 }
-
 
 int
 sysctl_sensors(int *name, u_int namelen, void *oldp, size_t *oldlenp,
@@ -2795,13 +2842,13 @@ sysctl_sensors(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	free(us, M_TEMP, sizeof(*us));
 	return (ret);
 }
-#endif	/* SMALL_KERNEL */
 
 int
-sysctl_cptime2(int *name, u_int namelen, void *oldp, size_t *oldlenp,
+sysctl_cpustats(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
 	CPU_INFO_ITERATOR cii;
+	struct cpustats cs;
 	struct cpu_info *ci;
 	int found = 0;
 
@@ -2817,10 +2864,56 @@ sysctl_cptime2(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	if (!found)
 		return (ENOENT);
 
-	return (sysctl_rdstruct(oldp, oldlenp, newp,
-	    &ci->ci_schedstate.spc_cp_time,
-	    sizeof(ci->ci_schedstate.spc_cp_time)));
+	memset(&cs, 0, sizeof cs);
+	sysctl_ci_cp_time(ci, cs.cs_time);
+	cs.cs_flags = 0;
+	if (cpu_is_online(ci))
+		cs.cs_flags |= CPUSTATS_ONLINE;
+
+	return (sysctl_rdstruct(oldp, oldlenp, newp, &cs, sizeof(cs)));
 }
+
+static void
+sysctl_ci_cp_time(struct cpu_info *ci, uint64_t *cp_time)
+{
+	struct schedstate_percpu *spc = &ci->ci_schedstate;
+	unsigned int gen;
+
+	pc_cons_enter(&spc->spc_cp_time_lock, &gen);
+	do {
+		int i;
+		for (i = 0; i < CPUSTATES; i++)
+			cp_time[i] = spc->spc_cp_time[i];
+	} while (pc_cons_leave(&spc->spc_cp_time_lock, &gen) != 0);
+}
+
+int
+sysctl_cptime2(int *name, u_int namelen, void *oldp, size_t *oldlenp,
+    void *newp, size_t newlen)
+{
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
+	uint64_t cp_time[CPUSTATES];
+	int found = 0;
+
+	if (namelen != 1)
+		return (ENOTDIR);
+
+	CPU_INFO_FOREACH(cii, ci) {
+		if (name[0] == CPU_INFO_UNIT(ci)) {
+			found = 1;
+			break;
+		}
+	}
+	if (!found)
+		return (ENOENT);
+
+	sysctl_ci_cp_time(ci, cp_time);
+
+	return (sysctl_rdstruct(oldp, oldlenp, newp,
+	    cp_time, sizeof(cp_time)));
+}
+#endif	/* SMALL_KERNEL */
 
 #if NAUDIO > 0
 int
@@ -2862,36 +2955,6 @@ sysctl_video(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	return (sysctl_int(oldp, oldlenp, newp, newlen, &video_record_enable));
 }
 #endif
-
-int
-sysctl_cpustats(int *name, u_int namelen, void *oldp, size_t *oldlenp,
-    void *newp, size_t newlen)
-{
-	CPU_INFO_ITERATOR cii;
-	struct cpustats cs;
-	struct cpu_info *ci;
-	int found = 0;
-
-	if (namelen != 1)
-		return (ENOTDIR);
-
-	CPU_INFO_FOREACH(cii, ci) {
-		if (name[0] == CPU_INFO_UNIT(ci)) {
-			found = 1;
-			break;
-		}
-	}
-	if (!found)
-		return (ENOENT);
-
-	memset(&cs, 0, sizeof cs);
-	memcpy(&cs.cs_time, &ci->ci_schedstate.spc_cp_time, sizeof(cs.cs_time));
-	cs.cs_flags = 0;
-	if (cpu_is_online(ci))
-		cs.cs_flags |= CPUSTATS_ONLINE;
-
-	return (sysctl_rdstruct(oldp, oldlenp, newp, &cs, sizeof(cs)));
-}
 
 int
 sysctl_utc_offset(void *oldp, size_t *oldlenp, void *newp, size_t newlen)

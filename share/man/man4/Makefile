@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.859 2025/02/14 03:15:06 hastings Exp $
+#	$OpenBSD: Makefile,v 1.863 2025/06/23 18:54:05 kettenis Exp $
 
 MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -6,7 +6,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpiec.4 acpige.4 acpihid.4 acpihpet.4 acpihve.4 \
 	acpimadt.4 acpimcfg.4 acpipci.4 acpiprt.4 acpipwrres.4 \
 	acpisbs.4 acpisony.4 acpisurface.4 acpithinkpad.4 acpitoshiba.4 \
-	acpitimer.4 acpivideo.4 acpivout.4 acpitz.4 \
+	acpitimer.4 acpitz.4 acpivideo.4 acpivout.4 acpiwmi.4 \
 	acx.4 adc.4 addcom.4 adl.4 admcts.4 admlc.4 admtemp.4 \
 	admtm.4 admtmp.4 admtt.4 adt.4 adtfsm.4 adv.4 age.4 alc.4 ale.4 \
 	aggr.4 agp.4 \
@@ -32,7 +32,8 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	dwctwo.4 dwdog.4 dwge.4 dwgpio.4 dwiic.4 dwmmc.4 dwmshc.4 dwpcie.4 \
 	dwqe.4 dwxe.4 \
 	eap.4 ec.4 eephy.4 ef.4 efi.4 eg.4 ehci.4 eisa.4 el.4 em.4 emc.4 gcu.4 \
-	emu.4 enc.4 endrun.4 envy.4 eoip.4 ep.4 epic.4 esa.4 escodec.4 \
+	emu.4 enc.4 endrun.4 envy.4 eoip.4 ep.4 epic.4 \
+	erspan.4 esa.4 escodec.4 \
 	eso.4 ess.4 et.4 etherip.4 etphy.4 ex.4 exphy.4 exrtc.4 \
 	fanpwr.4 fd.4 fdc.4 fec.4 fido.4 fins.4 fintek.4 fms.4 frame.4 \
 	fusbtc.4 fuse.4 fxp.4 \
@@ -42,7 +43,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	hds.4 hiclock.4 hidwusb.4 hil.4 hilid.4 hilkbd.4 hilms.4 \
 	hireset.4 hitemp.4 hme.4 hotplug.4 hsq.4 \
 	hvn.4 hvs.4 hyperv.4 \
-	iatp.4 iavf.4 icc.4 ice.4 ichiic.4 ichwdt.4 \
+	iasuskbd.4 iatp.4 iavf.4 icc.4 ice.4 ichiic.4 ichwdt.4 \
 	icmp.4 icmp6.4 icsphy.4 ietp.4 ifmedia.4 \
 	igc.4 iha.4 ihidev.4 iic.4 iicmux.4 ikbd.4 ims.4 imt.4 imxanatop.4 \
 	imxdog.4 imxesdhc.4 imxgpc.4 imxgpio.4 imxiic.4 imxpciephy.4 \
@@ -59,7 +60,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	mcprtc.4 mcx.4 midi.4 mii.4 mfi.4 mfii.4 mfokrtc.4 \
 	mlphy.4 moscom.4 mos.4 mpe.4 mpath.4 mpi.4 mpii.4 \
 	mpip.4 mpu.4 msk.4 mpw.4 msts.4 mtd.4 mtdphy.4 \
-	mtintc.4 mtio.4 mtrng.4 mtw.4 mue.4 \
+	mtintc.4 mtio.4 mtrng.4 mtw.4 mtxhci.4 mue.4 \
 	multicast.4 mvclock.4 mvdog.4 mvgicp.4 mvgpio.4 mvicu.4 mviic.4 \
 	mvkpcie.4 mvneta.4 mvpinctrl.4 mvpp.4 mvrng.4 mvrtc.4 mvspi.4 \
 	mvtemp.4 mvsw.4 mvuart.4 myx.4 \

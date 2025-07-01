@@ -1,4 +1,4 @@
-/* $OpenBSD: pci_kn300.c,v 1.8 2017/09/08 05:36:51 deraadt Exp $ */
+/* $OpenBSD: pci_kn300.c,v 1.10 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pci_kn300.c,v 1.28 2005/12/11 12:16:17 christos Exp $ */
 
 /*
@@ -80,9 +80,7 @@ void	kn300_enable_intr (struct mcpcia_config *, int);
 void	kn300_disable_intr (struct mcpcia_config *, int);
 
 void
-pci_kn300_pickintr(ccp, first)
-	struct mcpcia_config *ccp;
-	int first;
+pci_kn300_pickintr(struct mcpcia_config *ccp, int first)
 {
 	pci_chipset_tag_t pc = &ccp->cc_pc;
 
@@ -114,10 +112,8 @@ pci_kn300_pickintr(ccp, first)
 	}
 }
 
-int     
-dec_kn300_intr_map(pa, ihp)
-	struct pci_attach_args *pa;
-	pci_intr_handle_t *ihp;
+int
+dec_kn300_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	pcitag_t bustag = pa->pa_intrtag;
 	int buspin = pa->pa_intrpin;
@@ -175,9 +171,7 @@ dec_kn300_intr_map(pa, ihp)
 }
 
 const char *
-dec_kn300_intr_string(ccv, ih)
-	void *ccv;
-	pci_intr_handle_t ih;
+dec_kn300_intr_string(void *ccv, pci_intr_handle_t ih)
 {
 	static char irqstr[64];
 	int irq;
@@ -192,13 +186,9 @@ dec_kn300_intr_string(ccv, ih)
 }
 
 void *
-dec_kn300_intr_establish(ccv, ih, level, func, arg, name)
-        void *ccv, *arg;
-        pci_intr_handle_t ih;
-        int level;
-        int (*func) (void *);
-	const char *name;
-{           
+dec_kn300_intr_establish(void *ccv, pci_intr_handle_t ih, int level,
+    int (*func) (void *), void *arg, const char *name)
+{
 	struct mcpcia_config *ccp = ccv;
 	void *cookie;
 	int irq;
@@ -222,17 +212,14 @@ dec_kn300_intr_establish(ccv, ih, level, func, arg, name)
 	return (cookie);
 }
 
-void    
-dec_kn300_intr_disestablish(ccv, cookie)
-	void *ccv, *cookie;
+void
+dec_kn300_intr_disestablish(void *ccv, void *cookie)
 {
 	panic("dec_kn300_intr_disestablish not implemented");
 }
 
 void
-kn300_iointr(arg, vec)
-	void *arg;
-	unsigned long vec;
+kn300_iointr(void *arg, unsigned long vec)
 {
 	struct mcpcia_softc *mcp;
 	u_long irq;
@@ -277,9 +264,7 @@ kn300_iointr(arg, vec)
 }
 
 void
-kn300_enable_intr(ccp, irq)
-	struct mcpcia_config *ccp;
-	int irq;
+kn300_enable_intr(struct mcpcia_config *ccp, int irq)
 {
 	alpha_mb();
 	REGVAL(MCPCIA_INT_MASK0(ccp)) |= (1 << irq);
@@ -287,9 +272,7 @@ kn300_enable_intr(ccp, irq)
 }
 
 void
-kn300_disable_intr(ccp, irq)
-	struct mcpcia_config *ccp;
-	int irq;
+kn300_disable_intr(struct mcpcia_config *ccp, int irq)
 {
 	alpha_mb();
 	REGVAL(MCPCIA_INT_MASK0(ccp)) &= ~(1 << irq);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: igmp.c,v 1.85 2024/08/20 07:46:27 mvs Exp $	*/
+/*	$OpenBSD: igmp.c,v 1.87 2025/06/12 20:37:59 deraadt Exp $	*/
 /*	$NetBSD: igmp.c,v 1.15 1996/02/13 23:41:25 christos Exp $	*/
 
 /*
@@ -105,7 +105,8 @@ int igmp_checktimer(struct ifnet *);
 void igmp_sendpkt(struct ifnet *, struct in_multi *, int, in_addr_t);
 int rti_fill(struct in_multi *);
 struct router_info * rti_find(struct ifnet *);
-int igmp_input_if(struct ifnet *, struct mbuf **, int *, int, int);
+int igmp_input_if(struct ifnet *, struct mbuf **, int *, int, int,
+    struct netstack *);
 int igmp_sysctl_igmpstat(void *, size_t *, void *);
 
 void
@@ -196,7 +197,7 @@ rti_delete(struct ifnet *ifp)
 }
 
 int
-igmp_input(struct mbuf **mp, int *offp, int proto, int af)
+igmp_input(struct mbuf **mp, int *offp, int proto, int af, struct netstack *ns)
 {
 	struct ifnet *ifp;
 
@@ -209,14 +210,15 @@ igmp_input(struct mbuf **mp, int *offp, int proto, int af)
 	}
 
 	KERNEL_LOCK();
-	proto = igmp_input_if(ifp, mp, offp, proto, af);
+	proto = igmp_input_if(ifp, mp, offp, proto, af, ns);
 	KERNEL_UNLOCK();
 	if_put(ifp);
 	return proto;
 }
 
 int
-igmp_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto, int af)
+igmp_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto,
+    int af, struct netstack *ns)
 {
 	struct mbuf *m = *mp;
 	int iphlen = *offp;
@@ -484,7 +486,7 @@ igmp_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto, int af)
 	 * Pass all valid IGMP packets up to any process(es) listening
 	 * on a raw IGMP socket.
 	 */
-	return rip_input(mp, offp, proto, af);
+	return rip_input(mp, offp, proto, af, ns);
 }
 
 void
@@ -674,6 +676,7 @@ igmp_sendpkt(struct ifnet *ifp, struct in_multi *inm, int type,
 	igmpstat_inc(igps_snd_reports);
 }
 
+#ifndef SMALL_KERNEL
 /*
  * Sysctl for igmp variables.
  */
@@ -712,3 +715,4 @@ igmp_sysctl_igmpstat(void *oldp, size_t *oldlenp, void *newp)
 	return (sysctl_rdstruct(oldp, oldlenp, newp,
 	    &igmpstat, sizeof(igmpstat)));
 }
+#endif /* SMALL_KERNEL */

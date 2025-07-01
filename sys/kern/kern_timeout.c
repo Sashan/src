@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_timeout.c,v 1.101 2025/01/13 03:21:10 mvs Exp $	*/
+/*	$OpenBSD: kern_timeout.c,v 1.110 2025/06/21 05:37:58 jsg Exp $	*/
 /*
  * Copyright (c) 2001 Thomas Nordin <nordin@openbsd.org>
  * Copyright (c) 2000-2001 Artur Grabowski <art@openbsd.org>
@@ -48,6 +48,11 @@
 #include <sys/kcov.h>
 #endif
 
+struct timeout_ctx {
+	struct circq		*tctx_todo;
+	struct timeout		*tctx_running;
+};
+
 /*
  * Locks used to protect global variables in this file:
  *
@@ -74,9 +79,21 @@ struct circq timeout_wheel[BUCKETS];	/* [T] Tick-based timeouts */
 struct circq timeout_wheel_kc[BUCKETS];	/* [T] Clock-based timeouts */
 struct circq timeout_new;		/* [T] New, unscheduled timeouts */
 struct circq timeout_todo;		/* [T] Due or needs rescheduling */
+static struct timeout_ctx timeout_ctx_si = {
+	.tctx_todo = &timeout_todo,	/* [I] */
+	.tctx_running = NULL,		/* [T] */
+};
 struct circq timeout_proc;		/* [T] Due + needs process context */
+static struct timeout_ctx timeout_ctx_proc = {
+	.tctx_todo = &timeout_proc,	/* [I] */
+	.tctx_running = NULL,		/* [T] */
+};
 #ifdef MULTIPROCESSOR
 struct circq timeout_proc_mp;		/* [T] Process ctx + no kernel lock */
+static struct timeout_ctx timeout_ctx_proc_mp = {
+	.tctx_todo = &timeout_proc_mp,	/* [I] */
+	.tctx_running = NULL,		/* [T] */
+};
 #endif
 
 time_t timeout_level_width[WHEELCOUNT];	/* [I] Wheel level width (seconds) */
@@ -111,6 +128,14 @@ struct kclock {
 #define CIRCQ_INIT(elem) do {			\
 	(elem)->next = (elem);			\
 	(elem)->prev = (elem);			\
+} while (0)
+
+#define CIRCQ_INSERT_HEAD(list, elem) do {      \
+	(elem)->next = (list)->next;		\
+	(list)->next->prev = (elem);		\
+	(list)->next = (elem);			\
+	(elem)->prev = (list);			\
+	tostat.tos_pending++;			\
 } while (0)
 
 #define CIRCQ_INSERT_TAIL(list, elem) do {	\
@@ -180,7 +205,7 @@ void softclock_thread_mp(void *);
 void timeout_barrier_timeout(void *);
 uint32_t timeout_bucket(const struct timeout *);
 uint32_t timeout_maskwheel(uint32_t, const struct timespec *);
-void timeout_run(struct timeout *);
+void timeout_run(struct timeout_ctx *, struct timeout *);
 
 /*
  * The first thing in a struct timeout is its struct circq, so we
@@ -333,24 +358,25 @@ timeout_add(struct timeout *new, int to_ticks)
 }
 
 static inline int
-timeout_add_ticks(struct timeout *to, uint64_t to_ticks, int notzero)
+timeout_add_ticks(struct timeout *to, uint64_t to_ticks)
 {
-	if (to_ticks > INT_MAX)
+	/*
+	 * XXX to_ticks is added to the current ticks value, but
+	 * timeouts are run in the next clock interrupt after ticks
+	 * is incremented. however, the deadline comparison in
+	 * softclock_process_tick_timeout will fire a timeout if it's
+	 * deadline is at the current ticks value. eg, a to_ticks
+	 * value of 1 plus the current ticks value will fire in the
+	 * next interrupt, which will be too early. add 1 here to
+	 * ensure the requested time has elapsed.
+	 */
+
+	if (to_ticks >= INT_MAX)
 		to_ticks = INT_MAX;
-	else if (to_ticks == 0 && notzero)
-		to_ticks = 1;
+	else
+		to_ticks++;
 
 	return timeout_add(to, (int)to_ticks);
-}
-
-int
-timeout_add_tv(struct timeout *to, const struct timeval *tv)
-{
-	uint64_t to_ticks;
-
-	to_ticks = (uint64_t)hz * tv->tv_sec + tv->tv_usec / tick;
-
-	return timeout_add_ticks(to, to_ticks, tv->tv_usec > 0);
 }
 
 int
@@ -358,19 +384,29 @@ timeout_add_sec(struct timeout *to, int secs)
 {
 	uint64_t to_ticks;
 
-	to_ticks = (uint64_t)hz * secs;
+	KASSERT(secs >= 0);
+	/* secs is a 31bit int, so this can't overflow 64bits */
+	to_ticks = (uint64_t)hz * (uint64_t)secs;
 
-	return timeout_add_ticks(to, to_ticks, 1);
+	return timeout_add_ticks(to, to_ticks);
 }
+
+/*
+ * interpret the specified times below as a AT LEAST how long the
+ * system should wait before firing the the timeouts. this requires
+ * rounding up, which has the potential to overflow. if we detect
+ * overflow, interpret it as "wait for as long as possible". this will
+ * be shorter than specified time, which violates the "wait at least
+ * this much time", but it's on the other end of the timescale.
+ */
 
 int
 timeout_add_msec(struct timeout *to, uint64_t msecs)
 {
-	uint64_t to_ticks;
+	if (msecs >= (UINT64_MAX / 1000))
+		return timeout_add(to, INT_MAX);
 
-	to_ticks = msecs * 1000 / tick;
-
-	return timeout_add_ticks(to, to_ticks, msecs > 0);
+	return timeout_add_usec(to, msecs * 1000);
 }
 
 int
@@ -378,9 +414,12 @@ timeout_add_usec(struct timeout *to, uint64_t usecs)
 {
 	uint64_t to_ticks;
 
-	to_ticks = usecs / tick;
+	if (usecs >= (UINT64_MAX - tick))
+		return timeout_add(to, INT_MAX);
 
-	return timeout_add_ticks(to, to_ticks, usecs > 0);
+	to_ticks = (usecs + (tick - 1)) / tick;
+
+	return timeout_add_ticks(to, to_ticks);
 }
 
 int
@@ -388,9 +427,12 @@ timeout_add_nsec(struct timeout *to, uint64_t nsecs)
 {
 	uint64_t to_ticks;
 
-	to_ticks = nsecs / (tick * 1000);
+	if (nsecs >= (UINT64_MAX - tick_nsec))
+		return timeout_add(to, INT_MAX);
 
-	return timeout_add_ticks(to, to_ticks, nsecs > 0);
+	to_ticks = (nsecs + (tick_nsec - 1)) / tick_nsec;
+
+	return timeout_add_ticks(to, to_ticks);
 }
 
 int
@@ -465,6 +507,7 @@ timeout_del_barrier(struct timeout *to)
 void
 timeout_barrier(struct timeout *to)
 {
+	struct timeout_ctx *tctx;
 	struct timeout barrier;
 	struct cond c;
 	int flags;
@@ -478,30 +521,31 @@ timeout_barrier(struct timeout *to)
 	cond_init(&c);
 
 	mtx_enter(&timeout_mutex);
+	if (ISSET(flags, TIMEOUT_PROC)) {
+#ifdef MULTIPROCESSOR
+		if (ISSET(flags, TIMEOUT_MPSAFE))
+			tctx = &timeout_ctx_proc_mp;
+		else
+#endif
+			tctx = &timeout_ctx_proc;
+	} else
+		tctx = &timeout_ctx_si;
+
+	if (tctx->tctx_running != to) {
+		mtx_leave(&timeout_mutex);
+		return;
+	}
 
 	barrier.to_time = ticks;
 	SET(barrier.to_flags, TIMEOUT_ONQUEUE);
-	if (ISSET(flags, TIMEOUT_PROC)) {
-#ifdef MULTIPROCESSOR
-		if (ISSET(flags, TIMEOUT_MPSAFE))
-			CIRCQ_INSERT_TAIL(&timeout_proc_mp, &barrier.to_list);
-		else
-#endif
-			CIRCQ_INSERT_TAIL(&timeout_proc, &barrier.to_list);
-	} else
-		CIRCQ_INSERT_TAIL(&timeout_todo, &barrier.to_list);
-
+	CIRCQ_INSERT_HEAD(tctx->tctx_todo, &barrier.to_list);
 	mtx_leave(&timeout_mutex);
 
-	if (ISSET(flags, TIMEOUT_PROC)) {
-#ifdef MULTIPROCESSOR
-		if (ISSET(flags, TIMEOUT_MPSAFE))
-			wakeup_one(&timeout_proc_mp);
-		else
-#endif
-			wakeup_one(&timeout_proc);
-	} else
-		softintr_schedule(softclock_si);
+	/*
+	 * We know the relevant timeout context was running something
+	 * and now also has the barrier to run, so we just have to
+	 * wait for it to pick up the barrier task now.
+	 */
 
 	cond_wait(&c, "tmobar");
 }
@@ -634,7 +678,7 @@ timeout_hardclock_update(void)
 }
 
 void
-timeout_run(struct timeout *to)
+timeout_run(struct timeout_ctx *tctx, struct timeout *to)
 {
 	void (*fn)(void *);
 	void *arg;
@@ -652,6 +696,7 @@ timeout_run(struct timeout *to)
 	struct process *kcov_process = to->to_process;
 #endif
 
+	tctx->tctx_running = to;
 	mtx_leave(&timeout_mutex);
 	timeout_sync_enter(needsproc);
 #if NKCOV > 0
@@ -663,6 +708,7 @@ timeout_run(struct timeout *to)
 #endif
 	timeout_sync_leave(needsproc);
 	mtx_enter(&timeout_mutex);
+	tctx->tctx_running = NULL;
 }
 
 void
@@ -689,7 +735,7 @@ softclock_process_kclock_timeout(struct timeout *to, int new)
 			CIRCQ_INSERT_TAIL(&timeout_proc, &to->to_list);
 		return;
 	}
-	timeout_run(to);
+	timeout_run(&timeout_ctx_si, to);
 	tostat.tos_run_softclock++;
 }
 
@@ -716,7 +762,7 @@ softclock_process_tick_timeout(struct timeout *to, int new)
 			CIRCQ_INSERT_TAIL(&timeout_proc, &to->to_list);
 		return;
 	}
-	timeout_run(to);
+	timeout_run(&timeout_ctx_si, to);
 	tostat.tos_run_softclock++;
 }
 
@@ -782,12 +828,37 @@ softclock_create_thread(void *arg)
 #endif
 }
 
+static void
+softclock_thread_run(struct timeout_ctx *tctx)
+{
+	struct circq *todo = tctx->tctx_todo;
+	struct timeout *to;
+
+	for (;;) {
+		/*
+		 * Avoid holding both timeout_mutex and SCHED_LOCK
+		 * at the same time.
+		 */
+		sleep_setup(todo, PSWP, "tmoslp");
+		sleep_finish(INFSLP, CIRCQ_EMPTY(tctx->tctx_todo));
+
+		mtx_enter(&timeout_mutex);
+		tostat.tos_thread_wakeups++;
+		while (!CIRCQ_EMPTY(todo)) {
+			to = timeout_from_circq(CIRCQ_FIRST(todo));
+			CIRCQ_REMOVE(&to->to_list);
+			timeout_run(tctx, to);
+			tostat.tos_run_thread++;
+		}
+		mtx_leave(&timeout_mutex);
+	}
+}
+
 void
 softclock_thread(void *arg)
 {
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
-	struct timeout *to;
 	int s;
 
 	KERNEL_ASSERT_LOCKED();
@@ -801,18 +872,7 @@ softclock_thread(void *arg)
 	sched_peg_curproc(ci);
 
 	s = splsoftclock();
-	mtx_enter(&timeout_mutex);
-	for (;;) {
-		while (!CIRCQ_EMPTY(&timeout_proc)) {
-			to = timeout_from_circq(CIRCQ_FIRST(&timeout_proc));
-			CIRCQ_REMOVE(&to->to_list);
-			timeout_run(to);
-			tostat.tos_run_thread++;
-		}
-		tostat.tos_thread_wakeups++;
-		msleep_nsec(&timeout_proc, &timeout_mutex, PSWP, "tmoslp",
-		    INFSLP);
-	}
+	softclock_thread_run(&timeout_ctx_proc);
 	splx(s);
 }
 
@@ -820,23 +880,10 @@ softclock_thread(void *arg)
 void
 softclock_thread_mp(void *arg)
 {
-	struct timeout *to;
-
 	KERNEL_ASSERT_LOCKED();
 	KERNEL_UNLOCK();
 
-	mtx_enter(&timeout_mutex);
-	for (;;) {
-		while (!CIRCQ_EMPTY(&timeout_proc_mp)) {
-			to = timeout_from_circq(CIRCQ_FIRST(&timeout_proc_mp));
-			CIRCQ_REMOVE(&to->to_list);
-			timeout_run(to);
-			tostat.tos_run_thread++;
-		}
-		tostat.tos_thread_wakeups++;
-		msleep_nsec(&timeout_proc_mp, &timeout_mutex, PSWP, "tmoslp",
-		    INFSLP);
-	}
+	softclock_thread_run(&timeout_ctx_proc_mp);
 }
 #endif /* MULTIPROCESSOR */
 
@@ -872,6 +919,7 @@ timeout_adjust_ticks(int adj)
 }
 #endif
 
+#ifndef SMALL_KERNEL
 int
 timeout_sysctl(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
@@ -883,6 +931,7 @@ timeout_sysctl(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 
 	return sysctl_rdstruct(oldp, oldlenp, newp, &status, sizeof(status));
 }
+#endif /* SMALL_KERNEL */
 
 #ifdef DDB
 const char *db_kclock(int);

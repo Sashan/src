@@ -1,4 +1,4 @@
-.\"	$OpenBSD: apmd.8,v 1.55 2022/05/28 16:07:54 jmc Exp $
+.\"	$OpenBSD: apmd.8,v 1.62 2025/06/01 08:17:22 kn Exp $
 .\"
 .\" Copyright (c) 1995 John T. Kohl
 .\" All rights reserved.
@@ -26,7 +26,7 @@
 .\" ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 .\" POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: May 28 2022 $
+.Dd $Mdocdate: June 1 2025 $
 .Dt APMD 8
 .Os
 .Sh NAME
@@ -38,6 +38,7 @@
 .Op Fl f Ar devname
 .Op Fl S Ar sockname
 .Op Fl t Ar seconds
+.Op Fl w Ar percent
 .Op Fl Z Ar percent
 .Op Fl z Ar percent
 .Sh DESCRIPTION
@@ -47,6 +48,24 @@ monitors the advanced power management device,
 acting on signaled events and upon user requests as sent by the
 .Xr apm 8
 program.
+.Pp
+On
+.Ox ,
+power management is handled by the kernel,
+and the default policy can be set using the
+.Va hw.perfpolicy
+.Xr sysctl 2 .
+If
+.Nm
+is not running,
+.Xr apm 8
+is still able to query the
+.Xr apm 4
+driver for a limited amount of information,
+but
+.Nm
+provides more advanced functionality,
+such as the ability to switch performance modes.
 .Pp
 For suspend and standby request events delivered by the BIOS, or via
 .Xr apm 8 ,
@@ -65,12 +84,25 @@ fetches the current status and reports it via
 with logging facility
 .Dv LOG_DAEMON .
 .Pp
+.Nm
+can change the system performance policy at startup when called
+with the
+.Fl A ,
+.Fl H
+or
+.Fl L
+options, and during runtime when requested by
+.Xr apm 8 .
+.\" XXX keep in sync with hw.perfpolicy in sysctl(2)
+The default performance policy is "high" when connected to line current,
+and "auto" when running on battery.
+.Pp
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl A
 Start
 .Nm
-in automatic performance adjustment mode (the default).
+in automatic performance adjustment mode.
 .It Fl a
 BIOS-initiated suspend or standby requests are
 ignored if the system is connected to line current and not running from
@@ -114,6 +146,12 @@ The polling rate defaults to
 once per 10 minutes, but may be specified using the
 .Fl t
 command-line flag.
+.It Fl w Ar percent
+Log warning and enable
+.Dq warnlow
+actions if no AC is connected and the
+estimated battery life is equal or below
+.Ar percent .
 .It Fl Z Ar percent
 Automatically hibernate the system if no AC is connected and the
 estimated battery life is equal or below
@@ -143,13 +181,17 @@ in the requested state after running the configuration script and
 flushing the buffer cache.
 .Pp
 Actions can be configured for the following transitions:
-suspend,
 hibernate,
-standby,
-resume,
+powerdown,
 powerup,
+resume,
+standby,
+suspend,
 and
-powerdown.
+warnlow.
+The warnlow action is run if
+.Fl w
+is used.
 The suspend, hibernate and standby actions are run prior to
 .Nm
 performing any other actions (such as disk syncs) and entering the new
@@ -162,32 +204,47 @@ status changed in the mean time).
 .Sh FILES
 .Bl -tag -width "/etc/apm/powerdownXX" -compact
 .It Pa /dev/apmctl
-Default device used to control the APM kernel driver.
+Default device used to control
+.Xr apm 4 .
 .Pp
-.It Pa /etc/apm/suspend
 .It Pa /etc/apm/hibernate
-.It Pa /etc/apm/standby
-.It Pa /etc/apm/resume
-.It Pa /etc/apm/powerup
 .It Pa /etc/apm/powerdown
-These files contain the host's customized actions.
+.It Pa /etc/apm/powerup
+.It Pa /etc/apm/resume
+.It Pa /etc/apm/standby
+.It Pa /etc/apm/suspend
+.It Pa /etc/apm/warnlow
+Action hook files which, if present, must be executable.
 Each file must be an executable binary or shell script.
 A single program or script can be used to control all transitions
-by examining the name by which it was called,
-which is one of
-suspend,
-hibernate,
-standby,
-resume,
-powerup,
-or
-powerdown.
+by examining the name by which it was called.
+.Pp
+.It Pa /etc/random.seed
+Random seed file read by the bootloader;
+updated on
+.Dq hibernate ,
+.Dq standby
+and
+.Dq suspend .
 .Pp
 .It Pa /var/run/apmdev
 Default
 .Ux Ns -domain
 socket used for communication with
 .Xr apm 8 .
+.El
+.Sh EXAMPLES
+.Bl -tag -width Ds
+.It Pa /etc/apm/suspend
+.Bd -literal -offset indent -compact
+# X11 screen lock
+pkill -USR1 xidle
+.Ed
+.It Pa /etc/apm/warnlow
+.Bd -literal -offset indent -compact
+# low battery notifications
+aucat -i /etc/apm/tired.wav
+.Ed
 .El
 .Sh SEE ALSO
 .Xr syslog 3 ,
@@ -206,3 +263,11 @@ command first appeared in
 .Ox
 support was added in
 .Ox 1.2 .
+.Sh CAVEATS
+.Nm
+does not support specifying an alternate performance policy to be used
+when the system is running on battery.
+See the
+.Va hw.perfpolicy
+setting documented in
+.Xr sysctl 2 .

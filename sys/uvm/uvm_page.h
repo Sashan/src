@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_page.h,v 1.71 2024/05/13 01:15:53 jsg Exp $	*/
+/*	$OpenBSD: uvm_page.h,v 1.73 2025/03/10 18:54:38 mpi Exp $	*/
 /*	$NetBSD: uvm_page.h,v 1.19 2000/12/28 08:24:55 chs Exp $	*/
 
 /* 
@@ -85,28 +85,31 @@
  *	and offset to which this page belongs (for pageout),
  *	and sundry status bits.
  *
- *	Fields in this structure are possibly locked by the lock on the page
- *	queues (P).
+ * Locks used to protect struct members in this file:
+ *	I	immutable after creation
+ *	a	atomic operations
+ *	Q	uvm.pageqlock
+ *	F	uvm.fpageqlock
+ *	o	owner lock (uobject->vmobjlock or uanon->an_lock)
  */
 
 TAILQ_HEAD(pglist, vm_page);
 
 struct vm_page {
-	TAILQ_ENTRY(vm_page)	pageq;		/* queue info for FIFO
-						 * queue or free list (P) */
-	RBT_ENTRY(vm_page)	objt;		/* object tree */
+	TAILQ_ENTRY(vm_page)	pageq;		/* [Q] LRU or free page queue */
+	RBT_ENTRY(vm_page)	objt;		/* [o] object tree */
 
-	struct vm_anon		*uanon;		/* anon (P) */
-	struct uvm_object	*uobject;	/* object (P) */
-	voff_t			offset;		/* offset into object (P) */
+	struct vm_anon		*uanon;		/* [o] anon */
+	struct uvm_object	*uobject;	/* [o] object */
+	voff_t			offset;		/* [o] offset into object */
 
-	u_int			pg_flags;	/* object flags [P] */
+	uint32_t		pg_flags;	/* [a] object flags */
 
-	u_int			pg_version;	/* version count */
-	u_int			wire_count;	/* wired down map refs [P] */
+	uint32_t		pg_version;	/* version count */
+	uint32_t		wire_count;	/* [o] wired down map refs */
 
-	paddr_t			phys_addr;	/* physical address of page */
-	psize_t			fpgsz;		/* free page range size */
+	paddr_t			phys_addr;	/* [I] physical address */
+	psize_t			fpgsz;		/* [F] free page range size */
 
 	struct vm_page_md	mdpage;		/* pmap-specific data */
 
@@ -144,13 +147,12 @@ struct vm_page {
 #define PG_RDONLY	0x00000080	/* page must be mapped read-only */
 #define PG_ZERO		0x00000100	/* page is pre-zero'd */
 #define PG_DEV		0x00000200	/* page is in device space, lay off */
-
-#define PG_PAGER1	0x00001000	/* pager-specific flag */
 #define PG_MASK		0x0000ffff
 
 #define PQ_FREE		0x00010000	/* page is on free list */
 #define PQ_INACTIVE	0x00020000	/* page is in inactive list */
 #define PQ_ACTIVE	0x00040000	/* page is in active list */
+#define PQ_ITER		0x00080000	/* page is an iterator marker */
 #define PQ_ANON		0x00100000	/* page is part of an anon, rather
 					   than an uvm_object */
 #define PQ_AOBJ		0x00200000	/* page is part of an anonymous
@@ -287,9 +289,9 @@ int		vm_physseg_find(paddr_t, int *);
 
 #define	UVM_PAGEZERO_TARGET	(uvmexp.free / 8)
 
-#define VM_PAGE_TO_PHYS(entry)	((entry)->phys_addr)
+#define VM_PAGE_TO_PHYS(pg)	((pg)->phys_addr)
 
-#define VM_PAGE_IS_FREE(entry)  ((entry)->pg_flags & PQ_FREE)
+#define VM_PAGE_IS_FREE(pg)  ((pg)->pg_flags & PQ_FREE)
 
 #define	PADDR_IS_DMA_REACHABLE(paddr)	\
 	(dma_constraint.ucr_low <= paddr && dma_constraint.ucr_high > paddr)

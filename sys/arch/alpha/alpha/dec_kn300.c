@@ -1,4 +1,4 @@
-/* $OpenBSD: dec_kn300.c,v 1.9 2017/04/30 13:04:49 mpi Exp $ */
+/* $OpenBSD: dec_kn300.c,v 1.11 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: dec_kn300.c,v 1.34 2007/03/04 15:18:10 yamt Exp $ */
 
 /*
@@ -88,7 +88,7 @@ const struct alpha_variation_table dec_kn300_variations[] = {
 };
 
 void
-dec_kn300_init()
+dec_kn300_init(void)
 {
 	u_int64_t variation;
 	int cachesize;
@@ -138,7 +138,7 @@ dec_kn300_init()
 }
 
 void
-dec_kn300_cons_init()
+dec_kn300_cons_init(void)
 {
 	struct ctb *ctb;
 	struct mcpcia_config *ccp;
@@ -150,7 +150,7 @@ dec_kn300_cons_init()
 	ctb = (struct ctb *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
 	switch (ctb->ctb_term_type) {
-	case CTB_PRINTERPORT: 
+	case CTB_PRINTERPORT:
 		/* serial console ... */
 		/*
 		 * Delay to allow PROM putchars to complete.
@@ -196,14 +196,12 @@ dec_kn300_cons_init()
 }
 
 static void
-dec_kn300_device_register(dev, aux)
-	struct device *dev;
-	void *aux;
+dec_kn300_device_register(struct device *dev, void *aux)
 {
 	static int found, initted, diskboot, netboot;
 	static struct device *primarydev, *pcidev, *ctrlrdev;
 	struct bootdev_data *b = bootdev_data;
-	struct device *parent = dev->dv_parent; 
+	struct device *parent = dev->dv_parent;
 	struct cfdata *cf = dev->dv_cfdata;
 	struct cfdriver *cd = cf->cf_driver;
 

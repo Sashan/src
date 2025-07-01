@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.120 2025/02/07 03:03:08 jsg Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.126 2025/06/13 07:01:37 jsg Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -29,6 +29,10 @@
 #include <sys/fcntl.h>
 
 #include <dev/pci/ppbreg.h>
+#include <dev/wscons/wsconsio.h>
+#include <dev/wscons/wsdisplayvar.h>
+
+#include <acpi/video.h>
 
 #include <linux/dma-buf.h>
 #include <linux/mod_devicetable.h>
@@ -122,7 +126,7 @@ __set_current_state(int state)
 	SCHED_LOCK();
 	unsleep(p);
 	p->p_stat = SONPROC;
-	atomic_clearbits_int(&p->p_flag, P_WSLEEP);
+	atomic_clearbits_int(&p->p_flag, P_INSCHED);
 	SCHED_UNLOCK();
 }
 
@@ -136,15 +140,15 @@ long
 schedule_timeout(long timeout)
 {
 	unsigned long deadline;
-	int timo = 0;
+	uint64_t nsecs = INFSLP;
 
 	KASSERT(!cold);
 
-	if (timeout != MAX_SCHEDULE_TIMEOUT)
-		timo = timeout;
-	if (timeout != MAX_SCHEDULE_TIMEOUT)
+	if (timeout != MAX_SCHEDULE_TIMEOUT) {
 		deadline = jiffies + timeout;
-	sleep_finish(timo, timeout > 0);
+		nsecs = jiffies_to_nsecs(timeout);
+	}
+	sleep_finish(nsecs, timeout > 0);
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
 		timeout = deadline - jiffies;
 
@@ -164,7 +168,7 @@ wake_up_process(struct proc *p)
 	int rv;
 
 	SCHED_LOCK();
-	rv = wakeup_proc(p, 0);
+	rv = wakeup_proc(p);
 	SCHED_UNLOCK();
 	return rv;
 }
@@ -1165,13 +1169,6 @@ sg_free_table(struct sg_table *table)
 	table->sgl = NULL;
 }
 
-size_t
-sg_copy_from_buffer(struct scatterlist *sgl, unsigned int nents,
-    const void *buf, size_t buflen)
-{
-	panic("%s", __func__);
-}
-
 int
 i2c_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 {
@@ -1537,6 +1534,17 @@ acpi_target_system_state(void)
 	return acpi_softc->sc_state;
 }
 
+enum acpi_backlight_type
+acpi_video_get_backlight_type(void)
+{
+	struct wsdisplay_param dp;
+
+	dp.param = WSDISPLAYIO_PARAM_BRIGHTNESS;
+	if (ws_get_param && ws_get_param(&dp) == 0)
+		return acpi_backlight_video;
+	return acpi_backlight_native;
+}
+
 #endif
 
 SLIST_HEAD(,backlight_device) backlight_device_list =
@@ -1586,7 +1594,7 @@ backlight_enable(struct backlight_device *bd)
 	if (bd == NULL)
 		return 0;
 
-	bd->props.power = FB_BLANK_UNBLANK;
+	bd->props.power = BACKLIGHT_POWER_ON;
 
 	return bd->ops->update_status(bd);
 }
@@ -1597,7 +1605,7 @@ backlight_disable(struct backlight_device *bd)
 	if (bd == NULL)
 		return 0;
 
-	bd->props.power = FB_BLANK_POWERDOWN;
+	bd->props.power = BACKLIGHT_POWER_OFF;
 
 	return bd->ops->update_status(bd);
 }

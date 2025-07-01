@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.92 2024/11/21 13:32:27 claudio Exp $ */
+/*	$OpenBSD: http.c,v 1.97 2025/06/18 18:13:49 job Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -137,6 +137,7 @@ struct http_connection {
 	int			fd;
 	int			chunked;
 	int			gzipped;
+	int			was_gzipped;
 	int			keep_alive;
 	short			events;
 	enum http_state		state;
@@ -799,6 +800,7 @@ http_inflate_advance(struct http_connection *conn)
 		/* all compressed data processed */
 		conn->gzipped = 0;
 		http_inflate_done(conn);
+		conn->was_gzipped = 1;
 
 		if (conn->iosz == 0) {
 			if (!conn->chunked) {
@@ -911,7 +913,13 @@ http_done(struct http_connection *conn, enum http_result res)
 	if (conn->gzipped) {
 		conn->gzipped = 0;
 		http_inflate_done(conn);
+		conn->was_gzipped = 1;
 	}
+
+	if (!conn->was_gzipped && conn->totalsz > (1024 * 1024))
+		logx("%s: downloaded %zu bytes without HTTP "
+		    "compression", conn_info(conn), conn->totalsz);
+	conn->was_gzipped = 0;
 
 	conn->state = STATE_IDLE;
 	conn->idle_time = getmonotime() + HTTP_IDLE_TIMEOUT;
@@ -1007,7 +1015,7 @@ static enum res
 http_connect(struct http_connection *conn)
 {
 	const char *cause = NULL;
-	struct addrinfo *res;
+	struct addrinfo *res = NULL;
 
 	assert(conn->fd == -1);
 	conn->state = STATE_CONNECT;
@@ -1526,6 +1534,7 @@ http_read(struct http_connection *conn)
 		goto again;
 
 read_more:
+	assert(conn->bufpos < conn->bufsz);
 	s = tls_read(conn->tls, conn->buf + conn->bufpos,
 	    conn->bufsz - conn->bufpos);
 	if (s == -1) {
@@ -1750,6 +1759,7 @@ proxy_read(struct http_connection *conn)
 	char *buf;
 	int done;
 
+	assert(conn->bufpos < conn->bufsz);
 	s = read(conn->fd, conn->buf + conn->bufpos,
 	    conn->bufsz - conn->bufpos);
 	if (s == -1) {
@@ -1811,6 +1821,7 @@ proxy_write(struct http_connection *conn)
 
 	assert(conn->state == STATE_PROXY_REQUEST);
 
+	assert(conn->bufpos < conn->bufsz);
 	s = write(conn->fd, conn->buf + conn->bufpos,
 	    conn->bufsz - conn->bufpos);
 	if (s == -1) {
@@ -2157,6 +2168,9 @@ proc_http(char *bind_addr, int fd)
 				unsigned int id;
 				char *uri;
 				char *mod;
+
+				if (!ibuf_fd_avail(b))
+					errx(1, "expected fd not received");
 
 				io_read_buf(b, &id, sizeof(id));
 				io_read_str(b, &uri);

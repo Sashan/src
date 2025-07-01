@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.132 2025/02/14 04:56:34 hastings Exp $
+#	$OpenBSD: RAMDISK,v 1.134 2025/06/13 13:19:19 sf Exp $
 
 machine		armv7 arm
 
@@ -173,6 +173,8 @@ usb*		at dwctwo?
 # MediaTek SoCs
 mtintc*		at fdt?
 mtrng*		at fdt?
+mtxhci*		at fdt?
+usb*		at mtxhci?
 
 # Marvell SoC
 mvacc*		at fdt? early 1
@@ -220,7 +222,6 @@ pcagpio*	at iic?
 # virtio devices
 vioblk*		at virtio?
 vio*		at virtio?
-viomb*		at virtio?
 viornd*		at virtio?
 vioscsi*	at virtio?
 

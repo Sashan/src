@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpleased.c,v 1.39 2024/11/21 13:35:20 claudio Exp $	*/
+/*	$OpenBSD: dhcpleased.c,v 1.41 2025/04/26 17:58:02 florian Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021 Florian Obser <florian@openbsd.org>
@@ -559,9 +559,18 @@ main_dispatch_engine(int fd, short event, void *bula)
 			if (imsg_get_data(&imsg, &imsg_interface,
 			    sizeof(imsg_interface)) == -1)
 				fatalx("%s: invalid %s", __func__, i2s(type));
-
+			if (imsg_interface.file[
+			    sizeof(imsg_interface.file) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.domainname[
+			    sizeof(imsg_interface.domainname) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.hostname[
+			    sizeof(imsg_interface.hostname) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
 			if (imsg_interface.routes_len >= MAX_DHCP_ROUTES)
 				fatalx("%s: too many routes in imsg", __func__);
+
 			configure_interface(&imsg_interface);
 			break;
 		}
@@ -570,6 +579,15 @@ main_dispatch_engine(int fd, short event, void *bula)
 
 			if (imsg_get_data(&imsg, &imsg_interface,
 			    sizeof(imsg_interface)) == -1)
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.file[
+			    sizeof(imsg_interface.file) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.domainname[
+			    sizeof(imsg_interface.domainname) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.hostname[
+			    sizeof(imsg_interface.hostname) - 1] != '\0')
 				fatalx("%s: invalid %s", __func__, i2s(type));
 			if (imsg_interface.routes_len >= MAX_DHCP_ROUTES)
 				fatalx("%s: too many routes in imsg", __func__);
@@ -586,6 +604,15 @@ main_dispatch_engine(int fd, short event, void *bula)
 			if (imsg_get_data(&imsg, &imsg_interface,
 			    sizeof(imsg_interface)) == -1)
 				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.file[
+			    sizeof(imsg_interface.file) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.domainname[
+			    sizeof(imsg_interface.domainname) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
+			if (imsg_interface.hostname[
+			    sizeof(imsg_interface.hostname) - 1] != '\0')
+				fatalx("%s: invalid %s", __func__, i2s(type));
 			if (imsg_interface.routes_len >= MAX_DHCP_ROUTES)
 				fatalx("%s: too many routes in imsg", __func__);
 
@@ -600,6 +627,9 @@ main_dispatch_engine(int fd, short event, void *bula)
 				fatalx("%s: invalid %s", __func__, i2s(type));
 			if ((2 + rdns.rdns_count * sizeof(struct in_addr)) >
 			    sizeof(struct sockaddr_rtdns))
+				fatalx("%s: rdns_count too big: %d", __func__,
+				    rdns.rdns_count);
+			if (rdns.rdns_count > MAX_RDNS_COUNT)
 				fatalx("%s: rdns_count too big: %d", __func__,
 				    rdns.rdns_count);
 

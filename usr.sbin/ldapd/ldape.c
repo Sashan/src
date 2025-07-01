@@ -1,4 +1,4 @@
-/*	$OpenBSD: ldape.c,v 1.38 2024/01/17 08:28:15 claudio Exp $ */
+/*	$OpenBSD: ldape.c,v 1.40 2025/05/11 15:38:48 tb Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 Martin Hedenfalk <martin@bzero.se>
@@ -105,8 +105,7 @@ send_ldap_extended_response(struct conn *conn, int msgid, unsigned int type,
 
 	return;
 fail:
-	if (root)
-		ober_free_elements(root);
+	ober_free_elements(root);
 }
 
 int
@@ -180,10 +179,8 @@ ldap_refer(struct request *req, const char *basedn, struct search *search,
 	return LDAP_REFERRAL;
 
 fail:
-	if (root != NULL)
-		ober_free_elements(root);
-	if (ref_root != NULL)
-		ober_free_elements(ref_root);
+	ober_free_elements(root);
+	ober_free_elements(ref_root);
 	request_free(req);
 	return LDAP_REFERRAL;
 }
@@ -265,19 +262,28 @@ ldap_compare(struct request *req)
 	if ((entry = namespace_get(ns, dn)) == NULL)
 		return ldap_respond(req, LDAP_NO_SUCH_OBJECT);
 
-	if ((attr = ldap_find_attribute(entry, at)) == NULL)
+	if ((attr = ldap_find_attribute(entry, at)) == NULL) {
+		ober_free_elements(entry);
 		return ldap_respond(req, LDAP_NO_SUCH_ATTRIBUTE);
-
-	if ((attr = attr->be_next) == NULL)	/* skip attribute name */
-		return ldap_respond(req, LDAP_OTHER);
-
-	for (elm = attr->be_sub; elm != NULL; elm = elm->be_next) {
-		if (ober_get_string(elm, &s) != 0)
-			return ldap_respond(req, LDAP_OTHER);
-		if (strcasecmp(value, s) == 0)
-			return ldap_respond(req, LDAP_COMPARE_TRUE);
 	}
 
+	if ((attr = attr->be_next) == NULL) {	/* skip attribute name */
+		ober_free_elements(entry);
+		return ldap_respond(req, LDAP_OTHER);
+	}
+
+	for (elm = attr->be_sub; elm != NULL; elm = elm->be_next) {
+		if (ober_get_string(elm, &s) != 0) {
+			ober_free_elements(entry);
+			return ldap_respond(req, LDAP_OTHER);
+		}
+		if (strcasecmp(value, s) == 0) {
+			ober_free_elements(entry);
+			return ldap_respond(req, LDAP_COMPARE_TRUE);
+		}
+	}
+
+	ober_free_elements(entry);
 	return ldap_respond(req, LDAP_COMPARE_FALSE);
 }
 

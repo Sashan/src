@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.327 2025/01/02 10:07:18 dlg Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.330 2025/06/12 20:37:58 deraadt Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -90,7 +90,6 @@ int	vttoif_tab[9] = {
 };
 
 int prtactive = 0;	/* 1 => print out reclaim of active vnodes */
-int suid_clear = 1;	/* [a] 1 => clear SUID / SGID on owner change */
 
 /*
  * Insq/Remq for the vnode usage lists.
@@ -1383,6 +1382,7 @@ printlockedvnodes(void)
 }
 #endif
 
+#ifndef SMALL_KERNEL
 /*
  * Top level filesystem related information gathering.
  */
@@ -1435,6 +1435,7 @@ vfs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	}
 	return (EOPNOTSUPP);
 }
+#endif /* SMALL_KERNEL */
 
 /*
  * Check to see if a filesystem is mounted on a block device.
@@ -1844,7 +1845,7 @@ vfs_syncwait(struct proc *p, int verbose)
 			 */
 			if (bp->b_flags & B_DELWRI) {
 				s = splbio();
-				bremfree(bp);
+				bufcache_take(bp);
 				buf_acquire(bp);
 				splx(s);
 				nbusy++;
@@ -1874,46 +1875,6 @@ vfs_syncwait(struct proc *p, int verbose)
 	}
 
 	return nbusy;
-}
-
-/*
- * posix file system related system variables.
- */
-int
-fs_posix_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
-    void *newp, size_t newlen, struct proc *p)
-{
-	/* all sysctl names at this level are terminal */
-	if (namelen != 1)
-		return (ENOTDIR);
-
-	switch (name[0]) {
-	case FS_POSIX_SETUID:
-		return (sysctl_securelevel_int(oldp, oldlenp, newp, newlen,
-		    &suid_clear));
-	default:
-		return (EOPNOTSUPP);
-	}
-	/* NOTREACHED */
-}
-
-/*
- * file system related system variables.
- */
-int
-fs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
-    size_t newlen, struct proc *p)
-{
-	sysctlfn *fn;
-
-	switch (name[0]) {
-	case FS_POSIX:
-		fn = fs_posix_sysctl;
-		break;
-	default:
-		return (EOPNOTSUPP);
-	}
-	return (*fn)(name + 1, namelen - 1, oldp, oldlenp, newp, newlen, p);
 }
 
 
@@ -2025,7 +1986,7 @@ loop:
 				}
 				break;
 			}
-			bremfree(bp);
+			bufcache_take(bp);
 			/*
 			 * XXX Since there are no node locks for NFS, I believe
 			 * there is a slight chance that a delayed write will
@@ -2078,7 +2039,7 @@ loop:
 			continue;
 		if ((bp->b_flags & B_DELWRI) == 0)
 			panic("vflushbuf: not dirty");
-		bremfree(bp);
+		bufcache_take(bp);
 		buf_acquire(bp);
 		splx(s);
 		/*

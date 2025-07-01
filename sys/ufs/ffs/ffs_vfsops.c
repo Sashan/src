@@ -1,4 +1,4 @@
-/*	$OpenBSD: ffs_vfsops.c,v 1.198 2024/02/03 18:51:58 beck Exp $	*/
+/*	$OpenBSD: ffs_vfsops.c,v 1.200 2025/06/12 20:37:59 deraadt Exp $	*/
 /*	$NetBSD: ffs_vfsops.c,v 1.19 1996/02/09 22:22:26 christos Exp $	*/
 
 /*
@@ -84,7 +84,9 @@ const struct vfsops ffs_vfsops = {
 	.vfs_fhtovp	= ffs_fhtovp,
 	.vfs_vptofh	= ffs_vptofh,
 	.vfs_init	= ffs_init,
+#ifndef SMALL_KERNEL
 	.vfs_sysctl	= ffs_sysctl,
+#endif /* SMALL_KERNEL */
 	.vfs_checkexp	= ufs_check_export,
 };
 
@@ -1394,7 +1396,9 @@ ffs_sbupdate(struct ufsmount *mp, int waitfor)
 	    fs->fs_sblockloc >> (fs->fs_fshift - fs->fs_fsbtodb),
 	    (int)fs->fs_sbsize, 0, INFSLP);
 	fs->fs_fmod = 0;
+#ifndef BOOT_KERNEL
 	fs->fs_time = gettime();
+#endif
 	memcpy(bp->b_data, fs, fs->fs_sbsize);
 	/* Restore compatibility to old file systems.		   XXX */
 	dfs = (struct fs *)bp->b_data;				/* XXX */
@@ -1443,6 +1447,7 @@ ffs_init(struct vfsconf *vfsp)
 	return (ufs_init(vfsp));
 }
 
+#ifndef SMALL_KERNEL
 const struct sysctl_bounded_args ffs_vars[] = {
 #ifdef UFS_DIRHASH
 	{ FFS_DIRHASH_DIRSIZE, &ufs_mindirhashsize, 0, INT_MAX },
@@ -1461,3 +1466,4 @@ ffs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	return sysctl_bounded_arr(ffs_vars, nitems(ffs_vars), name,
 	    namelen, oldp, oldlenp, newp, newlen);
 }
+#endif /* SMALL_KERNEL */

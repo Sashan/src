@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vmx.c,v 1.90 2025/01/24 10:29:43 yasuoka Exp $	*/
+/*	$OpenBSD: if_vmx.c,v 1.93 2025/06/19 09:36:21 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2013 Tsubai Masanari
@@ -124,6 +124,7 @@ struct vmxnet3_txqueue {
 	struct vmxnet3_comp_ring comp_ring;
 	struct vmxnet3_txq_shared *ts;
 	struct ifqueue *ifq;
+	caddr_t *bpfp;
 	struct kstat *txkstat;
 	unsigned int queue;
 } __aligned(64);
@@ -144,6 +145,7 @@ struct vmxnet3_queue {
 	char intrname[16];
 	void *ih;
 	int intr;
+	caddr_t bpf;
 };
 
 struct vmxnet3_softc {
@@ -452,9 +454,24 @@ vmxnet3_attach(struct device *parent, struct device *self, void *aux)
 #endif
 
 	for (i = 0; i < sc->sc_nqueues; i++) {
-		ifp->if_ifqs[i]->ifq_softc = &sc->sc_q[i].tx;
-		sc->sc_q[i].tx.ifq = ifp->if_ifqs[i];
-		sc->sc_q[i].rx.ifiq = ifp->if_iqs[i];
+		struct vmxnet3_queue *q = &sc->sc_q[i];
+		struct ifiqueue *ifiq;
+
+		ifp->if_ifqs[i]->ifq_softc = &q->tx;
+		q->tx.ifq = ifp->if_ifqs[i];
+
+		ifiq = ifp->if_iqs[i];
+		q->rx.ifiq = ifiq;
+
+#if NBPFILTER > 0
+		if (sc->sc_intrmap != NULL) {
+			bpfxattach(&q->bpf, q->intrname,
+			    ifp, DLT_EN10MB, ETHER_HDR_LEN);
+
+			ifiq->ifiq_bpfp = &q->bpf;
+		}
+		q->tx.bpfp = &q->bpf;
+#endif
 
 #if NKSTAT > 0
 		vmx_kstat_txstats(sc, &sc->sc_q[i].tx, i);
@@ -1033,6 +1050,7 @@ vmxnet3_txintr(struct vmxnet3_softc *sc, struct vmxnet3_txqueue *tq)
 	struct mbuf *m;
 	u_int prod, cons, next;
 	uint32_t rgen;
+	unsigned int done = 0;
 
 	prod = ring->prod;
 	cons = ring->cons;
@@ -1068,6 +1086,7 @@ vmxnet3_txintr(struct vmxnet3_softc *sc, struct vmxnet3_txqueue *tq)
 		cons = (letoh32(txcd->txc_word0) >> VMXNET3_TXC_EOPIDX_S) &
 		    VMXNET3_TXC_EOPIDX_M;
 		cons++;
+		done = 1;
 		cons %= NTXDESC;
 	} while (cons != prod);
 
@@ -1078,7 +1097,7 @@ vmxnet3_txintr(struct vmxnet3_softc *sc, struct vmxnet3_txqueue *tq)
 	comp_ring->gen = rgen;
 	ring->cons = cons;
 
-	if (ifq_is_oactive(ifq))
+	if (done && ifq_is_oactive(ifq))
 		ifq_restart(ifq);
 }
 
@@ -1370,6 +1389,19 @@ vmxnet3_reset(struct vmxnet3_softc *sc)
 	WRITE_CMD(sc, VMXNET3_CMD_RESET);
 }
 
+void
+vmxnet4_set_features(struct vmxnet3_softc *sc)
+{
+	struct ifnet *ifp = &sc->sc_arpcom.ac_if;
+
+	/* TCP Large Receive Offload */
+	if (ISSET(ifp->if_xflags, IFXF_LRO))
+		SET(sc->sc_ds->upt_features, UPT1_F_LRO);
+	else
+		CLR(sc->sc_ds->upt_features, UPT1_F_LRO);
+	WRITE_CMD(sc, VMXNET3_CMD_SET_FEATURE);
+}
+
 int
 vmxnet3_init(struct vmxnet3_softc *sc)
 {
@@ -1403,12 +1435,7 @@ vmxnet3_init(struct vmxnet3_softc *sc)
 		return EIO;
 	}
 
-	/* TCP Large Receive Offload */
-	if (ISSET(ifp->if_xflags, IFXF_LRO))
-		SET(sc->sc_ds->upt_features, UPT1_F_LRO);
-	else
-		CLR(sc->sc_ds->upt_features, UPT1_F_LRO);
-	WRITE_CMD(sc, VMXNET3_CMD_SET_FEATURE);
+	vmxnet4_set_features(sc);
 
 	/* Program promiscuous mode and multicast filters. */
 	vmxnet3_iff(sc);
@@ -1474,6 +1501,17 @@ vmxnet3_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		} else {
 			if (ifp->if_flags & IFF_RUNNING)
 				vmxnet3_stop(ifp);
+		}
+		break;
+	case SIOCSIFXFLAGS:
+		if (ISSET(ifr->ifr_flags, IFXF_LRO) !=
+		    ISSET(ifp->if_xflags, IFXF_LRO)) {
+			if (ISSET(ifr->ifr_flags, IFXF_LRO))
+				SET(ifp->if_xflags, IFXF_LRO);
+			else
+				CLR(ifp->if_xflags, IFXF_LRO);
+
+			vmxnet4_set_features(sc);
 		}
 		break;
 	case SIOCSIFMEDIA:
@@ -1604,6 +1642,9 @@ vmxnet3_start(struct ifqueue *ifq)
 	unsigned int prod, free, i;
 	unsigned int post = 0;
 	uint32_t rgen, gen;
+#if NBPFILTER > 0
+	caddr_t if_bpf;
+#endif
 
 	struct mbuf *m;
 
@@ -1661,8 +1702,13 @@ vmxnet3_start(struct ifqueue *ifq)
 		}
 
 #if NBPFILTER > 0
-		if (ifp->if_bpf)
-			bpf_mtap_ether(ifp->if_bpf, m, BPF_DIRECTION_OUT);
+		if_bpf = ifp->if_bpf;
+		if (if_bpf)
+			bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT);
+
+		if_bpf = *tq->bpfp;
+		if (if_bpf)
+			bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT);
 #endif
 
 		ring->m[prod] = m;

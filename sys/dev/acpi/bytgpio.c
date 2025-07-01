@@ -1,4 +1,4 @@
-/*	$OpenBSD: bytgpio.c,v 1.18 2022/10/20 20:40:57 kettenis Exp $	*/
+/*	$OpenBSD: bytgpio.c,v 1.20 2025/06/16 15:44:35 kettenis Exp $	*/
 /*
  * Copyright (c) 2016 Mark Kettenis
  *
@@ -41,6 +41,7 @@ struct bytgpio_intrhand {
 	int (*ih_func)(void *);
 	void *ih_arg;
 	int ih_tflags;
+	int ih_ipl;
 };
 
 struct bytgpio_softc {
@@ -102,7 +103,7 @@ const int byt_sus_pins[] = {
 
 int	bytgpio_read_pin(void *, int);
 void	bytgpio_write_pin(void *, int, int);
-void	bytgpio_intr_establish(void *, int, int, int (*)(void *), void *);
+void	bytgpio_intr_establish(void *, int, int, int, int (*)(void *), void *);
 void	bytgpio_intr_enable(void *, int);
 void	bytgpio_intr_disable(void *, int);
 int	bytgpio_intr(void *);
@@ -234,7 +235,7 @@ bytgpio_write_pin(void *cookie, int pin, int value)
 }
 
 void
-bytgpio_intr_establish(void *cookie, int pin, int flags,
+bytgpio_intr_establish(void *cookie, int pin, int flags, int level,
     int (*func)(void *), void *arg)
 {
 	struct bytgpio_softc *sc = cookie;
@@ -244,6 +245,7 @@ bytgpio_intr_establish(void *cookie, int pin, int flags,
 	sc->sc_pin_ih[pin].ih_func = func;
 	sc->sc_pin_ih[pin].ih_arg = arg;
 	sc->sc_pin_ih[pin].ih_tflags = flags;
+	sc->sc_pin_ih[pin].ih_ipl = level & ~IPL_WAKEUP;
 
 	bytgpio_intr_enable(cookie, pin);
 }
@@ -289,9 +291,10 @@ int
 bytgpio_intr(void *arg)
 {
 	struct bytgpio_softc *sc = arg;
+	struct bytgpio_intrhand *ih;
 	uint32_t reg;
 	int rc = 0;
-	int pin;
+	int pin, s;
 
 	for (pin = 0; pin < sc->sc_npins; pin++) {
 		if (pin % 32 == 0) {
@@ -301,8 +304,12 @@ bytgpio_intr(void *arg)
 			    BYTGPIO_IRQ_TS_0 + (pin / 8), reg);
 		}
 		if (reg & (1 << (pin % 32))) {
-			if (sc->sc_pin_ih[pin].ih_func)
-				sc->sc_pin_ih[pin].ih_func(sc->sc_pin_ih[pin].ih_arg);
+			ih = &sc->sc_pin_ih[pin];
+			if (ih->ih_func) {
+				s = splraise(ih->ih_ipl);
+				ih->ih_func(ih->ih_arg);
+				splx(s);
+			}
 			rc = 1;
 		}
 	}

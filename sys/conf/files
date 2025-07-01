@@ -1,4 +1,4 @@
-#	$OpenBSD: files,v 1.742 2024/12/15 11:00:05 dlg Exp $
+#	$OpenBSD: files,v 1.745 2025/04/23 21:40:22 kettenis Exp $
 #	$NetBSD: files,v 1.87 1996/05/19 17:17:50 jonathan Exp $
 
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
@@ -558,6 +558,9 @@ device	qcgpio
 # Qualcomm I2C controller
 device	qciic: i2cbus
 
+# Qualcomm Secure Channel Manager
+device	qcscm
+
 # UFS HC
 device	ufshci: scsi
 file	dev/ic/ufshci.c			ufshci needs-flag
@@ -736,6 +739,7 @@ file kern/kern_intrmap.c		intrmap
 file kern/kern_sensors.c
 file kern/kern_sig.c
 file kern/kern_smr.c
+file kern/kern_softintr.c
 file kern/kern_subr.c
 file kern/kern_sysctl.c
 file kern/kern_synch.c

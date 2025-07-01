@@ -1,4 +1,4 @@
-/*	$OpenBSD: gbr.c,v 1.30 2024/02/21 09:17:06 tb Exp $ */
+/*	$OpenBSD: gbr.c,v 1.32 2025/06/12 16:59:48 tb Exp $ */
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
  *
@@ -19,12 +19,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <vis.h>
 
 #include <openssl/x509.h>
 
 #include "extern.h"
 
 extern ASN1_OBJECT	*gbr_oid;
+
+#define VCARD_START	"BEGIN:VCARD\r\nVERSION:4.0\r\n"
+#define VCARD_START_LEN	(sizeof(VCARD_START) - 1)
 
 /*
  * Parse a full RFC 6493 file and signed by the certificate "cacert"
@@ -48,9 +52,18 @@ gbr_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 	if ((gbr = calloc(1, sizeof(*gbr))) == NULL)
 		err(1, NULL);
 	gbr->signtime = signtime;
-	if ((gbr->vcard = strndup(cms, cmsz)) == NULL)
+
+	if (cmsz < VCARD_START_LEN ||
+	    strncmp(cms, VCARD_START, VCARD_START_LEN) != 0) {
+		warnx("%s: Ghostbusters record with invalid vCard", fn);
+		goto out;
+	}
+	if ((gbr->vcard = calloc(cmsz + 1, 4)) == NULL)
 		err(1, NULL);
+	(void)strvisx(gbr->vcard, cms, cmsz, VIS_SAFE);
+
 	free(cms);
+	cms = NULL;
 
 	if (!x509_get_aia(*x509, fn, &gbr->aia))
 		goto out;
@@ -79,10 +92,12 @@ gbr_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 
 	if ((cert = cert_parse_ee_cert(fn, talid, *x509)) == NULL)
 		goto out;
+	cert_free(cert);
 
 	return gbr;
 
  out:
+	free(cms);
 	gbr_free(gbr);
 	X509_free(*x509);
 	*x509 = NULL;

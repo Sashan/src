@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto.h,v 1.77 2025/01/20 17:50:12 tb Exp $ */
+/* $OpenBSD: crypto.h,v 1.79 2025/03/09 15:29:56 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -197,15 +197,15 @@ extern "C" {
 
 #ifndef CRYPTO_w_lock
 #define CRYPTO_w_lock(type)	\
-	CRYPTO_lock(CRYPTO_LOCK|CRYPTO_WRITE,type,NULL,0)
+	CRYPTO_lock(CRYPTO_LOCK|CRYPTO_WRITE,type,OPENSSL_FILE,OPENSSL_LINE)
 #define CRYPTO_w_unlock(type)	\
-	CRYPTO_lock(CRYPTO_UNLOCK|CRYPTO_WRITE,type,NULL,0)
+	CRYPTO_lock(CRYPTO_UNLOCK|CRYPTO_WRITE,type,OPENSSL_FILE,OPENSSL_LINE)
 #define CRYPTO_r_lock(type)	\
-	CRYPTO_lock(CRYPTO_LOCK|CRYPTO_READ,type,NULL,0)
+	CRYPTO_lock(CRYPTO_LOCK|CRYPTO_READ,type,OPENSSL_FILE,OPENSSL_LINE)
 #define CRYPTO_r_unlock(type)	\
-	CRYPTO_lock(CRYPTO_UNLOCK|CRYPTO_READ,type,NULL,0)
+	CRYPTO_lock(CRYPTO_UNLOCK|CRYPTO_READ,type,OPENSSL_FILE,OPENSSL_LINE)
 #define CRYPTO_add(addr,amount,type)	\
-	CRYPTO_add_lock(addr,amount,type,NULL,0)
+	CRYPTO_add_lock(addr,amount,type,OPENSSL_FILE,OPENSSL_LINE)
 #endif
 
 /* Some applications as well as some parts of OpenSSL need to allocate
@@ -275,9 +275,9 @@ DECLARE_STACK_OF(void)
 
 int CRYPTO_mem_ctrl(int mode);
 
-#define OPENSSL_malloc(num)	CRYPTO_malloc((num),NULL,0)
-#define OPENSSL_strdup(str)	CRYPTO_strdup((str),NULL,0)
-#define OPENSSL_free(addr)	CRYPTO_free((addr),NULL,0)
+#define OPENSSL_malloc(num)	CRYPTO_malloc((num),OPENSSL_FILE,OPENSSL_LINE)
+#define OPENSSL_strdup(str)	CRYPTO_strdup((str),OPENSSL_FILE,OPENSSL_LINE)
+#define OPENSSL_free(addr)	CRYPTO_free((addr),OPENSSL_FILE,OPENSSL_LINE)
 
 const char *OpenSSL_version(int type);
 #define OPENSSL_VERSION		0
@@ -349,11 +349,9 @@ struct CRYPTO_dynlock_value *(*CRYPTO_get_dynlock_create_callback(void))(const c
 void (*CRYPTO_get_dynlock_lock_callback(void))(int mode, struct CRYPTO_dynlock_value *l, const char *file, int line);
 void (*CRYPTO_get_dynlock_destroy_callback(void))(struct CRYPTO_dynlock_value *l, const char *file, int line);
 
-/* CRYPTO_set_mem_functions includes CRYPTO_set_locked_mem_functions --
- * call the latter last if you need different functions */
-int CRYPTO_set_mem_functions(void *(*m)(size_t), void *(*r)(void *, size_t), void (*f)(void *));
-int CRYPTO_set_mem_ex_functions(void *(*m)(size_t, const char *, int),
-    void *(*r)(void *, size_t, const char *, int), void (*f)(void *));
+int CRYPTO_set_mem_functions(void *(*m)(size_t, const char *, int),
+    void *(*r)(void *, size_t, const char *, int),
+    void (*f)(void *, const char *, int));
 
 void *CRYPTO_malloc(size_t num, const char *file, int line);
 char *CRYPTO_strdup(const char *str, const char *file, int line);
@@ -371,7 +369,7 @@ __declspec(noreturn)
 __attribute__((__noreturn__))
 #endif
 void OpenSSLDie(const char *file, int line, const char *assertion);
-#define OPENSSL_assert(e)       (void)((e) ? 0 : (OpenSSLDie(__FILE__, __LINE__, #e),1))
+#define OPENSSL_assert(e)       (void)((e) ? 0 : (OpenSSLDie(OPENSSL_FILE, OPENSSL_LINE, #e),1))
 
 int FIPS_mode(void);
 int FIPS_mode_set(int r);

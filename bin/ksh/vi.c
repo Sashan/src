@@ -1,4 +1,4 @@
-/*	$OpenBSD: vi.c,v 1.60 2021/03/12 02:10:25 millert Exp $	*/
+/*	$OpenBSD: vi.c,v 1.66 2025/05/19 14:27:38 schwarze Exp $	*/
 
 /*
  *	vi command editing
@@ -695,7 +695,6 @@ vi_cmd(int argcnt, const char *cmd)
 {
 	int		ncursor;
 	int		cur, c1, c2, c3 = 0;
-	int		any;
 	struct edstate	*t;
 
 	if (argcnt == 0 && !is_zerocount(*cmd))
@@ -834,23 +833,25 @@ vi_cmd(int argcnt, const char *cmd)
 
 		case 'p':
 			modified = 1; hnum = hlast;
-			if (es->linelen != 0)
-				es->cursor++;
+			while (es->cursor < es->linelen)
+				if (!isu8cont(es->cbuf[++es->cursor]))
+					break;
 			while (putbuf(ybuf, yanklen, 0) == 0 && --argcnt > 0)
 				;
-			if (es->cursor != 0)
-				es->cursor--;
+			while (es->cursor > 0)
+				if (!isu8cont(es->cbuf[--es->cursor]))
+					break;
 			if (argcnt != 0)
 				return -1;
 			break;
 
 		case 'P':
 			modified = 1; hnum = hlast;
-			any = 0;
 			while (putbuf(ybuf, yanklen, 0) == 0 && --argcnt > 0)
-				any = 1;
-			if (any && es->cursor != 0)
-				es->cursor--;
+				continue;
+			while (es->cursor > 0)
+				if (!isu8cont(es->cbuf[--es->cursor]))
+					break;
 			if (argcnt != 0)
 				return -1;
 			break;
@@ -864,8 +865,6 @@ vi_cmd(int argcnt, const char *cmd)
 		case 'D':
 			yank_range(es->cursor, es->linelen);
 			del_range(es->cursor, es->linelen);
-			if (es->cursor != 0)
-				es->cursor--;
 			break;
 
 		case 'g':
@@ -1236,7 +1235,8 @@ domove(int argcnt, const char *cmd, int sub)
 		if (!sub && es->cursor + 1 >= es->linelen)
 			return -1;
 		for (ncursor = es->cursor; ncursor < es->linelen; ncursor++)
-			if (!isu8cont(es->cbuf[ncursor]))
+			if (ncursor == es->cursor ||
+			    !isu8cont(es->cbuf[ncursor]))
 				if (argcnt-- == 0)
 					break;
 		break;
@@ -1870,7 +1870,7 @@ display(char *wb1, char *wb2, int leftside)
 					}
 				} else {
 					*twb1++ = ch;
-					if (!isu8cont(ch))
+					if (col == 0 || !isu8cont(ch))
 						col++;
 				}
 			}
@@ -1909,8 +1909,9 @@ display(char *wb1, char *wb2, int leftside)
 			 * the previous byte was the last one written.
 			 */
 
-			if (col > 0 && isu8cont(*twb1)) {
-				col--;
+			if (isu8cont(*twb1)) {
+				if (col > pwidth)
+					col--;
 				if (lastb >= 0 && twb1 == wb1 + lastb + 1)
 					cur_col = col;
 				else while (twb1 > wb1 && isu8cont(*twb1)) {
@@ -1934,7 +1935,7 @@ display(char *wb1, char *wb2, int leftside)
 			}
 			lastb = *twb1 & 0x80 ? twb1 - wb1 : -1;
 			cur_col++;
-		} else if (isu8cont(*twb1))
+		} else if (twb1 > wb1 && isu8cont(*twb1))
 			continue;
 
 		/*
@@ -2006,10 +2007,15 @@ ed_mov_opt(int col, char *wb)
 
 	/* Advance the cursor. */
 
-	for (ci = pwidth; ci < col || isu8cont(*wb);
-	     ci = newcol((unsigned char)*wb++, ci))
-		if (ci > cur_col || (ci == cur_col && !isu8cont(*wb)))
+	ci = pwidth;
+	while (ci < col || (ci > pwidth && isu8cont(*wb))) {
+		ci = newcol((unsigned char)*wb, ci);
+		if (ci == pwidth)
+			ci++;
+		if (ci > cur_col)
 			x_putc(*wb);
+		wb++;
+	}
 	cur_col = ci;
 }
 

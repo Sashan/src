@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.h,v 1.46 2023/12/11 22:12:52 kettenis Exp $ */
+/* $OpenBSD: pmap.h,v 1.49 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: pmap.h,v 1.37 2000/11/19 03:16:35 thorpej Exp $ */
 
 /*-
@@ -151,7 +151,7 @@ void	pmap_do_tlb_shootdown(struct cpu_info *, struct trapframe *);
 #define	PMAP_TLB_SHOOTDOWN(pm, va, pte)		/* nothing */
 #define	PMAP_TLB_SHOOTNOW()			/* nothing */
 #endif /* MULTIPROCESSOR */
- 
+
 #define	pmap_resident_count(pmap)	((pmap)->pm_stats.resident_count)
 #define	pmap_wired_count(pmap)		((pmap)->pm_stats.wired_count)
 
@@ -177,8 +177,6 @@ extern	pt_entry_t *VPT;		/* Virtual Page Table */
 #define	__HAVE_PMAP_DIRECT
 
 paddr_t vtophys(vaddr_t);
-
-#define	__HAVE_PMAP_COLLECT
 
 /* Machine-specific functions. */
 void	pmap_bootstrap(paddr_t ptaddr, u_int maxasn, u_long ncpuids);
@@ -217,10 +215,7 @@ static __inline pt_entry_t *pmap_l3pte(pmap_t, vaddr_t, pt_entry_t *);
 	(&(pmap)->pm_lev1map[l1pte_index((vaddr_t)(v))])
 
 static __inline pt_entry_t *
-pmap_l2pte(pmap, v, l1pte)
-	pmap_t pmap;
-	vaddr_t v;
-	pt_entry_t *l1pte;
+pmap_l2pte(pmap_t pmap, vaddr_t v, pt_entry_t *l1pte)
 {
 	pt_entry_t *lev2map;
 
@@ -235,10 +230,7 @@ pmap_l2pte(pmap, v, l1pte)
 }
 
 static __inline pt_entry_t *
-pmap_l3pte(pmap, v, l2pte)
-	pmap_t pmap;
-	vaddr_t v;
-	pt_entry_t *l2pte;
+pmap_l3pte(pmap_t pmap, vaddr_t v, pt_entry_t *l2pte)
 {
 	pt_entry_t *l1pte, *lev2map, *lev3map;
 

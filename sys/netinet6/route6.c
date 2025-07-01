@@ -1,4 +1,4 @@
-/*	$OpenBSD: route6.c,v 1.22 2024/02/13 12:22:09 bluhm Exp $	*/
+/*	$OpenBSD: route6.c,v 1.25 2025/05/27 07:52:49 bluhm Exp $	*/
 /*	$KAME: route6.c,v 1.22 2000/12/03 00:54:00 itojun Exp $	*/
 
 /*
@@ -51,15 +51,15 @@
  */
 
 int
-route6_input(struct mbuf **mp, int *offp, int proto, int af)
+route6_input(struct mbuf **mp, int *offp, int proto, int af,
+    struct netstack *ns)
 {
 	struct ip6_hdr *ip6;
-	struct mbuf *m = *mp;
 	struct ip6_rthdr *rh;
 	int off = *offp, rhlen;
 
-	ip6 = mtod(m, struct ip6_hdr *);
-	IP6_EXTHDR_GET(rh, struct ip6_rthdr *, m, off, sizeof(*rh));
+	ip6 = mtod(*mp, struct ip6_hdr *);
+	rh = ip6_exthdr_get(mp, off, sizeof(*rh));
 	if (rh == NULL) {
 		ip6stat_inc(ip6s_tooshort);
 		return IPPROTO_DONE;
@@ -79,7 +79,7 @@ route6_input(struct mbuf **mp, int *offp, int proto, int af)
 			break;	/* Final dst. Just ignore the header. */
 		}
 		ip6stat_inc(ip6s_badoptions);
-		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
+		icmp6_error(*mp, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 			    (caddr_t)&rh->ip6r_type - (caddr_t)ip6);
 		return (IPPROTO_DONE);
 	}

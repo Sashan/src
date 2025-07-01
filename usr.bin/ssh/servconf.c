@@ -1,4 +1,4 @@
-/* $OpenBSD: servconf.c,v 1.424 2025/02/15 01:52:07 djm Exp $ */
+/* $OpenBSD: servconf.c,v 1.427 2025/05/24 08:13:29 dtucker Exp $ */
 /*
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
  *                    All rights reserved
@@ -1019,8 +1019,10 @@ match_cfg_line(const char *full_line, int *acp, char ***avp,
 		}
 		/* Criterion "invalid-user" also has no argument */
 		if (strcasecmp(attrib, "invalid-user") == 0) {
-			if (ci == NULL)
+			if (ci == NULL) {
+				result = 0;
 				continue;
+			}
 			if (ci->user_invalid == 0)
 				result = 0;
 			else
@@ -1220,8 +1222,8 @@ static const struct multistate multistate_addressfamily[] = {
 	{ NULL, -1 }
 };
 static const struct multistate multistate_permitrootlogin[] = {
-	{ "without-password",		PERMIT_NO_PASSWD },
 	{ "prohibit-password",		PERMIT_NO_PASSWD },
+	{ "without-password",		PERMIT_NO_PASSWD },
 	{ "forced-commands-only",	PERMIT_FORCED_ONLY },
 	{ "yes",			PERMIT_YES },
 	{ "no",				PERMIT_NO },
@@ -2006,10 +2008,11 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 
 	case sPerSourcePenalties:
 		while ((arg = argv_next(&ac, &av)) != NULL) {
+			const char *q = NULL;
+
 			found = 1;
 			value = -1;
 			value2 = 0;
-			p = NULL;
 			/* Allow no/yes only in first position */
 			if (strcasecmp(arg, "no") == 0 ||
 			    (value2 = (strcasecmp(arg, "yes") == 0))) {
@@ -2022,35 +2025,28 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 				    options->per_source_penalty.enabled == -1)
 					options->per_source_penalty.enabled = value2;
 				continue;
-			} else if (strncmp(arg, "crash:", 6) == 0) {
-				p = arg + 6;
+			} else if ((q = strprefix(arg, "crash:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_crash;
-			} else if (strncmp(arg, "authfail:", 9) == 0) {
-				p = arg + 9;
+			} else if ((q = strprefix(arg, "authfail:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_authfail;
-			} else if (strncmp(arg, "noauth:", 7) == 0) {
-				p = arg + 7;
+			} else if ((q = strprefix(arg, "noauth:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_noauth;
-			} else if (strncmp(arg, "grace-exceeded:", 15) == 0) {
-				p = arg + 15;
+			} else if ((q = strprefix(arg, "grace-exceeded:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_grace;
-			} else if (strncmp(arg, "refuseconnection:", 17) == 0) {
-				p = arg + 17;
+			} else if ((q = strprefix(arg, "refuseconnection:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_refuseconnection;
-			} else if (strncmp(arg, "max:", 4) == 0) {
-				p = arg + 4;
+			} else if ((q = strprefix(arg, "max:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_max;
-			} else if (strncmp(arg, "min:", 4) == 0) {
-				p = arg + 4;
+			} else if ((q = strprefix(arg, "min:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.penalty_min;
-			} else if (strncmp(arg, "max-sources4:", 13) == 0) {
+			} else if ((q = strprefix(arg, "max-sources4:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.max_sources4;
-				if ((errstr = atoi_err(arg+13, &value)) != NULL)
+				if ((errstr = atoi_err(q, &value)) != NULL)
 					fatal("%s line %d: %s value %s.",
 					    filename, linenum, keyword, errstr);
-			} else if (strncmp(arg, "max-sources6:", 13) == 0) {
+			} else if ((q = strprefix(arg, "max-sources6:", 0)) != NULL) {
 				intptr = &options->per_source_penalty.max_sources6;
-				if ((errstr = atoi_err(arg+13, &value)) != NULL)
+				if ((errstr = atoi_err(q, &value)) != NULL)
 					fatal("%s line %d: %s value %s.",
 					    filename, linenum, keyword, errstr);
 			} else if (strcmp(arg, "overflow:deny-all") == 0) {
@@ -2070,7 +2066,7 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 				    filename, linenum, keyword, arg);
 			}
 			/* If no value was parsed above, assume it's a time */
-			if (value == -1 && (value = convtime(p)) == -1) {
+			if (value == -1 && (value = convtime(q)) == -1) {
 				fatal("%s line %d: invalid %s time value.",
 				    filename, linenum, keyword);
 			}

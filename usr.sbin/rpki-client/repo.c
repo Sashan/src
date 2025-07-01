@@ -1,4 +1,4 @@
-/*	$OpenBSD: repo.c,v 1.71 2024/12/19 13:23:38 job Exp $ */
+/*	$OpenBSD: repo.c,v 1.76 2025/04/08 09:28:25 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -63,6 +63,7 @@ struct rrdprepo {
 	unsigned int		 id;
 	enum repo_state		 state;
 	time_t			 last_reset;
+	time_t			 mtime;
 };
 static SLIST_HEAD(, rrdprepo)	rrdprepos = SLIST_HEAD_INITIALIZER(rrdprepos);
 
@@ -662,6 +663,7 @@ rrdp_session_parse(struct rrdprepo *rr)
 	size_t i, len = 0;
 	ssize_t n;
 	time_t now, weeks;
+	struct stat st;
 
 	now = time(NULL);
 
@@ -676,7 +678,10 @@ rrdp_session_parse(struct rrdprepo *rr)
 		rr->last_reset = now;
 		return state;
 	}
+	if (fstat(fd, &st) != 0)
+		errx(1, "fstat %s", file);
 	free(file);
+	rr->mtime = st.st_mtime;
 	f = fdopen(fd, "r");
 	if (f == NULL)
 		err(1, "fdopen");
@@ -693,7 +698,7 @@ rrdp_session_parse(struct rrdprepo *rr)
 			state->serial = strtonum(line, 1, LLONG_MAX, &errstr);
 			if (errstr) {
 				warnx("%s: state file: serial is %s: %s",
-				   rr->basedir, errstr, line);
+				    rr->basedir, errstr, line);
 				goto reset;
 			}
 			break;
@@ -806,6 +811,8 @@ rrdp_session_save(unsigned int id, struct rrdp_session *state)
 		warn("%s: rename %s to %s", rr->basedir, temp, file);
 		unlink(temp);
 	}
+
+	rr->mtime = time(NULL);
 
 	free(temp);
 	free(file);
@@ -923,6 +930,7 @@ rrdp_clear(unsigned int id)
 
 	/* remove rrdp repository contents */
 	remove_contents(rr->basedir);
+	rr->state = REPO_LOADING;
 }
 
 /*
@@ -1090,6 +1098,10 @@ rrdp_finish(unsigned int id, int ok)
 
 	if (ok) {
 		logx("%s: loaded from network", rr->notifyuri);
+		if (time(NULL) - rr->mtime > 24 * 60 * 60) {
+			warnx("%s: notification file not modified since %s",
+			    rr->notifyuri, time2str(rr->mtime));
+		}
 		stats.rrdp_repos++;
 		rr->state = REPO_DONE;
 	} else {
@@ -1504,6 +1516,10 @@ repo_stat_inc(struct repo *rp, int talid, enum rtype type, enum stype subtype)
 			rp->stats[talid].certs++;
 		if (subtype == STYPE_FAIL)
 			rp->stats[talid].certs_fail++;
+		if (subtype == STYPE_NONFUNC)
+			rp->stats[talid].certs_nonfunc++;
+		if (subtype == STYPE_FUNC)
+			rp->stats[talid].certs_nonfunc--;
 		if (subtype == STYPE_BGPSEC) {
 			rp->stats[talid].certs--;
 			rp->stats[talid].brks++;

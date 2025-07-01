@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_proto.c,v 1.121 2025/01/05 12:36:48 bluhm Exp $	*/
+/*	$OpenBSD: in_proto.c,v 1.125 2025/06/16 07:11:58 mvs Exp $	*/
 /*	$NetBSD: in_proto.c,v 1.14 1996/02/18 18:58:32 christos Exp $	*/
 
 /*
@@ -179,7 +179,9 @@ const struct protosw inetsw[] = {
   .pr_domain	= &inetdomain,
   .pr_init	= ip_init,
   .pr_slowtimo	= ip_slowtimo,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= ip_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_DGRAM,
@@ -191,20 +193,25 @@ const struct protosw inetsw[] = {
   .pr_ctloutput	= ip_ctloutput,
   .pr_usrreqs	= &udp_usrreqs,
   .pr_init	= udp_init,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= udp_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_STREAM,
   .pr_domain	= &inetdomain,
   .pr_protocol	= IPPROTO_TCP,
-  .pr_flags	= PR_CONNREQUIRED|PR_WANTRCVD|PR_ABRTACPTDIS|PR_SPLICE,
+  .pr_flags	= PR_CONNREQUIRED|PR_WANTRCVD|PR_ABRTACPTDIS|PR_SPLICE|
+		    PR_MPINPUT|PR_MPSYSCTL,
   .pr_input	= tcp_input,
   .pr_ctlinput	= tcp_ctlinput,
   .pr_ctloutput	= tcp_ctloutput,
   .pr_usrreqs	= &tcp_usrreqs,
   .pr_init	= tcp_init,
   .pr_slowtimo	= tcp_slowtimo,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= tcp_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_RAW,
@@ -224,7 +231,9 @@ const struct protosw inetsw[] = {
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
   .pr_init	= icmp_init,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= icmp_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_RAW,
@@ -238,7 +247,9 @@ const struct protosw inetsw[] = {
 #endif
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= ipip_sysctl,
+#endif /* SMALL_KERNEL */
   .pr_init	= ipip_init
 },
 #ifdef INET6
@@ -277,7 +288,9 @@ const struct protosw inetsw[] = {
   .pr_init	= igmp_init,
   .pr_fasttimo	= igmp_fasttimo,
   .pr_slowtimo	= igmp_slowtimo,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= igmp_sysctl
+#endif /* SMALL_KERNEL */
 },
 #ifdef IPSEC
 {
@@ -289,18 +302,22 @@ const struct protosw inetsw[] = {
   .pr_ctlinput	= ah4_ctlinput,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= ah_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inetdomain,
   .pr_protocol	= IPPROTO_ESP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSYSCTL,
   .pr_input	= esp46_input,
   .pr_ctlinput	= esp4_ctlinput,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= esp_sysctl
+#endif /* SMALL_KERNEL */
 },
 {
   .pr_type	= SOCK_RAW,
@@ -310,7 +327,9 @@ const struct protosw inetsw[] = {
   .pr_input	= ipcomp46_input,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= ipcomp_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* IPSEC */
 #if NGRE > 0
@@ -322,7 +341,9 @@ const struct protosw inetsw[] = {
   .pr_input	= gre_input,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &gre_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= gre_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* NGRE > 0 */
 #if NCARP > 0
@@ -334,7 +355,9 @@ const struct protosw inetsw[] = {
   .pr_input	= carp_proto_input,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= carp_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* NCARP > 0 */
 #if NPFSYNC > 0
@@ -346,7 +369,9 @@ const struct protosw inetsw[] = {
   .pr_input	= pfsync_input4,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= pfsync_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* NPFSYNC > 0 */
 #if NPF > 0
@@ -358,7 +383,9 @@ const struct protosw inetsw[] = {
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &divert_usrreqs,
   .pr_init	= divert_init,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= divert_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* NPF > 0 */
 #if NETHERIP > 0
@@ -370,7 +397,9 @@ const struct protosw inetsw[] = {
   .pr_input	= ip_etherip_input,
   .pr_ctloutput	= rip_ctloutput,
   .pr_usrreqs	= &rip_usrreqs,
+#ifndef SMALL_KERNEL
   .pr_sysctl	= etherip_sysctl
+#endif /* SMALL_KERNEL */
 },
 #endif /* NETHERIP */
 {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_ipip.c,v 1.105 2024/08/22 10:58:31 mvs Exp $ */
+/*	$OpenBSD: ip_ipip.c,v 1.109 2025/06/30 12:43:22 mvs Exp $ */
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr) and
@@ -80,7 +80,7 @@
 #ifdef ENCDEBUG
 #define DPRINTF(fmt, args...)						\
 	do {								\
-		if (encdebug)						\
+		if (atomic_load_int(&encdebug))				\
 			printf("%s: " fmt "\n", __func__, ## args);	\
 	} while (0)
 #else
@@ -106,7 +106,7 @@ ipip_init(void)
  * Really only a wrapper for ipip_input_if(), for use with pr_input.
  */
 int
-ipip_input(struct mbuf **mp, int *offp, int nxt, int af)
+ipip_input(struct mbuf **mp, int *offp, int nxt, int af, struct netstack *ns)
 {
 	struct ifnet *ifp;
 	int ipip_allow_local = atomic_load_int(&ipip_allow);
@@ -124,7 +124,7 @@ ipip_input(struct mbuf **mp, int *offp, int nxt, int af)
 		m_freemp(mp);
 		return IPPROTO_DONE;
 	}
-	nxt = ipip_input_if(mp, offp, nxt, af, ipip_allow_local, ifp);
+	nxt = ipip_input_if(mp, offp, nxt, af, ipip_allow_local, ifp, ns);
 	if_put(ifp);
 
 	return nxt;
@@ -140,7 +140,7 @@ ipip_input(struct mbuf **mp, int *offp, int nxt, int af)
 
 int
 ipip_input_if(struct mbuf **mp, int *offp, int proto, int oaf, int allow,
-    struct ifnet *ifp)
+    struct ifnet *ifp, struct netstack *ns)
 {
 	struct mbuf *m = *mp;
 	struct sockaddr_in *sin;
@@ -326,10 +326,10 @@ ipip_input_if(struct mbuf **mp, int *offp, int proto, int oaf, int allow,
 
 	switch (proto) {
 	case IPPROTO_IPV4:
-		return ip_input_if(mp, offp, proto, oaf, ifp);
+		return ip_input_if(mp, offp, proto, oaf, ifp, ns);
 #ifdef INET6
 	case IPPROTO_IPV6:
-		return ip6_input_if(mp, offp, proto, oaf, ifp);
+		return ip6_input_if(mp, offp, proto, oaf, ifp, ns);
 #endif
 	}
  bad:
@@ -387,7 +387,7 @@ ipip_output(struct mbuf **mp, struct tdb *tdb)
 		ipo->ip_v = IPVERSION;
 		ipo->ip_hl = 5;
 		ipo->ip_len = htons(m->m_pkthdr.len);
-		ipo->ip_ttl = ip_defttl;
+		ipo->ip_ttl = atomic_load_int(&ip_defttl);
 		ipo->ip_sum = 0;
 		ipo->ip_src = tdb->tdb_src.sin.sin_addr;
 		ipo->ip_dst = tdb->tdb_dst.sin.sin_addr;
@@ -564,7 +564,8 @@ ipe4_zeroize(struct tdb *tdbp)
 }
 
 int
-ipe4_input(struct mbuf **mp, struct tdb *tdb, int hlen, int proto)
+ipe4_input(struct mbuf **mp, struct tdb *tdb, int hlen, int proto,
+    struct netstack *ns)
 {
 	/* This is a rather serious mistake, so no conditional printing. */
 	printf("%s: should never be called\n", __func__);
@@ -573,6 +574,7 @@ ipe4_input(struct mbuf **mp, struct tdb *tdb, int hlen, int proto)
 }
 #endif	/* IPSEC */
 
+#ifndef SMALL_KERNEL
 int
 ipip_sysctl_ipipstat(void *oldp, size_t *oldlenp, void *newp)
 {
@@ -605,3 +607,4 @@ ipip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	}
 	/* NOTREACHED */
 }
+#endif /* SMALL_KERNEL */

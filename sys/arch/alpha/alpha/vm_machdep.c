@@ -1,4 +1,4 @@
-/* $OpenBSD: vm_machdep.c,v 1.53 2024/05/21 23:16:06 jsg Exp $ */
+/* $OpenBSD: vm_machdep.c,v 1.55 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: vm_machdep.c,v 1.55 2000/03/29 03:49:48 simonb Exp $ */
 
 /*
@@ -45,31 +45,17 @@
 #include <machine/reg.h>
 
 
-/*
- * cpu_exit is called as the last action during exit.
- */
 void
-cpu_exit(p)
-	struct proc *p;
+cpu_exit(struct proc *p)
 {
-
 	if (p->p_addr->u_pcb.pcb_fpcpu != NULL)
 		fpusave_proc(p, 0);
-
-	/*
-	 * Deactivate the exiting address space before the vmspace
-	 * is freed.  Note that we will continue to run on this
-	 * vmspace's context until the switch to idle in sched_exit().
-	 */
-	pmap_deactivate(p);
-	sched_exit(p);
-	/* NOTREACHED */
 }
 
 /*
  * Finish a fork operation, with process p2 nearly set up.
  * Copy and update the pcb and trap frame, making the child ready to run.
- * 
+ *
  * Rig the child's kernel stack so that it will start out in
  * proc_trampoline() and call 'func' with 'arg' as an argument.
  * For normal processes this is child_return(), which causes the

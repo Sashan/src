@@ -1,4 +1,4 @@
-/*	$Id: netproc.c,v 1.37 2024/10/10 09:39:35 florian Exp $ */
+/*	$Id: netproc.c,v 1.44 2025/06/12 15:46:28 florian Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,14 +89,8 @@ url2host(const char *host, short *port, char **path)
 			warn("strdup");
 			return NULL;
 		}
-	} else if (strncmp(host, "http://", 7) == 0) {
-		*port = 80;
-		if ((url = strdup(host + 7)) == NULL) {
-			warn("strdup");
-			return NULL;
-		}
 	} else {
-		warnx("%s: unknown schema", host);
+		warnx("%s: RFC 8555 requires https for the API server", host);
 		return NULL;
 	}
 
@@ -110,6 +105,21 @@ url2host(const char *host, short *port, char **path)
 		warn("strdup");
 		free(url);
 		return NULL;
+	}
+
+	/* extract port */
+	if ((ep = strchr(url, ':')) != NULL) {
+		const char *errstr;
+
+		*ep = '\0';
+		*port = strtonum(ep + 1, 1, USHRT_MAX, &errstr);
+		if (errstr != NULL) {
+			warn("port is %s: %s", errstr, ep + 1);
+			free(*path);
+			*path = NULL;
+			free(url);
+			return NULL;
+		}
 	}
 
 	return url;
@@ -251,6 +261,7 @@ sreq(struct conn *c, const char *addr, int kid, const char *req, char **loc)
 	struct httphead	*h;
 	ssize_t		 ssz;
 	long		 code;
+	int		 retry = 0;
 
 	if ((host = url2host(c->newnonce, &port, &path)) == NULL)
 		return -1;
@@ -279,6 +290,7 @@ sreq(struct conn *c, const char *addr, int kid, const char *req, char **loc)
 	}
 	http_get_free(g);
 
+ again:
 	/*
 	 * Send the url, nonce and request payload to the acctproc.
 	 * This will create the proper JSON object we need.
@@ -337,6 +349,46 @@ sreq(struct conn *c, const char *addr, int kid, const char *req, char **loc)
 	} else
 		memcpy(c->buf.buf, g->bodypart, c->buf.sz);
 
+	if (code == 400) {
+		struct jsmnn	*j;
+		char		*type;
+
+		j = json_parse(c->buf.buf, c->buf.sz);
+		if (j == NULL) {
+			code = -1;
+			goto out;
+		}
+
+		type = json_getstr(j, "type");
+		json_free(j);
+
+		if (type == NULL) {
+			code = -1;
+			goto out;
+		}
+
+		if (strcmp(type, "urn:ietf:params:acme:error:badNonce") != 0) {
+			free(type);
+			goto out;
+		}
+		free(type);
+
+		if (retry++ < RETRY_MAX) {
+			h = http_head_get("Replay-Nonce", g->head, g->headsz);
+			if (h == NULL) {
+				warnx("no replay nonce");
+				code = -1;
+				goto out;
+			} else if ((nonce = strdup(h->val)) == NULL) {
+				warn("strdup");
+				code = -1;
+				goto out;
+			}
+			http_get_free(g);
+			goto again;
+		}
+	}
+ out:
 	if (loc != NULL) {
 		free(*loc);
 		*loc = NULL;
@@ -673,7 +725,7 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
     int revocate, struct authority_c *authority,
     const char *const *alts, size_t altsz)
 {
-	int		 rc = 0;
+	int		 rc = 0, retries = 0;
 	size_t		 i;
 	char		*cert = NULL, *thumb = NULL, *error = NULL;
 	struct conn	 c;
@@ -695,7 +747,7 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 		goto out;
 	}
 
-	if (http_init() == -1) {
+	if (http_init(authority->insecure) == -1) {
 		warn("http_init");
 		goto out;
 	}
@@ -863,6 +915,9 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 			if (!docert(&c, order.finalize, cert))
 				goto out;
 			break;
+		case ORDER_PROCESSING:
+			/* we'll just retry */
+			break;
 		default:
 			warnx("unhandled status: %d", order.status);
 			goto out;
@@ -871,8 +926,19 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 			goto out;
 
 		dodbg("order.status %d", order.status);
-		if (order.status == ORDER_PENDING)
+		switch (order.status) {
+		case ORDER_PENDING:
+		case ORDER_PROCESSING:
+			if (retries++ > RETRY_MAX) {
+				warnx("too many retries");
+				goto out;
+			}
 			sleep(RETRY_DELAY);
+			break;
+		default:
+			retries = 0; /* state changed, we made progress */
+			break;
+		}
 	}
 
 	if (order.status != ORDER_VALID) {

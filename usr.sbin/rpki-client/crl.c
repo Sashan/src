@@ -1,4 +1,4 @@
-/*	$OpenBSD: crl.c,v 1.43 2024/09/12 10:33:25 tb Exp $ */
+/*	$OpenBSD: crl.c,v 1.49 2025/06/25 16:24:44 job Exp $ */
 /*
  * Copyright (c) 2024 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -17,6 +17,7 @@
  */
 
 #include <err.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -24,6 +25,8 @@
 #include <openssl/x509.h>
 
 #include "extern.h"
+
+static pthread_rwlock_t	 crl_lk = PTHREAD_RWLOCK_INITIALIZER;
 
 /*
  * Check CRL Number is present, non-critical and in [0, 2^159-1].
@@ -296,12 +299,13 @@ crlcmp(struct crl *a, struct crl *b)
 RB_GENERATE_STATIC(crl_tree, crl, entry, crlcmp);
 
 /*
- * Find a CRL based on the auth SKI value.
+ * Find a CRL based on the auth SKI value and manifest path.
  */
 struct crl *
-crl_get(struct crl_tree *crlt, const struct auth *a)
+crl_get(struct crl_tree *crls, const struct auth *a)
 {
-	struct crl	find;
+	struct crl	find, *crl;
+	int		error;
 
 	/* XXX - this should be removed, but filemode relies on it. */
 	if (a == NULL)
@@ -310,13 +314,26 @@ crl_get(struct crl_tree *crlt, const struct auth *a)
 	find.aki = a->cert->ski;
 	find.mftpath = a->cert->mft;
 
-	return RB_FIND(crl_tree, crlt, &find);
+	if ((error = pthread_rwlock_rdlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_rdlock: %s", strerror(error));
+	crl = RB_FIND(crl_tree, crls, &find);
+	if ((error = pthread_rwlock_unlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_unlock: %s", strerror(error));
+	return crl;
 }
 
 int
-crl_insert(struct crl_tree *crlt, struct crl *crl)
+crl_insert(struct crl_tree *crls, struct crl *crl)
 {
-	return RB_INSERT(crl_tree, crlt, crl) == NULL;
+	int error, rv;
+
+	if ((error = pthread_rwlock_wrlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_wrlock: %s", strerror(error));
+	rv = RB_INSERT(crl_tree, crls, crl) == NULL;
+	if ((error = pthread_rwlock_unlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_unlock: %s", strerror(error));
+
+	return rv;
 }
 
 void
@@ -331,12 +348,19 @@ crl_free(struct crl *crl)
 }
 
 void
-crl_tree_free(struct crl_tree *crlt)
+crl_tree_free(struct crl_tree *crls)
 {
 	struct crl	*crl, *tcrl;
+	int error;
 
-	RB_FOREACH_SAFE(crl, crl_tree, crlt, tcrl) {
-		RB_REMOVE(crl_tree, crlt, crl);
+	if ((error = pthread_rwlock_wrlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_wrlock: %s", strerror(error));
+	RB_FOREACH_SAFE(crl, crl_tree, crls, tcrl) {
+		RB_REMOVE(crl_tree, crls, crl);
 		crl_free(crl);
 	}
+	if ((error = pthread_rwlock_unlock(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_unlock: %s", strerror(error));
+	if ((error = pthread_rwlock_destroy(&crl_lk)) != 0)
+		errx(1, "pthread_rwlock_destroy: %s", strerror(error));
 }

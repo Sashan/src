@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse_test_file.c,v 1.3 2024/12/27 11:17:48 tb Exp $ */
+/*	$OpenBSD: parse_test_file.c,v 1.6 2025/06/03 10:29:37 tb Exp $ */
 
 /*
  * Copyright (c) 2024 Theo Buehler <tb@openbsd.org>
@@ -47,6 +47,8 @@ static void
 line_data_clear(struct line_data *ld)
 {
 	freezero(ld->data, ld->data_len);
+	/* The dereference isn't enough for silly old gcc 14. */
+	assert(ld != NULL);
 	explicit_bzero(ld, sizeof(*ld));
 }
 
@@ -644,7 +646,8 @@ parse_reinit(struct parse *p)
 	p->state.running_test_case = 0;
 	parse_line_data_clear(p);
 	tctx->finish(p->ctx);
-	tctx->init(p->ctx, p);
+	if (!tctx->init(p->ctx, p))
+		parse_errx(p, "init failed");
 }
 
 static int
@@ -706,7 +709,8 @@ parse_init(struct parse *p, const char *fn, const struct test_parse *tctx,
 	parse_state_init(&p->state, tctx->num_states, tctx->num_instructions);
 	p->tctx = tctx;
 	p->ctx = ctx;
-	tctx->init(ctx, p);
+	if (!tctx->init(p->ctx, p))
+		parse_errx(p, "init failed");
 }
 
 static int
@@ -732,7 +736,10 @@ parse_next_line(struct parse *p)
 static void
 parse_finish(struct parse *p)
 {
+	const struct test_parse *tctx = p->tctx;
+
 	parse_state_finish(&p->state);
+	tctx->finish(p->ctx);
 
 	free(p->buf);
 

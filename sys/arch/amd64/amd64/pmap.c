@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.178 2024/11/02 07:58:58 mpi Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.180 2025/06/19 12:01:08 jca Exp $	*/
 /*	$NetBSD: pmap.c,v 1.3 2003/05/08 18:13:13 thorpej Exp $	*/
 
 /*
@@ -3185,7 +3185,6 @@ pmap_steal_memory(vsize_t size, vaddr_t *start, vaddr_t *end)
  */
 #ifdef MP_LOCKDEBUG
 #include <ddb/db_output.h>
-extern int __mp_lock_spinout;
 #endif
 
 volatile long tlb_shoot_wait __attribute__((section(".kudata")));
@@ -3209,7 +3208,7 @@ pmap_start_tlb_shoot(long wait, const char *func)
 
 	while (atomic_cas_ulong(&tlb_shoot_wait, 0, wait) != 0) {
 #ifdef MP_LOCKDEBUG
-		int nticks = __mp_lock_spinout;
+		long nticks = __mp_lock_spinout;
 #endif
 		while (tlb_shoot_wait != 0) {
 			CPU_BUSY_CYCLE();
@@ -3422,7 +3421,7 @@ void
 pmap_tlb_shootwait(void)
 {
 #ifdef MP_LOCKDEBUG
-	int nticks = __mp_lock_spinout;
+	long nticks = __mp_lock_spinout;
 #endif
 	while (tlb_shoot_wait != 0) {
 		CPU_BUSY_CYCLE();

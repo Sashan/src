@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.221 2025/02/14 04:56:26 hastings Exp $
+# $OpenBSD: RAMDISK,v 1.224 2025/06/13 13:19:19 sf Exp $
 
 machine		arm64
 maxusers	4
@@ -104,7 +104,6 @@ virtio*		at fdt?
 virtio*		at pci?
 vio*		at virtio?
 vioblk*		at virtio?
-viomb*		at virtio?
 viornd*		at virtio?
 vioscsi*	at virtio?
 viogpu*		at virtio?
@@ -207,6 +206,8 @@ hireset*	at fdt? early 1
 # MediaTek SoCs
 mtintc*		at fdt?
 mtrng*		at fdt?
+mtxhci*		at fdt?
+usb*		at mtxhci?
 
 # Marvell SoCs
 mvclock*	at fdt? early 1
@@ -266,6 +267,7 @@ qcipcc*		at fdt?
 qcmtx*		at fdt? early 1
 qcpas*		at fdt?
 qcpdc*		at fdt?
+qcscm*		at acpi?
 qcscm*		at fdt?
 qcsmem*		at fdt?
 qcsmptp*	at fdt?

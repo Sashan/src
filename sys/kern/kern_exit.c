@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.242 2025/02/17 10:16:05 claudio Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.251 2025/06/03 08:38:17 mpi Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -164,13 +164,11 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	pr->ps_exitcnt++;
 
 	/*
-	 * if somebody else wants to take us to single threaded mode,
-	 * count ourselves out.
+	 * if somebody else wants to take us to single threaded mode
+	 * or stop us, count ourselves out.
 	 */
-	if (pr->ps_single) {
-		if (--pr->ps_singlecnt == 0)
-			wakeup(&pr->ps_singlecnt);
-	}
+	if (pr->ps_single != NULL || ISSET(pr->ps_flags, PS_STOPPING))
+		process_suspend_signal(pr);
 
 	/* proc is off ps_threads list so update accounting of process now */
 	tuagg_add_runtime();
@@ -207,6 +205,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	if ((p->p_flag & P_THREAD) == 0) {
 		if (pr->ps_flags & PS_PROFIL)
 			stopprofclock(pr);
+		prof_write(p);
 
 		sigio_freelist(&pr->ps_sigiolst);
 
@@ -243,6 +242,23 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		 */
 		if (pr->ps_pptr->ps_sigacts->ps_sigflags & SAS_NOCLDWAIT)
 			atomic_setbits_int(&pr->ps_flags, PS_NOZOMBIE);
+
+		/* Teardown the virtual address space. */
+		if ((p->p_flag & P_SYSTEM) == 0) {
+			/*
+			 * exit1() might be called with a lock count
+			 * greater than one and we want to ensure the
+			 * costly operation of tearing down the VM space
+			 * is performed unlocked.
+			 * It is safe to release them all since exit1()
+			 * will not return.
+			 */
+#ifdef MULTIPROCESSOR
+			__mp_release_all(&kernel_lock);
+#endif
+			uvm_purge();
+			KERNEL_LOCK();
+		}
 	}
 
 	p->p_fd = NULL;		/* zap the thread's copy */
@@ -259,7 +275,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
         /*
 	 * Remove proc from pidhash chain and allproc so looking
 	 * it up won't work.  We will put the proc on the
-	 * deadproc list later (using the p_hash member), and
+	 * deadproc list later (using the p_runq member), and
 	 * wake up the reaper when we do.  If this is the last
 	 * thread of a process that isn't PS_NOZOMBIE, we'll put
 	 * the process on the zombprocess list below.
@@ -348,6 +364,9 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		 * and calculate the total times.
 		 */
 		calcru(&pr->ps_tu, &rup->ru_utime, &rup->ru_stime, NULL);
+		rup->ru_ixrss = pr->ps_tu.tu_ixrss;
+		rup->ru_idrss = pr->ps_tu.tu_idrss;
+		rup->ru_isrss = pr->ps_tu.tu_isrss;
 		ruadd(rup, &pr->ps_cru);
 
 		/*
@@ -381,35 +400,40 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	 */
 
 	/*
-	 * Finally, call machine-dependent code to switch to a new
-	 * context (possibly the idle context).  Once we are no longer
-	 * using the dead process's vmspace and stack, exit2() will be
-	 * called to schedule those resources to be released by the
-	 * reaper thread.
-	 *
-	 * Note that cpu_exit() will end with a call equivalent to
-	 * cpu_switch(), finishing our execution (pun intended).
+	 * Finally, call machine-dependent code.
 	 */
 	cpu_exit(p);
-	panic("cpu_exit returned");
+
+	/*
+	 * Deactivate the exiting address space before the vmspace
+	 * is freed.  Note that we will continue to run on this
+	 * vmspace's context until the switch to idle in sched_exit().
+	 *
+	 * Once we are no longer using the dead process's vmspace and
+	 * stack, exit2() will be called to schedule those resources
+	 * to be released by the reaper thread.
+	 */
+	pmap_deactivate(p);
+	sched_exit(p);
+	panic("sched_exit returned");
 }
 
 /*
- * Locking of this proclist is special; it's accessed in a
+ * Locking of this prochead is special; it's accessed in a
  * critical section of process exit, and thus locking it can't
  * modify interrupt state.  We use a simple spin lock for this
- * proclist.  We use the p_hash member to linkup to deadproc.
+ * prochead.  We use the p_runq member to linkup to deadproc.
  */
 struct mutex deadproc_mutex =
     MUTEX_INITIALIZER_FLAGS(IPL_NONE, "deadproc", MTX_NOWITNESS);
-struct proclist deadproc = LIST_HEAD_INITIALIZER(deadproc);
+struct prochead deadproc = TAILQ_HEAD_INITIALIZER(deadproc);
 
 /*
  * We are called from sched_idle() once it is safe to schedule the
  * dead process's resources to be freed. So this is not allowed to sleep.
  *
  * We lock the deadproc list, place the proc on that list (using
- * the p_hash member), and wake up the reaper.
+ * the p_runq member), and wake up the reaper.
  */
 void
 exit2(struct proc *p)
@@ -420,7 +444,7 @@ exit2(struct proc *p)
 	mtx_leave(&p->p_p->ps_mtx);
 
 	mtx_enter(&deadproc_mutex);
-	LIST_INSERT_HEAD(&deadproc, p, p_hash);
+	TAILQ_INSERT_TAIL(&deadproc, p, p_runq);
 	mtx_leave(&deadproc_mutex);
 
 	wakeup(&deadproc);
@@ -450,12 +474,12 @@ reaper(void *arg)
 
 	for (;;) {
 		mtx_enter(&deadproc_mutex);
-		while ((p = LIST_FIRST(&deadproc)) == NULL)
+		while ((p = TAILQ_FIRST(&deadproc)) == NULL)
 			msleep_nsec(&deadproc, &deadproc_mutex, PVM, "reaper",
 			    INFSLP);
 
 		/* Remove us from the deadproc list. */
-		LIST_REMOVE(p, p_hash);
+		TAILQ_REMOVE(&deadproc, p, p_runq);
 		mtx_leave(&deadproc_mutex);
 
 		WITNESS_THREAD_EXIT(p);
@@ -525,7 +549,6 @@ loop:
 		}
 		nfound++;
 		if ((options & WEXITED) && (pr->ps_flags & PS_ZOMBIE)) {
-			mtx_leave(&pr->ps_mtx);
 			*retval = pr->ps_pid;
 			if (info != NULL) {
 				info->si_pid = pr->ps_pid;
@@ -548,17 +571,15 @@ loop:
 				    pr->ps_xsig);
 			if (rusage != NULL)
 				memcpy(rusage, pr->ps_ru, sizeof(*rusage));
+			mtx_leave(&pr->ps_mtx);
 			if ((options & WNOWAIT) == 0)
 				proc_finish_wait(q, pr);
 			return (0);
 		}
 		if ((options & WTRAPPED) && (pr->ps_flags & PS_TRACED) &&
 		    (pr->ps_flags & PS_WAITED) == 0 &&
+		    (pr->ps_flags & PS_STOPPED) &&
 		    (pr->ps_flags & PS_TRAPPED)) {
-			mtx_leave(&pr->ps_mtx);
-			if (single_thread_wait(pr, 0))
-				goto loop;
-
 			if ((options & WNOWAIT) == 0)
 				atomic_setbits_int(&pr->ps_flags, PS_WAITED);
 
@@ -573,6 +594,7 @@ loop:
 
 			if (statusp != NULL)
 				*statusp = W_STOPCODE(pr->ps_xsig);
+			mtx_leave(&pr->ps_mtx);
 			if (rusage != NULL)
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
@@ -581,7 +603,6 @@ loop:
 		    (pr->ps_flags & PS_WAITED) == 0 &&
 		    (pr->ps_flags & PS_STOPPED) &&
 		    (pr->ps_flags & PS_TRAPPED) == 0) {
-			mtx_leave(&pr->ps_mtx);
 			if ((options & WNOWAIT) == 0)
 				atomic_setbits_int(&pr->ps_flags, PS_WAITED);
 
@@ -596,12 +617,12 @@ loop:
 
 			if (statusp != NULL)
 				*statusp = W_STOPCODE(pr->ps_xsig);
+			mtx_leave(&pr->ps_mtx);
 			if (rusage != NULL)
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
 		}
 		if ((options & WCONTINUED) && (pr->ps_flags & PS_CONTINUED)) {
-			mtx_leave(&pr->ps_mtx);
 			if ((options & WNOWAIT) == 0)
 				atomic_clearbits_int(&pr->ps_flags,
 				    PS_CONTINUED);
@@ -615,6 +636,7 @@ loop:
 				info->si_status = SIGCONT;
 			}
 
+			mtx_leave(&pr->ps_mtx);
 			if (statusp != NULL)
 				*statusp = _WCONTINUED;
 			if (rusage != NULL)
@@ -652,7 +674,7 @@ loop:
 		return (0);
 	}
 	sleep_setup(q->p_p, PWAIT | PCATCH, "wait");
-	if ((error = sleep_finish(0,
+	if ((error = sleep_finish(INFSLP,
 	    !ISSET(atomic_load_int(&q->p_p->ps_flags), PS_WAITEVENT))) != 0)
 		return (error);
 	goto loop;
@@ -829,6 +851,9 @@ process_reparent(struct process *child, struct process *parent)
 	MUTEX_ASSERT_LOCKED(&child->ps_mtx);
 	child->ps_pptr = parent;
 	child->ps_ppid = parent->ps_pid;
+
+	WITNESS_SETCHILD(&child->ps_mtx.mtx_lock_obj,
+	    &parent->ps_mtx.mtx_lock_obj);
 }
 
 void

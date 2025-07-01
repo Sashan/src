@@ -1,4 +1,4 @@
-/*	$OpenBSD: qcgpio_fdt.c,v 1.5 2025/01/09 21:52:25 kettenis Exp $	*/
+/*	$OpenBSD: qcgpio_fdt.c,v 1.7 2025/06/16 09:27:38 kettenis Exp $	*/
 /*
  * Copyright (c) 2022 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -24,6 +24,10 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_gpio.h>
 #include <dev/ofw/fdt.h>
+
+#ifdef SUSPEND
+extern int cpu_suspended;
+#endif
 
 /* Registers. */
 #define TLMM_GPIO_CFG(pin)		(0x0000 + 0x1000 * (pin))
@@ -59,6 +63,7 @@ struct qcgpio_intrhand {
 	void *ih_arg;
 	void *ih_sc;
 	int ih_pin;
+	int ih_wakeup;
 };
 
 struct qcgpio_softc {
@@ -78,9 +83,11 @@ struct qcgpio_softc {
 
 int	qcgpio_fdt_match(struct device *, void *, void *);
 void	qcgpio_fdt_attach(struct device *, struct device *, void *);
+int	qcgpio_fdt_activate(struct device *, int);
 
 const struct cfattach qcgpio_fdt_ca = {
-	sizeof(struct qcgpio_softc), qcgpio_fdt_match, qcgpio_fdt_attach
+	sizeof(struct qcgpio_softc), qcgpio_fdt_match, qcgpio_fdt_attach, NULL,
+	qcgpio_fdt_activate
 };
 
 void	qcgpio_fdt_config_pin(void *, uint32_t *, int);
@@ -158,6 +165,36 @@ unmap:
 		fdt_intr_disestablish(sc->sc_ih);
 	free(sc->sc_pin_ih, M_DEVBUF, sc->sc_npins * sizeof(*sc->sc_pin_ih));
 	bus_space_unmap(sc->sc_iot, sc->sc_ioh, faa->fa_reg[0].size);
+}
+
+int
+qcgpio_fdt_activate(struct device *self, int act)
+{
+	struct qcgpio_softc *sc = (struct qcgpio_softc *)self;
+	int pin, rv = 0;
+
+	switch (act) {
+	case DVACT_SUSPEND:
+		for (pin = 0; pin < sc->sc_npins; pin++) {
+			if (sc->sc_pin_ih[pin].ih_func == NULL ||
+			    sc->sc_pin_ih[pin].ih_wakeup)
+				continue;
+			HCLR4(sc, TLMM_GPIO_INTR_CFG(pin),
+			    TLMM_GPIO_INTR_CFG_INTR_ENABLE);
+		}
+		break;
+	case DVACT_RESUME:
+		for (pin = 0; pin < sc->sc_npins; pin++) {
+			if (sc->sc_pin_ih[pin].ih_func == NULL ||
+			    sc->sc_pin_ih[pin].ih_wakeup)
+				continue;
+			HSET4(sc, TLMM_GPIO_INTR_CFG(pin),
+			    TLMM_GPIO_INTR_CFG_INTR_ENABLE);
+		}
+		break;
+	}
+
+	return rv;
 }
 
 void
@@ -245,6 +282,11 @@ qcgpio_fdt_intr_establish(void *cookie, int *cells, int ipl,
 	sc->sc_pin_ih[pin].ih_arg = arg;
 	sc->sc_pin_ih[pin].ih_pin = pin;
 	sc->sc_pin_ih[pin].ih_sc = sc;
+
+	if (ipl & IPL_WAKEUP) {
+		sc->sc_pin_ih[pin].ih_wakeup = 1;
+		intr_set_wakeup(sc->sc_ih);
+	}
 
 	reg = HREAD4(sc, TLMM_GPIO_INTR_CFG(pin));
 	reg &= ~TLMM_GPIO_INTR_CFG_INTR_DECT_CTL_MASK;
@@ -338,6 +380,14 @@ qcgpio_fdt_intr(void *arg)
 	for (pin = 0; pin < sc->sc_npins; pin++) {
 		if (sc->sc_pin_ih[pin].ih_func == NULL)
 			continue;
+#ifdef SUSPEND
+		/*
+		 * If we're suspend and this is not a wakeup pin,
+		 * ignore the event and stay suspended.
+		 */
+		if (cpu_suspended && !sc->sc_pin_ih[pin].ih_wakeup)
+			continue;
+#endif
 
 		stat = HREAD4(sc, TLMM_GPIO_INTR_STATUS(pin));
 		if (stat & TLMM_GPIO_INTR_STATUS_INTR_STATUS) {

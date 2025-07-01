@@ -1,4 +1,4 @@
-$OpenBSD: usbdevs,v 1.774 2025/02/06 13:13:25 kirill Exp $
+$OpenBSD: usbdevs,v 1.779 2025/06/18 13:48:48 jcs Exp $
 /* $NetBSD: usbdevs,v 1.322 2003/05/10 17:47:14 hamajima Exp $ */
 
 /*
@@ -475,6 +475,7 @@ vendor FALCOM		0x0f94	Falcom Wireless Communications
 vendor RIM		0x0fca	Research In Motion
 vendor DYNASTREAM	0x0fcf	Dynastream Innovations
 vendor LARSENBRUSGAARD	0x0fd8	Larsen and Brusgaard
+vendor ELGATO		0x0fd9	Elgato
 vendor OREGONSCI	0x0fde	Oregon Scientific
 vendor UNKNOWN4		0x0fe6	Unknown Vendor
 vendor DVICO		0x0fe9	DViCO
@@ -516,7 +517,7 @@ vendor TSUNAMI		0x1241	Tsunami
 vendor PHEENET		0x124a	Pheenet
 vendor RAPTORGAMING	0x1267	Raptor Gaming
 vendor TWINMOS		0x126f	TwinMOS
-vendor TENDA		0x1286	Tenda
+vendor MARVELL2		0x1286	Marvell
 vendor TESTO		0x128d	Testo AG
 vendor CREATIVE2	0x1292	Creative Labs
 vendor BELKIN2		0x1293	Belkin Components
@@ -692,7 +693,6 @@ vendor DATAAPEX		0xdaae	DataApex
 vendor EVOLUTION	0xdeee	Evolution Robotics
 vendor EMPIA		0xeb1a	eMPIA Technology
 vendor HP2		0xf003	Hewlett Packard
-vendor ELGATO		0x0fd9	Elgato
 
 /*
  * List of known products.  Grouped by vendor.
@@ -1006,7 +1006,7 @@ product APPLE WELLSPRING9_JIS	0x0274	Keyboard/Trackpad
 product APPLE WELLSPRING8_ANSI	0x0290	Keyboard/Trackpad
 product APPLE WELLSPRING8_ISO	0x0291	Keyboard/Trackpad
 product APPLE WELLSPRING8_JIS	0x0292	Keyboard/Trackpad
-product APPLE OPTMOUSE		0x0302	Optical mouse
+product APPLE OPTMOUSE		0x0302	Optical Mouse
 product APPLE WELLSPRINGM1_J293	0x0341	Keyboard/Trackpad	
 product APPLE BLUETOOTH_HCI	0x1000	HID-proxy
 product APPLE SPEAKERS		0x1101	Speakers
@@ -1553,6 +1553,7 @@ product DAVICOM WK668		0x0668	HenTong WK-668
 product DAVICOM DM9601		0x9601	DM9601
 
 /* Dell products */
+product DELL PIXARTMOUSE	0x301a	Optical Mouse
 product DELL AXIM		0x4005	Axim X51v
 product DELL BC02		0x8000	Bluetooth
 product DELL TM1180		0x8100	TrueMobile 1180 WLAN
@@ -1785,9 +1786,6 @@ product EICON DIVA852		0x4905	Diva 852 ISDN TA
 product EIZO HUB		0x0000	hub
 product EIZO MONITOR		0x0001	monitor
 
-/* Elgato products */
-product ELGATO HD60		0x006a	Game Capture HD60 S+
-
 /* Elan Microelectronics products */
 product ELAN BARCODE		0x0001	Barcode Scanner
 
@@ -1817,6 +1815,9 @@ product ELECOM LDUSBTX3		0xabc1	LD-USB/TX
 
 /* Elektor Electronics products */
 product ELEKTOR FT323R		0x0005	FT323R
+
+/* Elgato products */
+product ELGATO HD60		0x006a	Game Capture HD60 S+
 
 /* Elsa products */
 product ELSA MODEM1		0x2265	ELSA
@@ -2682,6 +2683,7 @@ product LENOVO RTL8153B_3	0x309b	RTL8153B
 product LENOVO RTL8153B_4	0x309c	RTL8153B
 product LENOVO RTL8153B_5	0x309d	RTL8153B
 product LENOVO OPTUSBMOUSE	0x600e	Optical Mouse
+product LENOVO PIXARTMOUSE	0x6019	Optical Mouse
 product LENOVO ETHERNET		0x7203	USB 2.0 Ethernet
 product LENOVO RTL8153_1	0x7205	RTL8153
 product LENOVO ONELINK		0x720a	OneLink
@@ -2828,6 +2830,7 @@ product MACALLY MOUSE1		0x0101	mouse
 
 /* Marvell products */
 product MARVELL SHEEVAPLUG	0x9e8f	SheevaPlug
+product MARVELL2 TWL541U	0x1fab	TWL541U WLAN
 
 /* Matrix Orbital products */
 product MATRIXORB LCD_0100	0x0100	LCD
@@ -3185,12 +3188,12 @@ product MICROSOFT INETPRO	0x001c	Internet Keyboard Pro
 product MICROSOFT TBEXPLORER	0x0024	Trackball Explorer
 product MICROSOFT INTELLIEYE	0x0025	IntelliEye mouse
 product MICROSOFT INETPRO2	0x002b	Internet Keyboard Pro
-product MICROSOFT PIXARTMOUSE	0x00cb	Optical Mouse
 product MICROSOFT MN510		0x006e	MN510 Wireless
 product MICROSOFT 700WX		0x0079	Palm 700WX
 product MICROSOFT MN110		0x007a	10/100 Ethernet
 product MICROSOFT WLINTELLIMOUSE 0x008c	Wireless Optical IntelliMouse
 product MICROSOFT WLNOTEBOOK	0x00b9	Wireless Optical Mouse (Model 1023)
+product MICROSOFT PIXARTMOUSE	0x00cb	Optical Mouse
 product MICROSOFT WLNOTEBOOK3	0x00d2	Wireless Optical Mouse 3000 (Model 1049)
 product MICROSOFT WLNOTEBOOK2	0x00e1	Wireless Optical Mouse 3000 (Model 1056)
 product MICROSOFT XBOX360_CONTROLLER 0x028e XBOX 360 Controller
@@ -3842,6 +3845,7 @@ product REALTEK RTL8151		0x8151	RTL8151 PNA
 product REALTEK RTL8152		0x8152	RTL8152
 product REALTEK RTL8153		0x8153	RTL8153
 product REALTEK RTL8156		0x8156	RTL8156
+product REALTEK RTL8157		0x8157	RTL8157
 product REALTEK RTL8188CE_0	0x8170	RTL8188CE
 product REALTEK RTL8171		0x8171	RTL8171
 product REALTEK RTL8172		0x8172	RTL8172
@@ -4457,9 +4461,6 @@ product TEKRAM ZD1211_2		0x6630	ZD1211
 
 /* Telex Communications products */
 product TELEX MIC1		0x0001	Microphone
-
-/* Tenda */
-product TENDA TWL541U		0x1fab	TWL541U WLAN
 
 /* Ten X Technology, Inc. */
 product TENX MISSILE		0x0202	Missile Launcher

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.139 2025/02/11 22:27:09 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.141 2025/05/16 01:29:27 jsg Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -103,6 +103,7 @@
 #define CPU_PART_CORTEX_A520AE	0xd88
 #define CPU_PART_CORTEX_A720AE	0xd89
 #define CPU_PART_NEOVERSE_N3	0xd8e
+#define CPU_PART_CORTEX_A320	0xd8f
 
 /* Cavium */
 #define CPU_PART_THUNDERX_T88	0x0a1
@@ -166,6 +167,7 @@ struct cpu_cores cpu_cores_arm[] = {
 	{ CPU_PART_CORTEX_A78, "Cortex-A78" },
 	{ CPU_PART_CORTEX_A78AE, "Cortex-A78AE" },
 	{ CPU_PART_CORTEX_A78C, "Cortex-A78C" },
+	{ CPU_PART_CORTEX_A320, "Cortex-A320" },
 	{ CPU_PART_CORTEX_A510, "Cortex-A510" },
 	{ CPU_PART_CORTEX_A520, "Cortex-A520" },
 	{ CPU_PART_CORTEX_A520AE, "Cortex-A520AE" },
@@ -271,6 +273,7 @@ extern char trampoline_vectors_loop_8[];
 extern char trampoline_vectors_loop_11[];
 extern char trampoline_vectors_loop_24[];
 extern char trampoline_vectors_loop_32[];
+extern char trampoline_vectors_loop_132[];
 #if NPSCI > 0
 extern char trampoline_vectors_psci_hvc[];
 extern char trampoline_vectors_psci_smc[];
@@ -402,12 +405,22 @@ cpu_mitigate_spectre_bhb(struct cpu_info *ci)
 		case CPU_PART_CORTEX_A78AE:
 		case CPU_PART_CORTEX_A78C:
 		case CPU_PART_CORTEX_X1:
+		case CPU_PART_CORTEX_X1C:
 		case CPU_PART_CORTEX_X2:
 		case CPU_PART_CORTEX_A710:
 		case CPU_PART_NEOVERSE_N2:
 		case CPU_PART_NEOVERSE_V1:
 			ci->ci_trampoline_vectors =
 			    (vaddr_t)trampoline_vectors_loop_32;
+			break;
+		case CPU_PART_CORTEX_X3:
+		case CPU_PART_CORTEX_X4:
+		case CPU_PART_CORTEX_X925:
+		case CPU_PART_NEOVERSE_V2:
+		case CPU_PART_NEOVERSE_V3:
+		case CPU_PART_NEOVERSE_V3AE:
+			ci->ci_trampoline_vectors =
+			    (vaddr_t)trampoline_vectors_loop_132;
 			break;
 		}
 		break;

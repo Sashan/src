@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_pmeth.c,v 1.24 2025/01/05 16:07:08 tb Exp $ */
+/* $OpenBSD: ec_pmeth.c,v 1.27 2025/05/10 05:54:38 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -62,12 +62,12 @@
 
 #include <openssl/asn1t.h>
 #include <openssl/ec.h>
-#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
 #include "bn_local.h"
 #include "ec_local.h"
+#include "err_local.h"
 #include "evp_local.h"
 
 /* EC pkey context structure */
@@ -221,10 +221,8 @@ pkey_ec_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *keylen)
 	}
 
 	eckey = dctx->co_key ? dctx->co_key : ctx->pkey->pkey.ec;
-	if (!key) {
-		const EC_GROUP *group;
-		group = EC_KEY_get0_group(eckey);
-		*keylen = (EC_GROUP_get_degree(group) + 7) / 8;
+	if (key == NULL) {
+		*keylen = BN_num_bytes(eckey->group->p);
 		return 1;
 	}
 	pubkey = EC_KEY_get0_public_key(ctx->peerkey->pkey.ec);
@@ -236,7 +234,7 @@ pkey_ec_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *keylen)
 
 	outlen = *keylen;
 
-	ret = ECDH_compute_key(key, outlen, pubkey, eckey, 0);
+	ret = ECDH_compute_key(key, outlen, pubkey, eckey, NULL);
 	if (ret <= 0)
 		return 0;
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: mcpcia.c,v 1.7 2022/03/13 08:04:13 mpi Exp $ */
+/* $OpenBSD: mcpcia.c,v 1.9 2025/06/29 15:55:21 miod Exp $ */
 /* $NetBSD: mcpcia.c,v 1.20 2007/03/04 05:59:11 christos Exp $ */
 
 /*-
@@ -104,7 +104,7 @@ const struct cfattach mcpcia_ca = {
 };
 
 struct cfdriver mcpcia_cd = {
-        NULL, "mcpcia", DV_DULL,
+	NULL, "mcpcia", DV_DULL,
 };
 
 /*
@@ -115,23 +115,18 @@ struct cfdriver mcpcia_cd = {
 struct mcpcia_config mcpcia_console_configuration;
 
 int
-mcpciaprint(aux, pnp)
-       void *aux;
-       const char *pnp;
+mcpciaprint(void *aux, const char *pnp)
 {
        register struct pcibus_attach_args *pba = aux;
        /* only PCIs can attach to MCPCIA for now */
        if (pnp)
-               printf("%s at %s", pba->pba_busname, pnp);
+		printf("%s at %s", pba->pba_busname, pnp);
        printf(" bus %d", pba->pba_bus);
        return (UNCONF);
 }
 
 int
-mcpciamatch(parent, cf, aux)
-	struct device *parent;
-	void *cf;
-	void *aux;
+mcpciamatch(struct device *parent, void *cf, void *aux)
 {
 	struct mcbus_dev_attach_args *ma = aux;
 
@@ -142,10 +137,7 @@ mcpciamatch(parent, cf, aux)
 }
 
 void
-mcpciaattach(parent, self, aux)
-	struct device *parent;
-	struct device *self;
-	void *aux;
+mcpciaattach(struct device *parent, struct device *self, void *aux)
 {
 	static int first = 1;
 	struct mcbus_dev_attach_args *ma = aux;
@@ -220,7 +212,7 @@ mcpciaattach(parent, self, aux)
 }
 
 void
-mcpcia_init()
+mcpcia_init(void)
 {
 	struct mcpcia_config *ccp = &mcpcia_console_configuration;
 	int i;
@@ -255,9 +247,7 @@ mcpcia_init()
 }
 
 void
-mcpcia_init0(ccp, mallocsafe)
-	struct mcpcia_config *ccp;
-	int mallocsafe;
+mcpcia_init0(struct mcpcia_config *ccp, int mallocsafe)
 {
 	u_int32_t ctl;
 	
@@ -277,45 +267,45 @@ mcpcia_init0(ccp, mallocsafe)
 
 	mcpcia_pci_init(&ccp->cc_pc, ccp);
 
-        /*
-         * Establish a precalculated base for convenience's sake.
-         */
-        ccp->cc_sysbase = MCPCIA_SYSBASE(ccp);
+	/*
+	 * Establish a precalculated base for convenience's sake.
+	 */
+	ccp->cc_sysbase = MCPCIA_SYSBASE(ccp);
 
-        /*
-         * Disable interrupts and clear errors prior to probing
-         */
-        REGVAL(MCPCIA_INT_MASK0(ccp)) = 0;
-        REGVAL(MCPCIA_INT_MASK1(ccp)) = 0;
-        REGVAL(MCPCIA_CAP_ERR(ccp)) = 0xFFFFFFFF;
-        alpha_mb();
+	/*
+	 * Disable interrupts and clear errors prior to probing
+	 */
+	REGVAL(MCPCIA_INT_MASK0(ccp)) = 0;
+	REGVAL(MCPCIA_INT_MASK1(ccp)) = 0;
+	REGVAL(MCPCIA_CAP_ERR(ccp)) = 0xFFFFFFFF;
+	alpha_mb();
 
-        if (ccp == &mcpcia_console_configuration) {
-                /*
-                 * Use this opportunity to also find out the MID and CPU
-                 * type of the currently running CPU (that's us, billybob....)
-                 */
-                ctl = REGVAL(MCPCIA_WHOAMI(ccp));
-                mcbus_primary.mcbus_cpu_mid = MCBUS_CPU_MID(ctl);
-                if ((MCBUS_CPU_INFO(ctl) & CPU_Fill_Err) == 0 &&
-                    mcbus_primary.mcbus_valid == 0) {
-                        mcbus_primary.mcbus_bcache =
-                            MCBUS_CPU_INFO(ctl) & CPU_BCacheMask;
-                        mcbus_primary.mcbus_valid = 1;
-                }
-                alpha_mb();
-        }
+	if (ccp == &mcpcia_console_configuration) {
+		/*
+		 * Use this opportunity to also find out the MID and CPU
+		 * type of the currently running CPU (that's us, billybob....)
+		 */
+		ctl = REGVAL(MCPCIA_WHOAMI(ccp));
+		mcbus_primary.mcbus_cpu_mid = MCBUS_CPU_MID(ctl);
+		if ((MCBUS_CPU_INFO(ctl) & CPU_Fill_Err) == 0 &&
+		    mcbus_primary.mcbus_valid == 0) {
+			mcbus_primary.mcbus_bcache =
+			    MCBUS_CPU_INFO(ctl) & CPU_BCacheMask;
+			mcbus_primary.mcbus_valid = 1;
+		}
+		alpha_mb();
+	}
 
 	alpha_pci_chipset = &ccp->cc_pc;
 	alpha_pci_chipset->pc_name = "mcpcia";
 	alpha_pci_chipset->pc_hae_mask = 0;
 	alpha_pci_chipset->pc_dense = MCPCIA_PCI_DENSE;
 	
-        ccp->cc_initted = 1;
+	ccp->cc_initted = 1;
 }
 
 void
-mcpcia_config_cleanup()
+mcpcia_config_cleanup(void)
 {
 	volatile u_int32_t ctl;
 	struct mcpcia_softc *mcp;

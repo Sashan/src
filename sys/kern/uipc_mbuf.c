@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf.c,v 1.296 2025/01/01 13:44:22 bluhm Exp $	*/
+/*	$OpenBSD: uipc_mbuf.c,v 1.300 2025/06/25 20:26:32 miod Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.15.4.1 1996/06/13 17:11:44 cgd Exp $	*/
 
 /*
@@ -85,7 +85,6 @@
 #include <sys/socket.h>
 #include <net/if.h>
 
-
 #include <uvm/uvm_extern.h>
 
 #ifdef DDB
@@ -98,7 +97,7 @@
 #endif	/* NPF > 0 */
 
 /* mbuf stats */
-COUNTERS_BOOT_MEMORY(mbstat_boot, MBSTAT_COUNT);
+COUNTERS_BOOT_MEMORY(mbstat_boot, mbs_ncounters);
 struct cpumem *mbstat = COUNTERS_BOOT_INITIALIZER(mbstat_boot);
 /* mbuf pools */
 struct	pool mbpool;
@@ -201,7 +200,7 @@ mbcpuinit(void)
 {
 	int i;
 
-	mbstat = counters_alloc_ncpus(mbstat, MBSTAT_COUNT);
+	mbstat = counters_alloc_ncpus(mbstat, mbs_ncounters);
 
 	pool_cache_init(&mbpool);
 	pool_cache_init(&mtagpool);
@@ -235,7 +234,6 @@ struct mbuf *
 m_get(int nowait, int type)
 {
 	struct mbuf *m;
-	int s;
 
 	KASSERT(type >= 0 && type < MT_NTYPES);
 
@@ -243,9 +241,7 @@ m_get(int nowait, int type)
 	if (m == NULL)
 		return (NULL);
 
-	s = splnet();
-	counters_inc(mbstat, type);
-	splx(s);
+	mbstat_inc(type);
 
 	m->m_type = type;
 	m->m_next = NULL;
@@ -264,7 +260,6 @@ struct mbuf *
 m_gethdr(int nowait, int type)
 {
 	struct mbuf *m;
-	int s;
 
 	KASSERT(type >= 0 && type < MT_NTYPES);
 
@@ -272,9 +267,7 @@ m_gethdr(int nowait, int type)
 	if (m == NULL)
 		return (NULL);
 
-	s = splnet();
-	counters_inc(mbstat, type);
-	splx(s);
+	mbstat_inc(type);
 
 	m->m_type = type;
 
@@ -546,7 +539,7 @@ m_defrag(struct mbuf *m, int how)
 
 	KASSERT(m->m_flags & M_PKTHDR);
 
-	counters_inc(mbstat, MBSTAT_DEFRAG_ALLOC);
+	mbstat_inc(mbs_defrag_alloc);
 	if ((m0 = m_gethdr(how, m->m_type)) == NULL)
 		return (ENOBUFS);
 	if (m->m_pkthdr.len > MHLEN) {
@@ -606,7 +599,7 @@ m_prepend(struct mbuf *m, int len, int how)
 		m->m_data -= len;
 		m->m_len += len;
 	} else {
-		counters_inc(mbstat, MBSTAT_PREPEND_ALLOC);
+		mbstat_inc(mbs_prepend_alloc);
 		MGET(mn, how, m->m_type);
 		if (mn == NULL) {
 			m_freem(m);
@@ -948,7 +941,7 @@ m_pullup(struct mbuf *m0, int len)
 			m0->m_data = head;
 		}
 		len -= m0->m_len;
-		counters_inc(mbstat, MBSTAT_PULLUP_COPY);
+		mbstat_inc(mbs_pullup_copy);
 	} else {
 		/* the first mbuf is too small or read-only, make a new one */
 		space = adj + len;
@@ -959,7 +952,7 @@ m_pullup(struct mbuf *m0, int len)
 		m0->m_next = m;
 		m = m0;
 
-		counters_inc(mbstat, MBSTAT_PULLUP_ALLOC);
+		mbstat_inc(mbs_pullup_alloc);
 		MGET(m0, M_DONTWAIT, m->m_type);
 		if (m0 == NULL)
 			goto bad;
@@ -1467,6 +1460,7 @@ m_pool_alloc(struct pool *pp, int flags, int *slowdown)
 		return (v);
 
  fail:
+	mbstat_inc(mbs_drops);
 	atomic_sub_long(&mbuf_mem_alloc, pp->pr_pgsize);
 	return (NULL);
 }
@@ -1810,18 +1804,6 @@ mq_delist(struct mbuf_queue *mq, struct mbuf_list *ml)
 	mtx_leave(&mq->mq_mtx);
 }
 
-struct mbuf *
-mq_dechain(struct mbuf_queue *mq)
-{
-	struct mbuf *m0;
-
-	mtx_enter(&mq->mq_mtx);
-	m0 = ml_dechain(&mq->mq_list);
-	mtx_leave(&mq->mq_mtx);
-
-	return (m0);
-}
-
 unsigned int
 mq_purge(struct mbuf_queue *mq)
 {
@@ -1852,6 +1834,7 @@ mq_set_maxlen(struct mbuf_queue *mq, u_int maxlen)
 	mtx_leave(&mq->mq_mtx);
 }
 
+#ifndef SMALL_KERNEL
 int
 sysctl_mq(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen, struct mbuf_queue *mq)
@@ -1879,3 +1862,4 @@ sysctl_mq(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	}
 	/* NOTREACHED */
 }
+#endif /* SMALL_KERNEL */

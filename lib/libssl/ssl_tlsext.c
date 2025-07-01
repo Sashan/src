@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_tlsext.c,v 1.154 2024/07/09 12:27:27 beck Exp $ */
+/* $OpenBSD: ssl_tlsext.c,v 1.156 2025/06/07 10:23:21 tb Exp $ */
 /*
  * Copyright (c) 2016, 2017, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>
@@ -2410,13 +2410,12 @@ tlsext_randomize_build_order(SSL *s)
 {
 	const struct tls_extension *psk_ext;
 	size_t idx, new_idx;
-	size_t alpn_idx = 0, sni_idx = 0;
 
 	free(s->tlsext_build_order);
 	s->tlsext_build_order_len = 0;
 
-	if ((s->tlsext_build_order = calloc(sizeof(*s->tlsext_build_order),
-	    N_TLS_EXTENSIONS)) == NULL)
+	if ((s->tlsext_build_order = calloc(N_TLS_EXTENSIONS,
+	    sizeof(*s->tlsext_build_order))) == NULL)
 		return 0;
 	s->tlsext_build_order_len = N_TLS_EXTENSIONS;
 
@@ -2433,28 +2432,6 @@ tlsext_randomize_build_order(SSL *s)
 		s->tlsext_build_order[new_idx] = &tls_extensions[idx];
 	}
 
-	/*
-	 * XXX - Apache2 special until year 2025: ensure that SNI precedes ALPN
-	 * for clients so that virtual host setups work correctly.
-	 */
-
-	if (s->server)
-		return 1;
-
-	for (idx = 0; idx < N_TLS_EXTENSIONS; idx++) {
-		if (s->tlsext_build_order[idx]->type == TLSEXT_TYPE_alpn)
-			alpn_idx = idx;
-		if (s->tlsext_build_order[idx]->type == TLSEXT_TYPE_server_name)
-			sni_idx = idx;
-	}
-	if (alpn_idx < sni_idx) {
-		const struct tls_extension *tmp;
-
-		tmp = s->tlsext_build_order[alpn_idx];
-		s->tlsext_build_order[alpn_idx] = s->tlsext_build_order[sni_idx];
-		s->tlsext_build_order[sni_idx] = tmp;
-	}
-
 	return 1;
 }
 
@@ -2466,8 +2443,8 @@ tlsext_linearize_build_order(SSL *s)
 	free(s->tlsext_build_order);
 	s->tlsext_build_order_len = 0;
 
-	if ((s->tlsext_build_order = calloc(sizeof(*s->tlsext_build_order),
-	    N_TLS_EXTENSIONS)) == NULL)
+	if ((s->tlsext_build_order = calloc(N_TLS_EXTENSIONS,
+	    sizeof(*s->tlsext_build_order))) == NULL)
 		return 0;
 	s->tlsext_build_order_len = N_TLS_EXTENSIONS;
 

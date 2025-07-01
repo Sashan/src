@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_input.c,v 1.267 2024/11/21 20:15:44 bluhm Exp $	*/
+/*	$OpenBSD: ip6_input.c,v 1.278 2025/06/25 10:33:53 mvs Exp $	*/
 /*	$KAME: ip6_input.c,v 1.188 2001/03/29 05:34:31 itojun Exp $	*/
 
 /*
@@ -119,7 +119,7 @@ struct cpumem *ip6counters;
 
 uint8_t ip6_soiikey[IP6_SOIIKEY_LEN];
 
-int ip6_ours(struct mbuf **, int *, int, int, int);
+int ip6_ours(struct mbuf **, int *, int, int, int, struct netstack *);
 int ip6_check_rh0hdr(struct mbuf *, int *);
 int ip6_hbhchcheck(struct mbuf **, int *, int *, int);
 int ip6_hopopts_input(struct mbuf **, int *, u_int32_t *, u_int32_t *);
@@ -161,8 +161,7 @@ ip6_init(void)
 
 	ip6counters = counters_alloc(ip6s_ncounters);
 #ifdef MROUTING
-	rt_timer_queue_init(&ip6_mrouterq, MCAST_EXPIRE_TIMEOUT,
-	    &mf6c_expire_route);
+	mrt6_init();
 #endif
 }
 
@@ -172,7 +171,8 @@ ip6_init(void)
  * NET_LOCK_SHARED() and the transport layer needing it exclusively.
  */
 int
-ip6_ours(struct mbuf **mp, int *offp, int nxt, int af, int flags)
+ip6_ours(struct mbuf **mp, int *offp, int nxt, int af, int flags,
+    struct netstack *ns)
 {
 	/* ip6_hbhchcheck() may be run before, then off and nxt are set */
 	if (*offp == 0) {
@@ -185,7 +185,7 @@ ip6_ours(struct mbuf **mp, int *offp, int nxt, int af, int flags)
 	if (af != AF_UNSPEC)
 		return nxt;
 
-	nxt = ip_deliver(mp, offp, nxt, AF_INET6, 1);
+	nxt = ip_deliver(mp, offp, nxt, AF_INET6, 1, ns);
 	if (nxt == IPPROTO_DONE)
 		return IPPROTO_DONE;
 
@@ -253,18 +253,18 @@ ip6intr(void)
 			off = sizeof(struct ip6_hdr);
 			nxt = ip6->ip6_nxt;
 		}
-		nxt = ip_deliver(&m, &off, nxt, AF_INET6, 0);
+		nxt = ip_deliver(&m, &off, nxt, AF_INET6, 0, NULL);
 		KASSERT(nxt == IPPROTO_DONE);
 	}
 }
 
 void
-ipv6_input(struct ifnet *ifp, struct mbuf *m)
+ipv6_input(struct ifnet *ifp, struct mbuf *m, struct netstack *ns)
 {
 	int off, nxt;
 
 	off = 0;
-	nxt = ip6_input_if(&m, &off, IPPROTO_IPV6, AF_UNSPEC, ifp);
+	nxt = ip6_input_if(&m, &off, IPPROTO_IPV6, AF_UNSPEC, ifp, ns);
 	KASSERT(nxt == IPPROTO_DONE);
 }
 
@@ -360,9 +360,10 @@ bad:
 }
 
 int
-ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
+ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp,
+    struct netstack *ns)
 {
-	struct route ro;
+	struct route iproute, *ro = NULL;
 	struct mbuf *m;
 	struct ip6_hdr *ip6;
 	struct rtentry *rt;
@@ -375,7 +376,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 
 	KASSERT(*offp == 0);
 
-	ro.ro_rt = NULL;
 	ip6stat_inc(ip6s_total);
 	m = *mp = ipv6_check(ifp, *mp);
 	if (m == NULL)
@@ -461,7 +461,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 
 #if NPF > 0
 	if (pf_ouraddr(m) == 1) {
-		nxt = ip6_ours(mp, offp, nxt, af, flags);
+		nxt = ip6_ours(mp, offp, nxt, af, flags, ns);
 		goto out;
 	}
 #endif
@@ -513,7 +513,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			if (ours) {
 				if (af == AF_UNSPEC)
 					nxt = ip6_ours(mp, offp, nxt, af,
-					    flags);
+					    flags, ns);
 				goto out;
 			}
 			goto bad;
@@ -525,7 +525,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 				ip6stat_inc(ip6s_cantforward);
 			goto bad;
 		}
-		nxt = ip6_ours(mp, offp, nxt, af, flags);
+		nxt = ip6_ours(mp, offp, nxt, af, flags, ns);
 		goto out;
 	}
 
@@ -533,7 +533,13 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	/*
 	 *  Unicast check
 	 */
-	rt = route6_mpath(&ro, &ip6->ip6_dst, &ip6->ip6_src,
+	if (ns == NULL) {
+		ro = &iproute;
+		ro->ro_rt = NULL;
+	} else {
+		ro = &ns->ns_route;
+	}
+	rt = route6_mpath(ro, &ip6->ip6_dst, &ip6->ip6_src,
 	    m->m_pkthdr.ph_rtableid);
 
 	/*
@@ -573,19 +579,10 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		 * packets to a tentative, duplicated, or somehow invalid
 		 * address must not be accepted.
 		 */
-		if ((ia6->ia6_flags & (IN6_IFF_TENTATIVE|IN6_IFF_DUPLICATED))) {
-			char src[INET6_ADDRSTRLEN], dst[INET6_ADDRSTRLEN];
-
-			inet_ntop(AF_INET6, &ip6->ip6_src, src, sizeof(src));
-			inet_ntop(AF_INET6, &ip6->ip6_dst, dst, sizeof(dst));
-			/* address is not ready, so discard the packet. */
-			nd6log((LOG_INFO,
-			    "%s: packet to an unready address %s->%s\n",
-			    __func__, src, dst));
-
+		if ((ia6->ia6_flags & (IN6_IFF_TENTATIVE|IN6_IFF_DUPLICATED)))
 			goto bad;
-		} else {
-			nxt = ip6_ours(mp, offp, nxt, af, flags);
+		else {
+			nxt = ip6_ours(mp, offp, nxt, af, flags, ns);
 			goto out;
 		}
 	}
@@ -611,7 +608,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 
 	if (ours) {
 		if (af == AF_UNSPEC)
-			nxt = ip6_ours(mp, offp, nxt, af, flags);
+			nxt = ip6_ours(mp, offp, nxt, af, flags, ns);
 		goto out;
 	}
 
@@ -631,15 +628,17 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	}
 #endif /* IPSEC */
 
-	ip6_forward(m, &ro, flags);
+	ip6_forward(m, ro, flags);
 	*mp = NULL;
-	rtfree(ro.ro_rt);
+	if (ro == &iproute)
+		rtfree(ro->ro_rt);
 	return IPPROTO_DONE;
  bad:
 	nxt = IPPROTO_DONE;
 	m_freemp(mp);
  out:
-	rtfree(ro.ro_rt);
+	if (ro == &iproute)
+		rtfree(ro->ro_rt);
 	return nxt;
 }
 
@@ -686,8 +685,8 @@ ip6_hbhchcheck(struct mbuf **mp, int *offp, int *oursp, int flags)
 				    (caddr_t)&ip6->ip6_plen - (caddr_t)ip6);
 			goto bad;
 		}
-		IP6_EXTHDR_GET(hbh, struct ip6_hbh *, *mp,
-		    sizeof(struct ip6_hdr), sizeof(struct ip6_hbh));
+		hbh = ip6_exthdr_get(mp, sizeof(struct ip6_hdr),
+		    sizeof(struct ip6_hbh));
 		if (hbh == NULL) {
 			ip6stat_inc(ip6s_tooshort);
 			goto bad;
@@ -815,15 +814,14 @@ ip6_hopopts_input(struct mbuf **mp, int *offp, u_int32_t *plenp,
 	struct ip6_hbh *hbh;
 
 	/* validation of the length of the header */
-	IP6_EXTHDR_GET(hbh, struct ip6_hbh *, *mp,
-		sizeof(struct ip6_hdr), sizeof(struct ip6_hbh));
+	hbh = ip6_exthdr_get(mp, sizeof(struct ip6_hdr),
+	    sizeof(struct ip6_hbh));
 	if (hbh == NULL) {
 		ip6stat_inc(ip6s_tooshort);
 		return -1;
 	}
 	hbhlen = (hbh->ip6h_len + 1) << 3;
-	IP6_EXTHDR_GET(hbh, struct ip6_hbh *, *mp, sizeof(struct ip6_hdr),
-		hbhlen);
+	hbh = ip6_exthdr_get(mp, sizeof(struct ip6_hdr), hbhlen);
 	if (hbh == NULL) {
 		ip6stat_inc(ip6s_tooshort);
 		return -1;
@@ -1452,13 +1450,13 @@ extern int ip6_mrtproto;
 const struct sysctl_bounded_args ipv6ctl_vars_unlocked[] = {
 	{ IPV6CTL_FORWARDING, &ip6_forwarding, 0, 2 },
 	{ IPV6CTL_SENDREDIRECTS, &ip6_sendredirects, 0, 1 },
-};
-
-const struct sysctl_bounded_args ipv6ctl_vars[] = {
 	{ IPV6CTL_DAD_PENDING, &ip6_dad_pending, SYSCTL_INT_READONLY },
 #ifdef MROUTING
 	{ IPV6CTL_MRTPROTO, &ip6_mrtproto, SYSCTL_INT_READONLY },
 #endif
+};
+
+const struct sysctl_bounded_args ipv6ctl_vars[] = {
 	{ IPV6CTL_DEFHLIM, &ip6_defhlim, 0, 255 },
 	{ IPV6CTL_MAXFRAGPACKETS, &ip6_maxfragpackets, 0, 1000 },
 	{ IPV6CTL_LOG_INTERVAL, &ip6_log_interval, 0, INT_MAX },
@@ -1474,6 +1472,7 @@ const struct sysctl_bounded_args ipv6ctl_vars[] = {
 	{ IPV6CTL_MAXDYNROUTES, &ip6_maxdynroutes, -1, 5 * 4096 },
 };
 
+#ifndef SMALL_KERNEL
 int
 ip6_sysctl_ip6stat(void *oldp, size_t *oldlenp, void *newp)
 {
@@ -1490,50 +1489,38 @@ ip6_sysctl_ip6stat(void *oldp, size_t *oldlenp, void *newp)
 
 	return (ret);
 }
+#endif /* SMALL_KERNEL */
 
 int
 ip6_sysctl_soiikey(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
-	uint8_t oldkey[IP6_SOIIKEY_LEN];
 	int error;
 
 	error = suser(curproc);
 	if (error != 0)
 		return (error);
 
-	memcpy(oldkey, ip6_soiikey, sizeof(oldkey));
-
-	error = sysctl_struct(oldp, oldlenp, newp, newlen, ip6_soiikey,
-	    sizeof(ip6_soiikey));
-
-	return (error);
+	return (sysctl_struct(oldp, oldlenp, newp, newlen, ip6_soiikey,
+	    sizeof(ip6_soiikey)));
 }
 
 int
 ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
-#ifdef MROUTING
-	extern struct mrt6stat mrt6stat;
-#endif
-	int oldval, error;
+	int error;
 
 	/* Almost all sysctl names at this level are terminal. */
 	if (namelen != 1 && name[0] != IPV6CTL_IFQUEUE)
 		return (ENOTDIR);
 
 	switch (name[0]) {
+#ifndef SMALL_KERNEL
 	case IPV6CTL_STATS:
 		return (ip6_sysctl_ip6stat(oldp, oldlenp, newp));
 #ifdef MROUTING
 	case IPV6CTL_MRTSTATS:
-		if (newp != NULL)
-			return (EPERM);
-		NET_LOCK();
-		error = sysctl_struct(oldp, oldlenp, newp, newlen,
-		    &mrt6stat, sizeof(mrt6stat));
-		NET_UNLOCK();
-		return (error);
+		return mrt6_sysctl_mrt6stat(oldp, oldlenp, newp);
 	case IPV6CTL_MRTMIF:
 		if (newp)
 			return (EPERM);
@@ -1544,10 +1531,7 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	case IPV6CTL_MRTMFC:
 		if (newp)
 			return (EPERM);
-		NET_LOCK();
-		error = mrt6_sysctl_mfc(oldp, oldlenp);
-		NET_UNLOCK();
-		return (error);
+		return (mrt6_sysctl_mfc(oldp, oldlenp));
 #else
 	case IPV6CTL_MRTSTATS:
 	case IPV6CTL_MRTPROTO:
@@ -1555,33 +1539,50 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	case IPV6CTL_MRTMFC:
 		return (EOPNOTSUPP);
 #endif
-	case IPV6CTL_MTUDISCTIMEOUT:
-		NET_LOCK();
+	case IPV6CTL_MTUDISCTIMEOUT: {
+		int oldval, newval;
+
+		oldval = newval = atomic_load_int(&ip6_mtudisc_timeout);
 		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
-		    &ip6_mtudisc_timeout, 0, INT_MAX);
-		rt_timer_queue_change(&icmp6_mtudisc_timeout_q,
-		    ip6_mtudisc_timeout);
-		NET_UNLOCK();
+		    &newval, 0, INT_MAX);
+		if (error == 0 && oldval != newval) {
+			rw_enter_write(&ip_sysctl_lock);
+			atomic_store_int(&ip6_mtudisc_timeout, newval);
+			rt_timer_queue_change(&icmp6_mtudisc_timeout_q, newval);
+			rw_exit_write(&ip_sysctl_lock);
+		}
+
 		return (error);
+	}
 	case IPV6CTL_IFQUEUE:
 		return (sysctl_niq(name + 1, namelen - 1,
 		    oldp, oldlenp, newp, newlen, &ip6intrq));
-	case IPV6CTL_SOIIKEY:
-		return (ip6_sysctl_soiikey(oldp, oldlenp, newp, newlen));
-	case IPV6CTL_MULTIPATH:
-		NET_LOCK();
-		oldval = ip6_multipath;
+	case IPV6CTL_MULTIPATH: {
+		int oldval, newval;
+
+		oldval = newval = atomic_load_int(&ip6_multipath);
 		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
-		    &ip6_multipath, 0, 1);
-		if (oldval != ip6_multipath)
+		    &newval, 0, 1);
+		if (error == 0 && oldval != newval) {
+			atomic_store_int(&ip6_multipath, newval);
+			membar_producer();
 			atomic_inc_long(&rtgeneration);
-		NET_UNLOCK();
+		}
+
 		return (error);
+	}
 	case IPV6CTL_FORWARDING:
 	case IPV6CTL_SENDREDIRECTS:
+	case IPV6CTL_DAD_PENDING:
+#ifdef MROUTING
+	case IPV6CTL_MRTPROTO:
+#endif
 		return (sysctl_bounded_arr(
 		    ipv6ctl_vars_unlocked, nitems(ipv6ctl_vars_unlocked),
 		    name, namelen, oldp, oldlenp, newp, newlen));
+#endif /* SMALL_KERNEL */
+	case IPV6CTL_SOIIKEY:
+		return (ip6_sysctl_soiikey(oldp, oldlenp, newp, newlen));
 	default:
 		NET_LOCK();
 		error = sysctl_bounded_arr(ipv6ctl_vars, nitems(ipv6ctl_vars),

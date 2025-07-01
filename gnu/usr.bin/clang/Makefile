@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.27 2023/11/11 18:35:35 robert Exp $
+# $OpenBSD: Makefile,v 1.29 2025/06/29 01:36:32 jmatthew Exp $
 
 .include <bsd.own.mk>
 
@@ -8,6 +8,7 @@
 SUBDIR=	include/llvm/Config
 SUBDIR+=libLLVMSupport
 SUBDIR+=libLLVMTableGen
+SUBDIR+=llvm-min-tblgen
 SUBDIR+=llvm-tblgen
 SUBDIR+=include/llvm/ExecutionEngine/JITLink
 SUBDIR+=include/llvm/IR
@@ -29,6 +30,7 @@ SUBDIR+=libclangSupport
 SUBDIR+=clang-tblgen
 SUBDIR+=include/clang
 
+SUBDIR+=libclangAPINotes
 SUBDIR+=libclangBasic
 SUBDIR+=libclangBasicTargets
 SUBDIR+=libclangLex
@@ -47,6 +49,7 @@ SUBDIR+=libclangRewriteFrontend
 SUBDIR+=libclangFrontendTool
 SUBDIR+=libclangExtractAPI
 SUBDIR+=libclangIndex
+SUBDIR+=libclangInstallAPI
 
 SUBDIR+=clang
 
@@ -91,9 +94,11 @@ SUBDIR+=liblldbPluginObjectContainer
 SUBDIR+=liblldbPluginObjectFile
 SUBDIR+=liblldbPluginPlatform
 SUBDIR+=liblldbPluginProcess
+SUBDIR+=liblldbPluginRegisterTypeBuilder
 SUBDIR+=liblldbPluginScriptInterpreter
 SUBDIR+=liblldbPluginStructuredData
 SUBDIR+=liblldbPluginSymbolFile
+SUBDIR+=liblldbPluginSymbolLocator
 SUBDIR+=liblldbPluginSymbolVendor
 SUBDIR+=liblldbPluginSystemRuntime
 SUBDIR+=liblldbPluginTypeSystem
@@ -113,6 +118,8 @@ SUBDIR+=include/llvm-objdump
 SUBDIR+=llvm-objdump
 SUBDIR+=include/llvm-readobj
 SUBDIR+=llvm-readobj
+SUBDIR+=include/llvm-symbolizer
+SUBDIR+=llvm-symbolizer
 
 SUBDIR+=llvm-profdata
 SUBDIR+=llvm-cov

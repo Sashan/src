@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.c,v 1.281 2025/02/12 19:33:20 claudio Exp $ */
+/*	$OpenBSD: bgpd.c,v 1.283 2025/04/24 20:24:12 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -118,7 +118,7 @@ usage(void)
 #define PFD_SOCK_ROUTE		3
 #define PFD_SOCK_PFKEY		4
 #define PFD_CONNECT_START	5
-#define MAX_TIMEOUT		3600
+#define MAX_TIMEOUT		(3600 * 1000)
 
 int	 cmd_opts;
 
@@ -359,7 +359,7 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 
 		if (timeout < 0 || timeout > MAX_TIMEOUT)
 			timeout = MAX_TIMEOUT;
-		if (poll(pfd, npfd, timeout * 1000) == -1) {
+		if (poll(pfd, npfd, timeout) == -1) {
 			if (errno != EINTR) {
 				log_warn("poll error");
 				quit = 1;
@@ -963,9 +963,11 @@ dispatch_imsg(struct imsgbuf *imsgbuf, int idx, struct bgpd_config *conf)
 				reconfig = 1;
 				reconfpid = imsg_get_pid(&imsg);
 				if (imsg_get_data(&imsg, reason,
-				    sizeof(reason)) == 0 && reason[0] != '\0')
+				    sizeof(reason)) == 0 && reason[0] != '\0') {
+					reason[sizeof(reason) - 1] = '\0';
 					log_info("reload due to: %s",
 					    log_reason(reason));
+				}
 			}
 			break;
 		case IMSG_CTL_FIB_COUPLE:
@@ -1005,9 +1007,12 @@ dispatch_imsg(struct imsgbuf *imsgbuf, int idx, struct bgpd_config *conf)
 			else if (imsg_get_data(&imsg, &demote, sizeof(demote))
 			    == -1)
 				log_warn("wrong imsg len");
-			else
+			else {
+				demote.demote_group[
+				    sizeof(demote.demote_group) - 1] = '\0';
 				carp_demote_set(demote.demote_group,
 				    demote.level);
+			}
 			break;
 		case IMSG_CTL_LOG_VERBOSE:
 			/* already checked by SE */

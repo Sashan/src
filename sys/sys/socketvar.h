@@ -1,4 +1,4 @@
-/*	$OpenBSD: socketvar.h,v 1.152 2025/02/17 08:56:33 mvs Exp $	*/
+/*	$OpenBSD: socketvar.h,v 1.158 2025/04/08 15:31:22 mvs Exp $	*/
 /*	$NetBSD: socketvar.h,v 1.18 1996/02/09 18:25:38 christos Exp $	*/
 
 /*-
@@ -61,10 +61,6 @@ TAILQ_HEAD(soqhead, socket);
  *	br	sblock() of so_rcv buffer
  *	bs	sblock() od so_snd buffer
  *	s	solock()
- */
-
-/*
- * XXXSMP: tcp(4) sockets rely on exclusive solock() for all the cases.
  */
 
 /*
@@ -222,13 +218,12 @@ int	soo_ioctl(struct file *, u_long, caddr_t, struct proc *);
 int	soo_kqfilter(struct file *, struct knote *);
 int	soo_close(struct file *, struct proc *);
 int	soo_stat(struct file *, struct stat *, struct proc *);
-void	sbappend(struct socket *, struct sockbuf *, struct mbuf *);
-void	sbappendstream(struct socket *, struct sockbuf *, struct mbuf *);
-int	sbappendaddr(struct socket *, struct sockbuf *,
-	    const struct sockaddr *, struct mbuf *, struct mbuf *);
-int	sbappendcontrol(struct socket *, struct sockbuf *, struct mbuf *,
+void	sbappend(struct sockbuf *, struct mbuf *);
+void	sbappendstream(struct sockbuf *, struct mbuf *);
+int	sbappendaddr(struct sockbuf *, const struct sockaddr *, struct mbuf *,
 	    struct mbuf *);
-void	sbappendrecord(struct socket *, struct sockbuf *, struct mbuf *);
+int	sbappendcontrol(struct sockbuf *, struct mbuf *, struct mbuf *);
+void	sbappendrecord(struct sockbuf *, struct mbuf *);
 void	sbcompress(struct sockbuf *, struct mbuf *, struct mbuf *);
 struct mbuf *
 	sbcreatecontrol(const void *, size_t, int, int);

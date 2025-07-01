@@ -1,4 +1,4 @@
-/*	$OpenBSD: mlkem_internal.h,v 1.4 2024/12/19 23:52:26 tb Exp $ */
+/*	$OpenBSD: mlkem_internal.h,v 1.7 2025/05/20 00:33:40 beck Exp $ */
 /*
  * Copyright (c) 2023, Google Inc.
  *
@@ -41,7 +41,7 @@ __BEGIN_HIDDEN_DECLS
  * regular callers should use the non-deterministic |MLKEM_generate_key|
  * directly.
  */
-void MLKEM768_generate_key_external_entropy(
+int MLKEM768_generate_key_external_entropy(
     uint8_t out_encoded_public_key[MLKEM768_PUBLIC_KEY_BYTES],
     struct MLKEM768_private_key *out_private_key,
     const uint8_t entropy[MLKEM_SEED_BYTES]);
@@ -57,8 +57,8 @@ void MLKEM768_generate_key_external_entropy(
  * format for ML-KEM private keys. It returns one on success or zero on
  * allocation error.
  */
-int MLKEM768_marshal_private_key(CBB *out,
-    const struct MLKEM768_private_key *private_key);
+int MLKEM768_marshal_private_key(const struct MLKEM768_private_key *private_key,
+    uint8_t **out_private_key, size_t *out_private_key_len);
 
 /*
  * MLKEM_encap_external_entropy behaves like |MLKEM_encap|, but uses
@@ -80,7 +80,7 @@ void MLKEM768_encap_external_entropy(
  * regular callers should use the non-deterministic |MLKEM_generate_key|
  * directly.
  */
-void MLKEM1024_generate_key_external_entropy(
+int MLKEM1024_generate_key_external_entropy(
     uint8_t out_encoded_public_key[MLKEM1024_PUBLIC_KEY_BYTES],
     struct MLKEM1024_private_key *out_private_key,
     const uint8_t entropy[MLKEM_SEED_BYTES]);
@@ -96,8 +96,9 @@ void MLKEM1024_generate_key_external_entropy(
  * standard format for ML-KEM private keys. It returns one on success or zero on
  * allocation error.
  */
-int MLKEM1024_marshal_private_key(CBB *out,
-    const struct MLKEM1024_private_key *private_key);
+int MLKEM1024_marshal_private_key(
+    const struct MLKEM1024_private_key *private_key, uint8_t **out_private_key,
+    size_t *out_private_key_len);
 
 /*
  * MLKEM_encap_external_entropy behaves like |MLKEM_encap|, but uses

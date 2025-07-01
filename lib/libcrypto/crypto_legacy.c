@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto_legacy.c,v 1.6 2024/11/06 04:18:42 tb Exp $ */
+/* $OpenBSD: crypto_legacy.c,v 1.8 2025/05/24 07:23:14 jsing Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -123,10 +123,10 @@
 
 #include <openssl/opensslconf.h>
 #include <openssl/crypto.h>
-#include <openssl/err.h>
 
 #include "crypto_internal.h"
 #include "crypto_local.h"
+#include "err_local.h"
 #include "x86_arch.h"
 
 /* Machine independent capabilities. */
@@ -305,21 +305,6 @@ void
 	return NULL;
 }
 LCRYPTO_ALIAS(CRYPTO_get_dynlock_destroy_callback);
-
-#if !defined(OPENSSL_CPUID_SETUP) && !defined(OPENSSL_CPUID_OBJ)
-void
-OPENSSL_cpuid_setup(void)
-{
-}
-#endif
-
-#ifndef HAVE_CRYPTO_CPU_CAPS_INIT
-void
-crypto_cpu_caps_init(void)
-{
-	OPENSSL_cpuid_setup();
-}
-#endif
 
 #ifndef HAVE_CRYPTO_CPU_CAPS_IA32
 uint64_t

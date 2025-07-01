@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.268 2024/11/10 06:51:59 jsg Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.273 2025/06/09 11:11:03 claudio Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -58,6 +58,7 @@
 #include <sys/atomic.h>
 #include <sys/unistd.h>
 #include <sys/tracepoint.h>
+#include <sys/witness.h>
 
 #include <sys/syscallargs.h>
 
@@ -193,9 +194,10 @@ process_initialize(struct process *pr, struct proc *p)
 	/* new thread and new process */
 	KASSERT(p->p_ucred->cr_refcnt.r_refs >= 2);
 
+	prof_fork(pr);
+
 	LIST_INIT(&pr->ps_children);
 	LIST_INIT(&pr->ps_orphans);
-	LIST_INIT(&pr->ps_ftlist);
 	LIST_INIT(&pr->ps_sigiolst);
 	TAILQ_INIT(&pr->ps_tslpqueue);
 
@@ -236,6 +238,9 @@ process_new(struct proc *p, struct process *parent, int flags)
 	/* post-copy fixups */
 	pr->ps_pptr = parent;
 	pr->ps_ppid = parent->ps_pid;
+
+	WITNESS_SETCHILD(&pr->ps_mtx.mtx_lock_obj,
+	    &parent->ps_mtx.mtx_lock_obj);
 
 	/* bump references to the text vnode (for sysctl) */
 	pr->ps_textvp = parent->ps_textvp;
@@ -483,10 +488,16 @@ fork1(struct proc *curp, int flags, void (*func)(void *), void *arg,
 	pr->ps_acflag = AFORK;
 	atomic_clearbits_int(&pr->ps_flags, PS_EMBRYO);
 
-	if ((flags & FORK_IDLE) == 0)
-		fork_thread_start(p, curp, flags);
-	else
+	/*
+	 * Idle threads are just assigned to the CPU but not added
+	 * to any runqueue.
+	 */
+	if ((flags & FORK_IDLE)) {
 		p->p_cpu = arg;
+		/* for consistency mark idle procs as pegged */
+		atomic_setbits_int(&p->p_flag, P_CPUPEG);
+	} else
+		fork_thread_start(p, curp, flags);
 
 	free(newptstat, M_SUBPROC, sizeof(*newptstat));
 
@@ -590,12 +601,13 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	pr->ps_threadcnt++;
 
 	/*
-	 * if somebody else wants to take us to single threaded mode,
-	 * count ourselves in.
+	 * if somebody else wants to take us to single threaded mode
+	 * or suspend the process, count ourselves in.
 	 */
-	if (pr->ps_single) {
-		pr->ps_singlecnt++;
-		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);
+	if (pr->ps_single != NULL || ISSET(pr->ps_flags, PS_STOPPING)) {
+		pr->ps_suspendcnt++;
+		atomic_setbits_int(&p->p_flag,
+		    curp->p_flag & (P_SUSPSINGLE | P_SUSPSIG));
 	}
 	mtx_leave(&pr->ps_mtx);
 

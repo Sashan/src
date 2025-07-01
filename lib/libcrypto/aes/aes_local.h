@@ -1,4 +1,4 @@
-/* $OpenBSD: aes_local.h,v 1.4 2025/01/25 17:59:44 tb Exp $ */
+/* $OpenBSD: aes_local.h,v 1.7 2025/06/27 17:26:57 jsing Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2002 The OpenSSL Project.  All rights reserved.
  *
@@ -60,16 +60,11 @@
 
 __BEGIN_HIDDEN_DECLS
 
-typedef unsigned int u32;
-typedef unsigned short u16;
-typedef unsigned char u8;
-
-#define MAXKC   (256/32)
-#define MAXKB   (256/8)
-#define MAXNR   14
-
 /* This controls loop-unrolling in aes_core.c */
 #undef FULL_UNROLL
+
+void aes_ctr32_encrypt_ctr128f(const unsigned char *in, unsigned char *out,
+    size_t blocks, const void *key, const unsigned char ivec[AES_BLOCK_SIZE]);
 
 __END_HIDDEN_DECLS
 

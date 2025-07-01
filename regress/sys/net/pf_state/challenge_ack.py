@@ -29,7 +29,7 @@ ip=IP(src=FAKE_NET_ADDR, dst=REMOTE_ADDR)
 
 print("Send SYN packet, receive SYN+ACK")
 syn=TCP(sport=tport, dport='echo', seq=1, flags='S', window=(2**16)-1)
-synack=sr1(ip/syn, iface=LOCAL_IF, timeout=5)
+synack=sr1(ip/syn, timeout=5)
 
 if synack is None:
 	print("ERROR: no matching SYN+ACK packet received")
@@ -38,7 +38,7 @@ if synack is None:
 print("Send ACK packet to finish handshake.")
 ack=TCP(sport=synack.dport, dport=synack.sport, seq=2, flags='A',
     ack=synack.seq+1)
-send(ip/ack, iface=LOCAL_IF)
+send(ip/ack)
 
 print("Connection is established, send bogus SYN, expect challenge ACK")
 bogus_syn=TCP(sport=syn.sport, dport=syn.dport, seq=1000000, flags='S',
@@ -48,7 +48,7 @@ sniffer.filter = "src %s and tcp port %u and dst %s and tcp port %u " \
     "and tcp[tcpflags] = tcp-ack" % (ip.dst, syn.dport, ip.src, syn.sport)
 sniffer.start()
 time.sleep(1)
-send(ip/bogus_syn, iface=LOCAL_IF)
+send(ip/bogus_syn)
 sniffer.join(timeout=7)
 challenge_ack = sniffer.packet
 
@@ -56,9 +56,14 @@ if challenge_ack is None:
 	print("ERROR: no matching ACK packet received")
 	exit(1)
 
-if challenge_ack.getlayer(TCP).seq != (synack.seq + 1):
+if challenge_ack.seq != synack.seq+1:
 	print("ERROR: expecting seq %d got %d in challange ack" % \
-	    (challenge_ack.getlayer(TCP).seq, (synack.seq + 1)))
+	    (challenge_ack.seq, synack.seq+1))
 	exit(1)
+
+print("Send reset to cleanup the connection")
+new_rst=TCP(sport=synack.dport, dport=synack.sport, flags='RA',
+    seq=synack.ack, ack=synack.seq)
+send(ip/new_rst)
 
 exit(0)

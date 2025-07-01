@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# $OpenBSD: vi.sh,v 1.9 2021/09/02 07:14:15 jasper Exp $
+# $OpenBSD: vi.sh,v 1.13 2025/05/19 14:36:03 schwarze Exp $
 #
 # Copyright (c) 2016 Ingo Schwarze <schwarze@openbsd.org>
 # Copyright (c) 2017 Anton Lindqvist <anton@openbsd.org>
@@ -56,6 +56,10 @@ testseq "one two\0027rep" " # one two\b\b\b   \b\b\brep"
 # 0: Move to column 0.
 testseq "one\00330A two" " # one\b\b\bone two"
 testseq "one\003302A two\0033" " # one\b\b\bone two two\b"
+testseq "\0200abcdef\00330lrxll" " # \0200abcdef\b\r # \0200x\bxb"
+testseq "\0270\0202A\00330i\0340\0033" " # \0270\0202A\b\b\0340\0270\0202A\b\b"
+testseq "\0200abcdef\00330ix\0033" \
+	" # \0200abcdef\b\r # x\0200abcdef\r # x\0200\b"
 
 # a: Append.
 # .: Redo.
@@ -72,6 +76,8 @@ testseq "one 2.0\0033BD" " # one 2.0\b\b\b   \b\b\b\b"
 testseq "one ab.cd\0033bDa.\00332bD" \
 	" # one ab.cd\b\b  \b\b\b..\b\b\b\b    \b\b\b\b\b"
 testseq "one two\0033bCrep" " # one two\b\b\b   \b\b\brep"
+testseq "\0302\0251\0303\0200a\0033DP" \
+	" # \0302\0251\0303\0200a\b \b\ba\0303\0200\b\b"
 
 # c: Change region.
 testseq "one two\0033cbrep" " # one two\b\b\bo  \b\b\bro\beo\bpo\b"
@@ -117,12 +123,23 @@ testseq "abc\003302l~" " # abc\b\b\babC\b"
 testseq "abc\00330 rx" " # abc\b\b\bax\b"
 
 # P: Paste at current position.
-testseq "abcde\0033hDhP" " # abcde\b\b  \b\b\b\bdebc\b\b"
+testseq "abcde\0033hDhP" " # abcde\b\b  \b\b\b\bdebc\b\b\b"
 testseq "abcde\0033hDh2P" " # abcde\b\b  \b\b\b\bdedebc\b\b\b"
+testseq "A\0033xa\0303\0200\00332Px" \
+	" # A\b \b\0303\0200\bAA\0303\0200\b\b\0303\0200 \b\b"
+testseq "\0302\0251\0033xaA\0033Px" \
+	" # \0302\0251\b  \b\bA\b\0302\0251A\b\bA  \b\b\b"
+testseq "\0302\0251\0033xa\0303\0200\0033Px" \
+ " # \0302\0251\b  \b\b\0303\0200\b\0302\0251\0303\0200\b\b\0303\0200  \b\b\b"
 
 # p: Paste after current position.
 testseq "abcd\0033hDhp" " # abcd\b\b  \b\b\b\bacdb\b\b"
 testseq "abcd\0033hDh2p" " # abcd\b\b  \b\b\b\bacdcdb\b\b"
+testseq "A\0033xa\0303\0200\0033px" " # A\b \b\0303\0200\b\0303\0200A\b \b\b"
+testseq "\0302\0251\0033xaA\0033px" \
+	" # \0302\0251\b  \b\bA\bA\0302\0251\b  \b\b\b" 
+testseq "\0302\0251\0033xa\0303\0200\0033px" \
+	" # \0302\0251\b  \b\b\0303\0200\b\0303\0200\0302\0251\b  \b\b\b"
 
 # R: Replace.
 testseq "abcd\00332h2Rx\0033" " # abcd\b\b\bxx\b"

@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwz.c,v 1.18 2024/12/23 00:12:44 patrick Exp $	*/
+/*	$OpenBSD: qwz.c,v 1.21 2025/04/17 09:51:55 kirill Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -6493,7 +6493,7 @@ qwz_core_fetch_bdf(struct qwz_softc *sc, const u_char **boardfw,
 		return 0;
 
 	DPRINTF("%s: failed to fetch board data for %s from %s\n",
-	    sc->sc_dev.dv_xname, boardname, path);
+	    sc->sc_dev.dv_xname, boardname, ATH12K_BOARD_API2_FILE);
 	return ret;
 }
 
@@ -6539,7 +6539,7 @@ qwz_core_fetch_regdb(struct qwz_softc *sc, const u_char **boardfw,
 		return 0;
 
 	DPRINTF("%s: failed to fetch regdb data for %s from %s\n",
-	    sc->sc_dev.dv_xname, boardname, path);
+	    sc->sc_dev.dv_xname, boardname, ATH12K_BOARD_API2_FILE);
 	return ret;
 }
 
@@ -6637,9 +6637,8 @@ err_free_req:
 int
 qwz_qmi_load_bdf_qmi(struct qwz_softc *sc, enum ath12k_qmi_bdf_type type)
 {
-	u_char *data = NULL;
 	const u_char *boardfw;
-	size_t len = 0, boardfw_len;
+	size_t boardfw_len;
 	uint32_t fw_size;
 	int ret = 0;
 
@@ -6675,7 +6674,6 @@ qwz_qmi_load_bdf_qmi(struct qwz_softc *sc, enum ath12k_qmi_bdf_type type)
 	}
 
 out:
-	free(data, M_DEVBUF, len);
 	if (ret == 0)
 		DPRINTF("%s: BDF download sequence completed\n", __func__);
 

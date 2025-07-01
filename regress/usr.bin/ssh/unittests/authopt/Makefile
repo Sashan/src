@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.7 2023/01/15 23:35:10 djm Exp $
+#	$OpenBSD: Makefile,v 1.9 2025/05/06 06:05:48 djm Exp $
 
 PROG=test_authopt
 SRCS=tests.c
@@ -8,7 +8,7 @@ SRCS+=auth-options.c
 # From usr.bin/ssh
 SRCS+=sshbuf-getput-basic.c sshbuf-getput-crypto.c sshbuf-misc.c sshbuf.c
 SRCS+=sshbuf-io.c atomicio.c sshkey.c authfile.c cipher.c log.c ssh-rsa.c
-SRCS+=ssh-dss.c ssh-ecdsa.c ssh-ed25519.c mac.c umac.c umac128.c hmac.c misc.c
+SRCS+=ssh-ecdsa.c ssh-ed25519.c mac.c umac.c umac128.c hmac.c misc.c
 SRCS+=ssherr.c uidswap.c cleanup.c xmalloc.c match.c krl.c fatal.c
 SRCS+=addr.c addrmatch.c bitmap.c
 SRCS+=ed25519.c hash.c
@@ -22,6 +22,6 @@ SRCS+=utf8.c
 REGRESS_TARGETS=run-regress-${PROG}
 
 run-regress-${PROG}: ${PROG}
-	env ${TEST_ENV} ./${PROG} -d ${.CURDIR}/testdata
+	env ${TEST_ENV} ./${PROG} ${UNITTEST_ARGS} -d ${.CURDIR}/testdata
 
 .include <bsd.regress.mk>

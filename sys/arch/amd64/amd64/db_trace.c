@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_trace.c,v 1.56 2024/11/07 16:02:29 miod Exp $	*/
+/*	$OpenBSD: db_trace.c,v 1.58 2025/05/23 03:13:33 sashan Exp $	*/
 /*	$NetBSD: db_trace.c,v 1.1 2003/04/26 18:39:27 fvdl Exp $	*/
 
 /*
@@ -298,30 +298,32 @@ stacktrace_save_utrace(struct stacktrace *st)
 	if (pcb == NULL)
 		return;
 
+	lastframe = NULL;
 	frame = __builtin_frame_address(0);
 	KASSERT(INKERNEL(frame));
-	f = *frame;
 
-	while (st->st_count < STACKTRACE_MAX) {
-		if (f.f_retaddr != 0 && !INKERNEL(f.f_retaddr))
-			st->st_pc[st->st_count++] = f.f_retaddr;
-
+	curcpu()->ci_inatomic++;
+	/*
+	 * skip kernel frames
+	 */
+	while (frame != NULL && lastframe < frame && INKERNEL(frame)) {
 		lastframe = frame;
-		frame = f.f_frame;
+		frame = frame->f_frame;
+	}
 
-		if (frame == NULL)
-			break;
-		if (INKERNEL(f.f_retaddr)) {
-			if (frame <= lastframe)
-				break;
-			f = *frame;
-			continue;
-		}
-		if (!INKERNEL(lastframe) && frame <= lastframe)
-			break;
+	/*
+	 * start saving userland frames
+	 */
+	if (lastframe != NULL)
+		st->st_pc[st->st_count++] = lastframe->f_retaddr;
+
+	while (frame != NULL && st->st_count < STACKTRACE_MAX) {
 		if (copyin(frame, &f, sizeof(f)) != 0)
 			break;
+		st->st_pc[st->st_count++] = f.f_retaddr;
+		frame = f.f_frame;
 	}
+	curcpu()->ci_inatomic--;
 }
 
 vaddr_t

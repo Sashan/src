@@ -1,5 +1,5 @@
-.\"	$OpenBSD: zdump.8,v 1.3 2022/09/11 06:38:12 jmc Exp $
-.Dd $Mdocdate: September 11 2022 $
+.\"	$OpenBSD: zdump.8,v 1.7 2025/06/23 13:53:11 millert Exp $
+.Dd $Mdocdate: June 23 2025 $
 .Dt ZDUMP 8
 .Os
 .Sh NAME
@@ -7,10 +7,14 @@
 .Nd time zone dumper
 .Sh SYNOPSIS
 .Nm zdump
-.Op Fl v
+.Op Fl Vv
 .Oo
 .Fl c
-.Oo Ar loyear , Oc Ar hiyear
+.Oo Ar loyear , Oc Ns Ar hiyear
+.Oc
+.Oo
+.Fl t
+.Oo Ar lotime , Oc Ns Ar hitime
 .Oc
 .Ar zonename ...
 .Sh DESCRIPTION
@@ -23,11 +27,23 @@ These options are available:
 .Bl -tag -width Ds
 .It Xo
 .Fl c
-.Oo Ar loyear , Oc Ar hiyear
+.Oo Ar loyear , Oc Ns Ar hiyear
 .Xc
 Cut off verbose output near the start of the given year(s).
 By default,
-the program cuts off verbose output near the start of the years -500 and 2500.
+the program cuts off verbose output near the start of the years \-500 and 2500.
+.It Xo
+.Fl t
+.Oo Ar lotime , Oc Ns Ar hitime
+.Xc
+Cut off verbose output at the start of the given time(s),
+given in seconds since 1970-01-01 00:00:00 UTC.
+.It Fl V
+Like
+.Fl v ,
+except omit the times relative to the extreme time values.
+This generates output that is easier to compare to that of
+implementations with different time representations.
 .It Fl v
 For each
 .Ar zonename
@@ -45,15 +61,23 @@ if the given time is Daylight Saving Time or
 otherwise.
 .El
 .Sh LIMITATIONS
-The
-.Fl v
-option may not be used on systems with floating-point
-.Vt time_t
-values that are neither float nor double.
-.Pp
 Time discontinuities are found by sampling the results returned by localtime
 at twelve-hour intervals.
 This works in all real-world cases;
+one can construct artificial time zones for which this fails.
+.Pp
+In the output,
+.Dq UT
+denotes the value returned by
+.Xr gmtime 3 ,
+which uses UTC for modern time stamps and some other UT flavor for
+time stamps that predate the introduction of UTC.
+No attempt is currently made to have the output use
+.Dq UTC
+for newer and
+.Dq UT
+for older time stamps,
+partly because the exact date of the introduction of UTC is problematic.
 .\" @(#)zdump.8	8.1
 .Sh SEE ALSO
 .Xr ctime 3 ,

@@ -1,4 +1,4 @@
-/*	$OpenBSD: systm.h,v 1.171 2024/05/28 12:50:23 jsg Exp $	*/
+/*	$OpenBSD: systm.h,v 1.176 2025/06/19 12:01:08 jca Exp $	*/
 /*	$NetBSD: systm.h,v 1.50 1996/06/09 04:55:09 briggs Exp $	*/
 
 /*-
@@ -106,6 +106,10 @@ extern dev_t swapdev;		/* swapping device */
 extern struct vnode *swapdev_vp;/* vnode equivalent to above */
 
 extern int nowake;		/* dead wakeup(9) channel */
+
+#ifdef MP_LOCKDEBUG
+extern long __mp_lock_spinout;
+#endif
 
 struct proc;
 struct process;
@@ -251,12 +255,15 @@ void	cpu_startclock(void);
 void	startprofclock(struct process *);
 void	stopprofclock(struct process *);
 void	setstatclockrate(int);
+void	prof_fork(struct process *);
+void	prof_exec(struct process *);
+void	prof_write(struct proc *);
 
 void	start_periodic_resettodr(void);
 void	stop_periodic_resettodr(void);
 
 void	sleep_setup(const volatile void *, int, const char *);
-int	sleep_finish(int, int);
+int	sleep_finish(uint64_t, int);
 void	sleep_queue_init(void);
 
 struct cond;
@@ -380,6 +387,8 @@ void	consinit(void);
 void	cpu_startup(void);
 void	cpu_configure(void);
 void	diskconf(void);
+
+void	powerbutton_event(void);
 
 int nfs_mountroot(void);
 int dk_mountroot(void);

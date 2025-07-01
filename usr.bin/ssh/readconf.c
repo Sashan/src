@@ -1,4 +1,4 @@
-/* $OpenBSD: readconf.c,v 1.397 2025/02/15 01:52:07 djm Exp $ */
+/* $OpenBSD: readconf.c,v 1.400 2025/06/24 09:22:03 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -745,12 +745,13 @@ match_cfg_line(Options *options, const char *full_line, int *acp, char ***avp,
 		if (strcasecmp(attrib, "canonical") == 0 ||
 		    strcasecmp(attrib, "final") == 0) {
 			/*
-			 * If the config requests "Match final" then remember
-			 * this so we can perform a second pass later.
+			 * If the config requests "Match final" without
+			 * negation then remember this so we can perform a
+			 * second pass later.
 			 */
 			if (strcasecmp(attrib, "final") == 0 &&
 			    want_final_pass != NULL)
-				*want_final_pass = 1;
+				*want_final_pass |= !negate;
 			r = !!final_pass;  /* force bitmask member to boolean */
 			if (r == (negate ? 1 : 0))
 				this_result = result = 0;
@@ -772,8 +773,11 @@ match_cfg_line(Options *options, const char *full_line, int *acp, char ***avp,
 		    strprefix(attrib, "exec=", 1) != NULL) {
 			arg = strchr(attrib, '=');
 			*(arg++) = '\0';
-		} else {
-			arg = argv_next(acp, avp);
+		} else if ((arg = argv_next(acp, avp)) == NULL) {
+			error("%.200s line %d: missing argument for Match '%s'",
+			    filename, linenum, oattrib);
+			result = -1;
+			goto out;
 		}
 
 		/*
@@ -2841,9 +2845,6 @@ fill_default_options(Options * options)
 		add_identity_file(options, "~/",
 		    _PATH_SSH_CLIENT_ID_ED25519_SK, 0);
 		add_identity_file(options, "~/", _PATH_SSH_CLIENT_ID_XMSS, 0);
-#ifdef WITH_DSA
-		add_identity_file(options, "~/", _PATH_SSH_CLIENT_ID_DSA, 0);
-#endif
 	}
 	if (options->escape_char == -1)
 		options->escape_char = '~';

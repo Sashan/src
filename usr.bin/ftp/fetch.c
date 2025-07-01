@@ -1,4 +1,4 @@
-/*	$OpenBSD: fetch.c,v 1.218 2024/04/23 08:50:38 sthen Exp $	*/
+/*	$OpenBSD: fetch.c,v 1.220 2025/06/02 20:57:36 schwarze Exp $	*/
 /*	$NetBSD: fetch.c,v 1.14 1997/08/18 10:20:20 lukem Exp $	*/
 
 /*-
@@ -1273,14 +1273,18 @@ auto_fetch(int argc, char *argv[], char *outfile)
 	/*
 	 * Loop through as long as there's files to fetch.
 	 */
-	username = pass = NULL;
-	for (rval = 0; (rval == 0) && (argpos < argc); free(url), argpos++) {
-		if (strchr(argv[argpos], ':') == NULL)
-			break;
+	url = username = pass = NULL;
+	for (rval = 0; (rval == 0) && (argpos < argc); argpos++) {
+		if (strchr(argv[argpos], ':') == NULL) {
+			warnx("No colon in URL: %s", argv[argpos]);
+			rval = argpos + 1;
+			continue;
+		}
 
+		free(url);
 		free(username);
 		free(pass);
-		host = dir = file = portnum = username = pass = NULL;
+		url = username = pass = host = portnum = dir = file = NULL;
 
 		lastfile = (argv[argpos+1] == NULL);
 
@@ -1400,10 +1404,6 @@ bad_ftp_url:
 		} else {			/* classic style `host:file' */
 			dir = strchr(host, ':');
 		}
-		if (EMPTYSTRING(host)) {
-			rval = argpos + 1;
-			continue;
-		}
 
 		/*
 		 * If dir is NULL, the file wasn't specified
@@ -1411,6 +1411,12 @@ bad_ftp_url:
 		 */
 		if (dir != NULL)
 			*dir++ = '\0';
+
+		if (EMPTYSTRING(host)) {
+			warnx("No host name in URL: %s", argv[argpos]);
+			rval = argpos + 1;
+			continue;
+		}
 
 		/*
 		 * Extract the file and (if present) directory name.
@@ -1545,6 +1551,9 @@ bad_ftp_url:
 		if ((code / 100) != COMPLETE)
 			rval = argpos + 1;
 	}
+	free(url);
+	free(username);
+	free(pass);
 	if (connected && rval != -1)
 		disconnect(0, NULL);
 	return (rval);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.89 2024/04/28 16:43:15 florian Exp $	*/
+/*	$OpenBSD: print.c,v 1.91 2025/06/29 16:22:05 tedu Exp $	*/
 /*	$NetBSD: print.c,v 1.27 1995/09/29 21:58:12 cgd Exp $	*/
 
 /*-
@@ -44,7 +44,6 @@
 #include <grp.h>
 #include <kvm.h>
 #include <math.h>
-#include <nlist.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +55,7 @@
 #include "ps.h"
 
 extern kvm_t *kd;
-extern int needenv, needcomm, neednlist, commandonly;
+extern int needenv, needcomm, commandonly;
 
 int mbswprint(const char *, int, int);  /* utf8.c */
 
@@ -239,7 +238,7 @@ logname(const struct pinfo *pi, VARENT *ve)
 		(void)printf("%-*s", v->width, "-");
 }
 
-#define pgtok(a)	(((unsigned long long)(a)*getpagesize())/1024)
+#define pgtok(a)	(((unsigned long long)(a)*pagesize)/1024)
 
 void
 printstate(const struct pinfo *pi, VARENT *ve)
@@ -625,18 +624,6 @@ vsize(const struct pinfo *pi, VARENT *ve)
 	v = ve->var;
 	(void)printf("%*llu", v->width,
 	    pgtok(kp->p_vm_dsize + kp->p_vm_ssize + kp->p_vm_tsize));
-}
-
-void
-rssize(const struct pinfo *pi, VARENT *ve)
-{
-	const struct kinfo_proc *kp = pi->ki;
-	VAR *v;
-
-	v = ve->var;
-	/* XXX don't have info about shared */
-	(void)printf("%*llu", v->width, (kp->p_flag & P_SYSTEM) ? 0 :
-	    pgtok(kp->p_vm_rssize));
 }
 
 void

@@ -1,4 +1,4 @@
-/* $OpenBSD: ecp_methods.c,v 1.43 2025/02/13 11:19:49 tb Exp $ */
+/* $OpenBSD: ecp_methods.c,v 1.47 2025/05/24 08:25:58 jsing Exp $ */
 /* Includes code written by Lenka Fibikova <fibikova@exp-math.uni-essen.de>
  * for the OpenSSL project.
  * Includes code written by Bodo Moeller for the OpenSSL project.
@@ -66,11 +66,11 @@
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
-#include <openssl/err.h>
 #include <openssl/objects.h>
 
 #include "bn_local.h"
 #include "ec_local.h"
+#include "err_local.h"
 
 /*
  * Most method functions in this file are designed to work with non-trivial
@@ -177,6 +177,21 @@ ec_group_get_curve(const EC_GROUP *group, BIGNUM *p, BIGNUM *a, BIGNUM *b,
 		return 0;
 
 	return 1;
+}
+
+static int
+ec_point_set_to_infinity(const EC_GROUP *group, EC_POINT *point)
+{
+	BN_zero(point->Z);
+	point->Z_is_one = 0;
+
+	return 1;
+}
+
+static int
+ec_point_is_at_infinity(const EC_GROUP *group, const EC_POINT *point)
+{
+	return BN_is_zero(point->Z);
 }
 
 static int
@@ -1194,10 +1209,11 @@ ec_mul_single_ct(const EC_GROUP *group, EC_POINT *r, const BIGNUM *scalar,
 }
 
 static int
-ec_mul_double_nonct(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
-    const BIGNUM *p_scalar, const EC_POINT *point, BN_CTX *ctx)
+ec_mul_double_nonct(const EC_GROUP *group, EC_POINT *r, const BIGNUM *scalar1,
+    const EC_POINT *point1, const BIGNUM *scalar2, const EC_POINT *point2,
+    BN_CTX *ctx)
 {
-	return ec_wnaf_mul(group, r, g_scalar, point, p_scalar, ctx);
+	return ec_wnaf_mul(group, r, scalar1, point1, scalar2, point2, ctx);
 }
 
 static int
@@ -1280,6 +1296,8 @@ ec_mont_field_decode(const EC_GROUP *group, BIGNUM *r, const BIGNUM *a,
 static const EC_METHOD ec_GFp_simple_method = {
 	.group_set_curve = ec_group_set_curve,
 	.group_get_curve = ec_group_get_curve,
+	.point_set_to_infinity = ec_point_set_to_infinity,
+	.point_is_at_infinity = ec_point_is_at_infinity,
 	.point_is_on_curve = ec_point_is_on_curve,
 	.point_cmp = ec_point_cmp,
 	.point_set_affine_coordinates = ec_point_set_affine_coordinates,
@@ -1299,11 +1317,12 @@ EC_GFp_simple_method(void)
 {
 	return &ec_GFp_simple_method;
 }
-LCRYPTO_ALIAS(EC_GFp_simple_method);
 
 static const EC_METHOD ec_GFp_mont_method = {
 	.group_set_curve = ec_mont_group_set_curve,
 	.group_get_curve = ec_group_get_curve,
+	.point_set_to_infinity = ec_point_set_to_infinity,
+	.point_is_at_infinity = ec_point_is_at_infinity,
 	.point_is_on_curve = ec_point_is_on_curve,
 	.point_cmp = ec_point_cmp,
 	.point_set_affine_coordinates = ec_point_set_affine_coordinates,
@@ -1325,4 +1344,3 @@ EC_GFp_mont_method(void)
 {
 	return &ec_GFp_mont_method;
 }
-LCRYPTO_ALIAS(EC_GFp_mont_method);

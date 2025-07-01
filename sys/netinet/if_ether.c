@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ether.c,v 1.270 2025/02/16 11:39:28 bluhm Exp $	*/
+/*	$OpenBSD: if_ether.c,v 1.273 2025/06/12 07:17:00 jsg Exp $	*/
 /*	$NetBSD: if_ether.c,v 1.31 1996/05/11 12:59:58 mycroft Exp $	*/
 
 /*
@@ -354,8 +354,8 @@ arpresolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 	uptime = getuptime();
 	rt = rt_getll(rt0);
 
-	if (ISSET(rt->rt_flags, RTF_REJECT) &&
-	    (rt->rt_expire == 0 || rt->rt_expire > uptime)) {
+	if (rt == NULL || (ISSET(rt->rt_flags, RTF_REJECT) &&
+	    (rt->rt_expire == 0 || rt->rt_expire > uptime))) {
 		m_freem(m);
 		return (rt == rt0 ? EHOSTDOWN : EHOSTUNREACH);
 	}
@@ -515,7 +515,7 @@ arppullup(struct mbuf *m)
  * then the protocol-specific routine is called.
  */
 void
-arpinput(struct ifnet *ifp, struct mbuf *m)
+arpinput(struct ifnet *ifp, struct mbuf *m, struct netstack *ns)
 {
 	if ((m = arppullup(m)) == NULL)
 		return;
@@ -844,7 +844,7 @@ arpproxy(struct in_addr in, unsigned int rtableid)
  * then the protocol-specific routine is called.
  */
 void
-revarpinput(struct ifnet *ifp, struct mbuf *m)
+revarpinput(struct ifnet *ifp, struct mbuf *m, struct netstack *ns)
 {
 	if ((m = arppullup(m)) == NULL)
 		return;
@@ -901,6 +901,7 @@ out:
 	m_freem(m);
 }
 
+#ifdef NFSCLIENT
 /*
  * Send a RARP request for the ip address of the specified interface.
  * The request should be RFC 903-compliant.
@@ -940,7 +941,6 @@ revarprequest(struct ifnet *ifp)
 	ifp->if_output(ifp, m, &sa, NULL);
 }
 
-#ifdef NFSCLIENT
 /*
  * RARP for the ip address of the specified interface, but also
  * save the ip address of the server that sent the answer.

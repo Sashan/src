@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_icmp.c,v 1.198 2025/01/03 21:27:40 bluhm Exp $	*/
+/*	$OpenBSD: ip_icmp.c,v 1.201 2025/06/20 05:08:07 dlg Exp $	*/
 /*	$NetBSD: ip_icmp.c,v 1.19 1996/02/13 23:42:22 christos Exp $	*/
 
 /*
@@ -129,6 +129,7 @@ struct rttimer_queue ip_mtudisc_timeout_q;
 struct rttimer_queue icmp_redirect_timeout_q;
 struct cpumem *icmpcounters;
 
+#ifndef SMALL_KERNEL
 const struct sysctl_bounded_args icmpctl_vars[] =  {
 	{ ICMPCTL_MASKREPL, &icmpmaskrepl, 0, 1 },
 	{ ICMPCTL_BMCASTECHO, &icmpbmcastecho, 0, 1 },
@@ -136,11 +137,12 @@ const struct sysctl_bounded_args icmpctl_vars[] =  {
 	{ ICMPCTL_REDIRACCEPT, &icmp_rediraccept, 0, 1 },
 	{ ICMPCTL_TSTAMPREPL, &icmptstamprepl, 0, 1 },
 };
-
+#endif /* SMALL_KERNEL */
 
 void icmp_mtudisc_timeout(struct rtentry *, u_int);
 int icmp_ratelimit(const struct in_addr *, const int, const int);
-int icmp_input_if(struct ifnet *, struct mbuf **, int *, int, int);
+int icmp_input_if(struct ifnet *, struct mbuf **, int *, int, int,
+    struct netstack *);
 int icmp_sysctl_icmpstat(void *, size_t *, void *);
 
 void
@@ -310,7 +312,7 @@ icmp_error(struct mbuf *n, int type, int code, u_int32_t dest, int destmtu)
  * Process a received ICMP message.
  */
 int
-icmp_input(struct mbuf **mp, int *offp, int proto, int af)
+icmp_input(struct mbuf **mp, int *offp, int proto, int af, struct netstack *ns)
 {
 	struct ifnet *ifp;
 
@@ -320,13 +322,14 @@ icmp_input(struct mbuf **mp, int *offp, int proto, int af)
 		return IPPROTO_DONE;
 	}
 
-	proto = icmp_input_if(ifp, mp, offp, proto, af);
+	proto = icmp_input_if(ifp, mp, offp, proto, af, ns);
 	if_put(ifp);
 	return proto;
 }
 
 int
-icmp_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto, int af)
+icmp_input_if(struct ifnet *ifp, struct mbuf **mp, int *offp, int proto,
+    int af, struct netstack *ns)
 {
 	struct mbuf *m = *mp;
 	int hlen = *offp;
@@ -673,7 +676,7 @@ reflect:
 	}
 
 raw:
-	return rip_input(mp, offp, proto, af);
+	return rip_input(mp, offp, proto, af, ns);
 
 freeit:
 	m_freem(m);
@@ -689,7 +692,8 @@ icmp_reflect(struct mbuf *m, struct mbuf **op, struct in_ifaddr *ia)
 	struct ip *ip = mtod(m, struct ip *);
 	struct mbuf *opts = NULL;
 	struct sockaddr_in sin;
-	struct rtentry *rt = NULL;
+	struct rtentry *rt;
+	struct in_addr ip_src = { INADDR_ANY };
 	int optlen = (ip->ip_hl << 2) - sizeof(struct ip);
 	u_int rtableid;
 	u_int8_t pfflags;
@@ -706,10 +710,6 @@ icmp_reflect(struct mbuf *m, struct mbuf **op, struct in_ifaddr *ia)
 		return (ELOOP);
 	}
 	rtableid = m->m_pkthdr.ph_rtableid;
-	pfflags = m->m_pkthdr.pf.flags;
-	m_resethdr(m);
-	m->m_pkthdr.ph_rtableid = rtableid;
-	m->m_pkthdr.pf.flags = pfflags & PF_TAG_GENERATED;
 
 	/*
 	 * If the incoming packet was addressed directly to us,
@@ -723,19 +723,24 @@ icmp_reflect(struct mbuf *m, struct mbuf **op, struct in_ifaddr *ia)
 		sin.sin_addr = ip->ip_dst;
 
 		rt = rtalloc(sintosa(&sin), 0, rtableid);
-		if (rtisvalid(rt) &&
-		    ISSET(rt->rt_flags, RTF_LOCAL|RTF_BROADCAST))
-			ia = ifatoia(rt->rt_ifa);
-	}
+		if (rtisvalid(rt)) {
+			if (ISSET(rt->rt_flags, RTF_LOCAL))
+				ip_src = ip->ip_dst;
+			else if (ISSET(rt->rt_flags, RTF_BROADCAST)) {
+				ia = ifatoia(rt->rt_ifa);
+				ip_src = ia->ia_addr.sin_addr;
+			}
+		}
+		rtfree(rt);
+	} else
+		ip_src = ia->ia_addr.sin_addr;
 
 	/*
 	 * The following happens if the packet was not addressed to us.
-	 * Use the new source address and do a route lookup. If it fails
-	 * drop the packet as there is no path to the host.
+	 * If we're directly connected use the closest address, otherwise
+	 * try to use the sourceaddr from the routing table.
 	 */
-	if (ia == NULL) {
-		rtfree(rt);
-
+	if (ip_src.s_addr == INADDR_ANY) {
 		memset(&sin, 0, sizeof(sin));
 		sin.sin_len = sizeof(sin);
 		sin.sin_family = AF_INET;
@@ -743,21 +748,38 @@ icmp_reflect(struct mbuf *m, struct mbuf **op, struct in_ifaddr *ia)
 
 		/* keep packet in the original virtual instance */
 		rt = rtalloc(sintosa(&sin), RT_RESOLVE, rtableid);
-		if (rt == NULL) {
-			ipstat_inc(ips_noroute);
-			m_freem(m);
-			return (EHOSTUNREACH);
-		}
+		if (rtisvalid(rt) &&
+		    ISSET(rt->rt_flags, RTF_LLINFO|RTF_HOST)) {
+			ia = ifatoia(rt->rt_ifa);
+			ip_src = ia->ia_addr.sin_addr;
+		} else {
+			struct sockaddr *sourceaddr;
+			struct ifaddr *ifa;
 
-		ia = ifatoia(rt->rt_ifa);
+			sourceaddr = rtable_getsource(rtableid, AF_INET);
+			if (sourceaddr != NULL) {
+				ifa = ifa_ifwithaddr(sourceaddr, rtableid);
+				if (ifa != NULL &&
+				    ISSET(ifa->ifa_ifp->if_flags, IFF_UP))
+					ip_src = satosin(sourceaddr)->sin_addr;
+			}
+		}
+		rtfree(rt);
 	}
 
-	ip->ip_dst = ip->ip_src;
-	ip->ip_ttl = MAXTTL;
+	/*
+	 * If the above didn't find an ip_src, ip_output() will try
+	 * and fill it in for us.
+	 */
 
-	/* It is safe to dereference ``ia'' iff ``rt'' is valid. */
-	ip->ip_src = ia->ia_addr.sin_addr;
-	rtfree(rt);
+	pfflags = m->m_pkthdr.pf.flags;
+
+	m_resethdr(m);
+	m->m_pkthdr.ph_rtableid = rtableid;
+	m->m_pkthdr.pf.flags = pfflags & PF_TAG_GENERATED;
+	ip->ip_dst = ip->ip_src;
+	ip->ip_src = ip_src;
+	ip->ip_ttl = MAXTTL;
 
 	if (optlen > 0) {
 		u_char *cp;
@@ -878,6 +900,7 @@ iptime(void)
 	return (htonl(t));
 }
 
+#ifndef SMALL_KERNEL
 int
 icmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
@@ -934,6 +957,7 @@ icmp_sysctl_icmpstat(void *oldp, size_t *oldlenp, void *newp)
 	return (sysctl_rdstruct(oldp, oldlenp, newp,
 	    &icmpstat, sizeof(icmpstat)));
 }
+#endif /* SMALL_KERNEL */
 
 struct rtentry *
 icmp_mtudisc_clone(struct in_addr dst, u_int rtableid, int ipsec)
