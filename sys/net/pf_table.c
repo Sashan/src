@@ -204,7 +204,6 @@ void			 pfr_update_tablerefs_anchor(struct pf_anchor *,
 			    void *);
 RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
-struct pfr_ktablehead	 pfr_ktables;
 struct pfr_table	 pfr_nulltable;
 
 int
