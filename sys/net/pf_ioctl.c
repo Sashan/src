@@ -4769,8 +4769,7 @@ pf_ina_commit(struct pf_trans *t)
 				    pp->pr_wchan);
 			} else if (t->pftina_pool_limits[i] !=
 			    pf_pool_limits[i].limit &&
-			    pool_sethardlimit(pp, t->pftina_pool_limits[i],
-			    NULL, 0) != 0) {
+			    pool_sethardlimit(pp, t->pftina_pool_limits[i]) != 0) {
 				log(LOG_WARNING,
 				    "setting limit to %u failed "
 				    "for %s at commit\n",

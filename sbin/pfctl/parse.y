@@ -5628,62 +5628,6 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 }
 
 void
-mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
-    struct pf_anchor *a, struct pf_anchor *alast)
-{
-
-	struct pfr_ktable *kt, *kt_safe;
-	char new_path[PF_ANCHOR_MAXPATH];
-	char *path_cut;
-	int sz;
-	struct pfr_uktable *ukt;
-	SLIST_HEAD(, pfr_uktable) ukt_list;
-
-	/*
-	 * Here we need to rename anchor path from temporal names such as
-	 * _1/_2/foo to _1/bar/foo etc.
-	 *
-	 * This also means we need to remove and insert table to ktables
-	 * tree as anchor path is being updated.
-	 */
-	SLIST_INIT(&ukt_list);
-	DBGPRINT("%s [ %s ] (%s)\n", __func__, a->path, alast->path);
-	RB_FOREACH_SAFE(kt, pfr_ktablehead, ktables, kt_safe) {
-		path_cut = strstr(kt->pfrkt_anchor, alast->path);
-		if (path_cut != NULL) {
-			path_cut += strlen(alast->path);
-			if (*path_cut)
-				sz = snprintf(new_path, sizeof (new_path),
-				    "%s%s", a->path, path_cut);
-			else
-				sz = snprintf(new_path, sizeof (new_path),
-				    "%s", a->path);
-			if (sz >= sizeof (new_path))
-				errx(1, "new path is too long for %s@%s\n",
-				    kt->pfrkt_name, kt->pfrkt_anchor);
-
-			DBGPRINT("%s %s@%s -> %s@%s\n", __func__,
-			    kt->pfrkt_name, kt->pfrkt_anchor,
-			    kt->pfrkt_name, new_path);
-			RB_REMOVE(pfr_ktablehead, ktables, kt);
-			strlcpy(kt->pfrkt_anchor, new_path,
-			    sizeof(kt->pfrkt_anchor));
-			SLIST_INSERT_HEAD(&ukt_list, (struct pfr_uktable *)kt,
-			    pfrukt_entry);
-		}
-	}
-
-	while ((ukt = SLIST_FIRST(&ukt_list)) != NULL) {
-		SLIST_REMOVE_HEAD(&ukt_list, pfrukt_entry);
-		if (RB_INSERT(pfr_ktablehead, ktables,
-		    (struct pfr_ktable *)ukt) != NULL)
-			errx(1, "%s@%s exists already\n",
-			    ukt->pfrukt_name,
-			    ukt->pfrukt_anchor);
-	}
-}
-
-void
 decide_address_family(struct node_host *n, sa_family_t *af)
 {
 	if (*af != 0 || n == NULL)
