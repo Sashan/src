@@ -211,7 +211,7 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	memset(&dtrv, 0, sizeof (dtrv));
 	dtrv.dtrv_pid = pid;
 	dtrv.dtrv_va = pc;
-	dtrv.dtrv_fd = dup(2);
+	dtrv.dtrv_fd = 0;
 	if (ioctl(dtdev, DTIOCRDVNODE, &dtrv)) {
 		warn("DTIOCRDVNODE fails for %p\n", pc);
 		return NULL;
