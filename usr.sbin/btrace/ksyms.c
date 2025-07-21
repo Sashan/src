@@ -129,12 +129,14 @@ read_syms(Elf *elf, void *base_addr)
 		name = elf_strptr(elf, strtabndx, sym.st_name);
 		if (name == NULL)
 			continue;
+		if (sym.st_value == 0)
+			continue;
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
 		syms->table[syms->nsymb].sym_value = sym.st_value +
 		    (intptr_t)base_addr;
-		fprintf(stdout, "%s [ %lx ] ( %llx )\n", name, syms->table[syms->nsymb].sym_value, sym.st_value + (intptr_t)base_addr);
+		fprintf(stdout, "%s [ %lx ] ( %llx + %lx )\n", name, syms->table[syms->nsymb].sym_value, sym.st_value, (intptr_t)base_addr);
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
