@@ -218,7 +218,7 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	}
 
 	elfbuf = mmap(NULL, dtrv.dtrv_sz, PROT_READ, MAP_PRIVATE, dtrv.dtrv_fd, 0);
-	if (elfbuf == NULL) {
+	if (elfbuf == MAP_FAILED) {
 		warn("mmap");
 		close(dtrv.dtrv_fd);
 	}
