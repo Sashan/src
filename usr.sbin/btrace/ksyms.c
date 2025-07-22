@@ -217,13 +217,13 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		return NULL;
 	}
 
-	elfbuf = mmap(NULL, dtrv.dtrv_sz, PROT_READ, MAP_PRIVATE, dtrv.dtrv_fd, 0);
+	elfbuf = mmap(NULL, dtrv.dtrv_len, PROT_READ, MAP_PRIVATE, dtrv.dtrv_fd, 0);
 	if (elfbuf == MAP_FAILED) {
 		warn("mmap");
 		close(dtrv.dtrv_fd);
 	}
-	syms = read_syms_buf(elfbuf, dtrv.dtrv_sz, dtrv.dtrv_lbase);
-	munmap(elfbuf, dtrv.dtrv_sz);
+	syms = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_lbase);
+	munmap(elfbuf, dtrv.dtrv_len);
 	close(dtrv.dtrv_fd);
 
 	new_sls = malloc(sizeof (struct shlib_syms));
