@@ -709,6 +709,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	boolean_t ok;
 	struct vm_map_entry *e, *ebase, *ewalk;
 	int err = 0;
+	int fd;
 	struct uvm_vnode *uvn, *uvn_walk;
 	struct vnode *vn;
 	struct vattr va;
@@ -753,7 +754,6 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 				}
 			}
 		}
-
 		dtrv->dtrv_len = (size_t)uvn->u_size;
 		dtrv->dtrv_lbase = (caddr_t)(ebase->start);
 		dtrv->dtrv_base = (caddr_t)e->start;
@@ -765,39 +765,50 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 
 	if (vn != NULL) {
 		fdplock(p->p_fd);
-		fp = fd_getfile(p->p_fd, dtrv->dtrv_fd);
-		if (fp == NULL) {
-			err = EBADF;
-		} else {
-			dtrv->dtrv_sz = 0;
-			err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
-			if (err == 0) {
-				dtrv->dtrv_ino = va.va_fileid;
-				dtrv->dtrv_dev = va.va_fsid;
-				/*
-				 * assuming holding a ref to vn is sufficient to traverse e.
-				 */
-				log(LOG_ERR, "%s required size is %zu [%p (%p) : %llx ]\n", __func__, dtrv->dtrv_len, dtrv->dtrv_base, dtrv->dtrv_lbase, dtrv->dtrv_offset);
-			} else {
-				log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
-			}
-			err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
-			if (err == 0) {
-				fp->f_data = vn;
-				fp->f_type = DTYPE_VNODE;
-				fp->f_ops = &vnops;
-				fp->f_offset = 0;
-			}
-
-#if 0
-			err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
-			    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
-			    p->p_p->ps_ucred, &dtrv->dtrv_len, p);
-			log(LOG_ERR, "%s going to read into %p bytes %zu %zu\n", __func__, dtrv->dtrv_buf, dtrv->dtrv_sz, dtrv->dtrv_len);
-#endif
-		}
+	        err = falloc(p, &fp, &fd);
 		fdpunlock(p->p_fd);
-		vrele(vn);
+		if (err != 0) {
+			vrele(vn);
+			return err;
+		}
+		dtrv->dtrv_sz = 0;
+		err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
+		if (err == 0) {
+			dtrv->dtrv_ino = va.va_fileid;
+			dtrv->dtrv_dev = va.va_fsid;
+			/*
+			 * assuming holding a ref to vn is sufficient to traverse e.
+			 */
+			log(LOG_ERR, "%s required size is %zu [%p (%p) : %llx ]\n", __func__, dtrv->dtrv_len, dtrv->dtrv_base, dtrv->dtrv_lbase, dtrv->dtrv_offset);
+		} else {
+			log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
+		}
+		err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
+		if (err == 0) {
+			fp->f_flag = FREAD;
+			fp->f_type = DTYPE_VNODE;
+			fp->f_ops = &vnops;
+			fp->f_data = vn;
+			fp->f_offset = 0;
+			dtrv->dtrv_fd = fd;
+			fdplock(p->p_fd);
+			fdinsert(p->p_fd, fd, UF_EXCLOSE, fp);
+			fdpunlock(p->p_fd);
+			FRELE(fp, p);
+			log(LOG_ERR, "%s updated fd %d\n", __func__, fd);
+		} else {
+			log(LOG_ERR, "%s open error: %d\n", __func__, err);
+			vrele(vn);
+			fdplock(p->p_fd);
+			fdremove(p->p_fd, fd);
+			fdpunlock(p->p_fd);
+		}
+#if 0
+		err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
+		    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
+		    p->p_p->ps_ucred, &dtrv->dtrv_len, p);
+		log(LOG_ERR, "%s going to read into %p bytes %zu %zu\n", __func__, dtrv->dtrv_buf, dtrv->dtrv_sz, dtrv->dtrv_len);
+#endif
 	}
 
 	return err;
