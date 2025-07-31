@@ -203,7 +203,7 @@ free_syms(struct syms *syms)
 static struct shlib_syms *
 load_syms(int dtdev, pid_t pid, caddr_t pc)
 {
-	struct shlib_syms *new_sls, *sls;
+	struct shlib_syms *new_sls, *mark_sls, *sls;
 	struct dtioc_rdvn dtrv;
 	struct syms *syms;
         char *elfbuf;
@@ -236,15 +236,19 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
 	new_sls->sls_syms = syms;
 
+	mark_sls = NULL;
 	LIST_FOREACH(sls, &shlib_lh, sls_le) {
+		mark_sls = sls;
 		if (new_sls->sls_base < sls->sls_base)
 			break;
 	}
 
-	if (sls == NULL)
+	if (mark_sls == NULL)
 		LIST_INSERT_HEAD(&shlib_lh, new_sls, sls_le);
+	else if (new_sls->sls_base > mark_sls->sls_base)
+		LIST_INSERT_AFTER(mark_sls, new_sls, sls_le);
 	else
-		LIST_INSERT_BEFORE(sls, new_sls, sls_le);
+		LIST_INSERT_BEFORE(mark_sls, new_sls, sls_le);
 
 	return new_sls;
 }
