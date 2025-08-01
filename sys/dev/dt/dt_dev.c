@@ -37,8 +37,6 @@
 
 #include <dev/dt/dtvar.h>
 
-#include <sys/syslog.h>
-
 /*
  * Number of frames to skip in stack traces.
  *
@@ -262,7 +260,6 @@ dtread(dev_t dev, struct uio *uio, int flags)
 
 	
 	while (!atomic_load_int(&sc->ds_evtcnt)) {
-		log(LOG_ERR, "%s going to sleep %d\n", __func__, sc->ds_evtcnt);
 		sleep_setup(sc, PWAIT | PCATCH, "dtread");
 		error = sleep_finish(INFSLP, !atomic_load_int(&sc->ds_evtcnt));
 		if (error == EINTR || error == ERESTART)
@@ -725,11 +722,10 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	ok = uvm_map_lookup_entry(&ps->ps_vmspace->vm_map,
 	    (vaddr_t)dtrv->dtrv_va, &e);
 	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
-	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) { /* was _VTEXT */
+	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) {
 		err = EFAULT;
 		vn = NULL;
-		log(LOG_ERR, "%s no soup for %p (%p %p %x %x)\n", __func__, dtrv->dtrv_va, vn, e, e == NULL ? -1 : e->etype,
-		(e != NULL && e->object.uvm_obj) ? ((struct vnode *)e->object.uvm_obj)->v_flag : -1);
+		DPRINTF("%s no mapping for %p\n", __func__, dtrv->dtrv_va);
 	} else {
 		uvn = (struct uvm_vnode *)e->object.uvm_obj;
 		vn = uvn->u_vnode;
@@ -771,6 +767,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		fdpunlock(p->p_fd);
 		if (err != 0) {
 			vrele(vn);
+			DPRINTF("%s fdopen failed (%d)\n", __func__, err);
 			return err;
 		}
 		dtrv->dtrv_sz = 0;
@@ -778,39 +775,27 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		if (err == 0) {
 			dtrv->dtrv_ino = va.va_fileid;
 			dtrv->dtrv_dev = va.va_fsid;
-			/*
-			 * assuming holding a ref to vn is sufficient to traverse e.
-			 */
-			log(LOG_ERR, "%s required size is %zu [%p (%p) : %llx ]\n", __func__, dtrv->dtrv_len, dtrv->dtrv_base, dtrv->dtrv_lbase, dtrv->dtrv_offset);
-		} else {
-			log(LOG_ERR, "%s GETATR() failed %d\n", __func__, err);
+			err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
+			if (err == 0) {
+				fp->f_flag = FREAD;
+				fp->f_type = DTYPE_VNODE;
+				fp->f_ops = &vnops;
+				fp->f_data = vn;
+				fp->f_offset = 0;
+				dtrv->dtrv_fd = fd;
+				fdplock(p->p_fd);
+				fdinsert(p->p_fd, fd, UF_EXCLOSE, fp);
+				fdpunlock(p->p_fd);
+				FRELE(fp, p);
+			} else {
+				DPRINTF("%s vopen() failed (%d)\n", __func__,
+				    err);
+				vrele(vn);
+				fdplock(p->p_fd);
+				fdremove(p->p_fd, fd);
+				fdpunlock(p->p_fd);
+			}
 		}
-		err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
-		if (err == 0) {
-			fp->f_flag = FREAD;
-			fp->f_type = DTYPE_VNODE;
-			fp->f_ops = &vnops;
-			fp->f_data = vn;
-			fp->f_offset = 0;
-			dtrv->dtrv_fd = fd;
-			fdplock(p->p_fd);
-			fdinsert(p->p_fd, fd, UF_EXCLOSE, fp);
-			fdpunlock(p->p_fd);
-			FRELE(fp, p);
-			log(LOG_ERR, "%s updated fd %d\n", __func__, fd);
-		} else {
-			log(LOG_ERR, "%s open error: %d\n", __func__, err);
-			vrele(vn);
-			fdplock(p->p_fd);
-			fdremove(p->p_fd, fd);
-			fdpunlock(p->p_fd);
-		}
-#if 0
-		err = vn_rdwr(UIO_READ, vn, dtrv->dtrv_buf,
-		    dtrv->dtrv_sz, 0, UIO_USERSPACE, 0,
-		    p->p_p->ps_ucred, &dtrv->dtrv_len, p);
-		log(LOG_ERR, "%s going to read into %p bytes %zu %zu\n", __func__, dtrv->dtrv_buf, dtrv->dtrv_sz, dtrv->dtrv_len);
-#endif
 	}
 
 	return err;
