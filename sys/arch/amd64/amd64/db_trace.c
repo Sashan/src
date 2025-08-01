@@ -292,6 +292,7 @@ stacktrace_save_utrace(struct stacktrace *st)
 {
 	struct callframe f, *frame, *lastframe;
 	struct pcb *pcb = curpcb;
+	struct process *ps = curproc->p_p;;
 
 	st->st_count = 0;
 
