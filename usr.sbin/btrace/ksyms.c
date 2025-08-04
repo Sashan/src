@@ -220,6 +220,7 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	if (elfbuf == MAP_FAILED) {
 		warn("mmap");
 		close(dtrv.dtrv_fd);
+		return NULL;
 	}
 	syms = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_lbase);
 	munmap(elfbuf, dtrv.dtrv_len);
@@ -235,13 +236,15 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
 	new_sls->sls_syms = syms;
 
+	/*
+	 * Keep list of symbol tables sorted ascending from lower base address.
+	 */
 	mark_sls = NULL;
 	LIST_FOREACH(sls, &shlib_lh, sls_le) {
 		mark_sls = sls;
 		if (new_sls->sls_base < sls->sls_base)
 			break;
 	}
-
 	if (mark_sls == NULL)
 		LIST_INSERT_HEAD(&shlib_lh, new_sls, sls_le);
 	else if (new_sls->sls_base > mark_sls->sls_base)
