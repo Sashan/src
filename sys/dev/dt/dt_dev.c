@@ -258,7 +258,6 @@ dtread(dev_t dev, struct uio *uio, int flags)
 	if (max < 1)
 		return (EMSGSIZE);
 
-	
 	while (!atomic_load_int(&sc->ds_evtcnt)) {
 		sleep_setup(sc, PWAIT | PCATCH, "dtread");
 		error = sleep_finish(INFSLP, !atomic_load_int(&sc->ds_evtcnt));
