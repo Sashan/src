@@ -793,6 +793,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 				fdplock(p->p_fd);
 				fdremove(p->p_fd, fd);
 				fdpunlock(p->p_fd);
+				FRELE(fp, p);
 			}
 		}
 	}
