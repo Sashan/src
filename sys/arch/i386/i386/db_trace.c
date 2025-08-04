@@ -289,12 +289,8 @@ stacktrace_save_at(struct stacktrace *st, unsigned int skip)
 void
 stacktrace_save_utrace(struct stacktrace *st)
 {
-	struct callframe f, *frame, *lastframe, *topframe;
+	struct callframe f, *frame, *lastframe;
 	struct pcb *pcb = curpcb;
-	struct process *ps = curproc->p_p;;
-	struct vm_map_entry *e;
-	vaddr_t retaddr;
-	int ok;
 
 	st->st_count = 0;
 
@@ -303,7 +299,6 @@ stacktrace_save_utrace(struct stacktrace *st)
 
 	lastframe = NULL;
 	frame = __builtin_frame_address(0);
-	topframe = frame;
 	KASSERT(INKERNEL(frame));
 
 	curcpu()->ci_inatomic++;
@@ -324,7 +319,6 @@ stacktrace_save_utrace(struct stacktrace *st)
 
 	while (frame != NULL && st->st_count < STACKTRACE_MAX) {
 		if (copyin(frame, &f, sizeof(f)) != 0) {
-			/*
 			/*
 			 * If the frame pointer read from the previous frame
 			 * is invalid, assume the return address we read
