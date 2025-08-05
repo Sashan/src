@@ -722,7 +722,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	    (vaddr_t)dtrv->dtrv_va, &e);
 	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
 	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) {
-		err = EFAULT;
+		err = ENOENT;
 		vn = NULL;
 		DPRINTF("%s no mapping for %p\n", __func__, dtrv->dtrv_va);
 	} else {
