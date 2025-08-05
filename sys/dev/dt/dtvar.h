@@ -132,15 +132,9 @@ struct dtioc_rdvn {
 	caddr_t			 dtrv_va;
 				    /* programm counter in inspected process */
 	int			 dtrv_fd;	/* where to dump data */
-	size_t			 dtrv_sz;	/* size of buffer */
-	off_t			 dtrv_offset;	/* ?offset into obj/section ? */
 	caddr_t			 dtrv_lbase;
 				    /* address where obj got loaded to */
-	caddr_t			 dtrv_base;
-				    /* address where section got loaded to */
 	caddr_t			 dtrv_end;	/* end address for section */
-	uint64_t		 dtrv_ino;	/* file inode */
-	uint32_t		 dtrv_dev;	/* device/mount inode */
 	size_t			 dtrv_len;	/* length needed */
 };
 

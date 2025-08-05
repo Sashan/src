@@ -753,9 +753,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		}
 		dtrv->dtrv_len = (size_t)uvn->u_size;
 		dtrv->dtrv_lbase = (caddr_t)(ebase->start);
-		dtrv->dtrv_base = (caddr_t)e->start;
 		dtrv->dtrv_end = (caddr_t)e->end;
-		dtrv->dtrv_offset = e->offset;
 	}
 
 	vm_map_unlock_read(&ps->ps_vmspace->vm_map);
@@ -769,11 +767,8 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			DPRINTF("%s fdopen failed (%d)\n", __func__, err);
 			return err;
 		}
-		dtrv->dtrv_sz = 0;
 		err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
 		if (err == 0) {
-			dtrv->dtrv_ino = va.va_fileid;
-			dtrv->dtrv_dev = va.va_fsid;
 			err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
 			if (err == 0) {
 				fp->f_flag = FREAD;
