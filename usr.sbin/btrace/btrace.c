@@ -128,7 +128,6 @@ static pid_t		 pid = -1;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
-int			 is_dynamic_elf = 1;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -146,7 +145,6 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
-	const char *exec_path = NULL;
 
 	setlocale(LC_ALL, "");
 
@@ -161,9 +159,6 @@ main(int argc, char *argv[])
 			break;
 		case 'n':
 			noaction = 1;
-			break;
-		case 'p':
-			exec_path = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -220,9 +215,6 @@ main(int argc, char *argv[])
 
 		if (argv[0] != 0)
 			pid = strtonum(argv[0], 0, INT_MAX, NULL);
-
-		if (exec_path == NULL)
-			is_dynamic_elf = 1;
 	}
 
 	if (showprobes) {
@@ -1816,10 +1808,7 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		if (is_dynamic_elf)
-			str = builtin_stack(dtev, 0, 0);
-		else
-			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
+		str = builtin_stack(dtev, 0, 0);
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
@@ -2113,31 +2102,4 @@ debug_dump_filter(struct bt_rule *r)
 	debugx(" /");
 	debug_dump_expr(SLIST_FIRST(&bs->bs_args));
 	debugx("/\n");
-}
-
-unsigned long
-dt_get_offset(pid_t pid)
-{
-	static struct dtioc_getaux	cache[32];
-	static int			next;
-	struct dtioc_getaux		*aux = NULL;
-	int				 i;
-
-	for (i = 0; i < 32; i++) {
-		if (cache[i].dtga_pid != pid)
-			continue;
-		aux = cache + i;
-		break;
-	}
-
-	if (aux == NULL) {
-		aux = &cache[next++];
-		next %= 32;
-
-		aux->dtga_pid = pid;
-		if (ioctl(dtfd, DTIOCGETAUXBASE, aux))
-			aux->dtga_auxbase = 0;
-	}
-
-	return aux->dtga_auxbase;
 }
