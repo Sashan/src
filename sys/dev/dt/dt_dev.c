@@ -169,7 +169,6 @@ int	dt_ioctl_record_start(struct dt_softc *);
 void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
-int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
 int	dt_ioctl_rd_vnode(struct dt_softc *, struct dtioc_rdvn *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
@@ -307,7 +306,6 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCRECORD:
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
-	case DTIOCGETAUXBASE:
 	case DTIOCRDVNODE:
 		/* root only ioctl(2) */
 		break;
@@ -331,9 +329,6 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCPRBDISABLE:
 		error = dt_ioctl_probe_disable(sc, (struct dtioc_req *)addr);
-		break;
-	case DTIOCGETAUXBASE:
-		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
 		break;
 	case DTIOCRDVNODE:
 		error = dt_ioctl_rd_vnode(sc, (struct dtioc_rdvn *)addr);
@@ -659,42 +654,6 @@ dt_ioctl_probe_disable(struct dt_softc *sc, struct dtioc_req *dtrq)
 
 	DPRINTF("dt%d: pid %d dealloc\n", sc->ds_unit, sc->ds_pid,
 	    dtrq->dtrq_pbn);
-
-	return 0;
-}
-
-int
-dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
-{
-	struct uio uio;
-	struct iovec iov;
-	struct process *pr;
-	struct proc *p = curproc;
-	AuxInfo auxv[ELF_AUX_ENTRIES];
-	int i, error;
-
-	dtga->dtga_auxbase = 0;
-
-	if ((pr = prfind(dtga->dtga_pid)) == NULL)
-		return ESRCH;
-
-	iov.iov_base = auxv;
-	iov.iov_len = sizeof(auxv);
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = pr->ps_auxinfo;
-	uio.uio_resid = sizeof(auxv);
-	uio.uio_segflg = UIO_SYSSPACE;
-	uio.uio_procp = p;
-	uio.uio_rw = UIO_READ;
-
-	error = process_domem(p, pr, &uio, PT_READ_D);
-	if (error)
-		return error;
-
-	for (i = 0; i < ELF_AUX_ENTRIES; i++)
-		if (auxv[i].au_id == AUX_base)
-			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
 }

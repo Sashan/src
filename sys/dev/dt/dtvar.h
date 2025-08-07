@@ -122,11 +122,6 @@ struct dtioc_stat {
 	uint64_t		 dtst_recurevt;	/* recursive events */
 };
 
-struct dtioc_getaux {
-	pid_t			 dtga_pid;	/* process to inspect */
-	unsigned long		 dtga_auxbase;	/* AUX_base value */
-};
-
 struct dtioc_rdvn {
 	pid_t			 dtrv_pid;	/* process to inspect */
 	caddr_t			 dtrv_va;
@@ -144,7 +139,7 @@ struct dtioc_rdvn {
 #define DTIOCPRBENABLE	_IOW('D', 4, struct dtioc_req)
 #define DTIOCPRBDISABLE	_IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
-#define DTIOCGETAUXBASE	_IOWR('D', 7, struct dtioc_getaux)
+/* _IOWR('D', 7, struct dtioc_getaux)  was DTIOCGETAUXBASE */
 #define DTIOCRDVNODE	_IOWR('D', 8, struct dtioc_rdvn)
 
 #ifdef _KERNEL
