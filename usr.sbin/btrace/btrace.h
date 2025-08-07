@@ -43,9 +43,9 @@ struct syms		*kelf_open_kernel(const char *);
 struct syms		*kelf_load_syms(void  *, struct syms *);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym_proc(int, pid_t, char *, size_t,
-			    unsigned long, unsigned long);
+			    unsigned long);
 int			 kelf_snprintsym_kernel(struct syms *, char *, size_t,
-			    unsigned long, unsigned long);
+			    unsigned long);
 
 /* map.c */
 struct map;

@@ -393,10 +393,10 @@ kelf_close(struct syms *ksyms)
 
 int
 kelf_snprintsym_proc(int dtfd, pid_t pid, char *str, size_t size,
-    unsigned long pc, unsigned long off)
+    unsigned long pc)
 {
 	struct shlib_syms *sls;
-	struct sym key = { .sym_value = pc + off };
+	struct sym key = { .sym_value = pc };
 	struct sym *entry;
 	Elf_Addr offset;
 
@@ -415,7 +415,7 @@ kelf_snprintsym_proc(int dtfd, pid_t pid, char *str, size_t size,
 	if (entry == NULL)
 		return snprintf(str, size, "\n0x%lx", pc);
 
-	offset = pc - (entry->sym_value + off);
+	offset = pc - entry->sym_value;
 	if (offset != 0) {
 		return snprintf(str, size, "\n%s+0x%llx",
 		    entry->sym_name, (unsigned long long)offset);
@@ -426,9 +426,9 @@ kelf_snprintsym_proc(int dtfd, pid_t pid, char *str, size_t size,
 
 int
 kelf_snprintsym_kernel(struct syms *syms, char *str, size_t size,
-    unsigned long pc, unsigned long off)
+    unsigned long pc)
 {
-	struct sym key = { .sym_value = pc + off };
+	struct sym key = { .sym_value = pc };
 	struct sym *entry;
 	Elf_Addr offset;
 
@@ -437,7 +437,7 @@ kelf_snprintsym_kernel(struct syms *syms, char *str, size_t size,
 	if (entry == NULL)
 		return snprintf(str, size, "\n0x%lx", pc);
 
-	offset = pc - (entry->sym_value + off);
+	offset = pc - entry->sym_value;
 	if (offset != 0) {
 		return snprintf(str, size, "\n%s+0x%llx",
 		    entry->sym_name, (unsigned long long)offset);
