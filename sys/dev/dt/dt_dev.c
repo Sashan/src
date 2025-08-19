@@ -710,7 +710,6 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	int fd;
 	struct uvm_vnode *uvn, *uvn_walk;
 	struct vnode *vn;
-	struct vattr va;
 	struct file *fp;
 
 	if ((ps = prfind(dtrv->dtrv_pid)) == NULL)
@@ -767,29 +766,26 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			DPRINTF("%s fdopen failed (%d)\n", __func__, err);
 			return err;
 		}
-		err = VOP_GETATTR(vn, &va, p->p_p->ps_ucred, p);
+		err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
 		if (err == 0) {
-			err = VOP_OPEN(vn, O_RDONLY, p->p_p->ps_ucred, p);
-			if (err == 0) {
-				fp->f_flag = FREAD;
-				fp->f_type = DTYPE_VNODE;
-				fp->f_ops = &vnops;
-				fp->f_data = vn;
-				fp->f_offset = 0;
-				dtrv->dtrv_fd = fd;
-				fdplock(p->p_fd);
-				fdinsert(p->p_fd, fd, UF_EXCLOSE, fp);
-				fdpunlock(p->p_fd);
-				FRELE(fp, p);
-			} else {
-				DPRINTF("%s vopen() failed (%d)\n", __func__,
-				    err);
-				vrele(vn);
-				fdplock(p->p_fd);
-				fdremove(p->p_fd, fd);
-				fdpunlock(p->p_fd);
-				FRELE(fp, p);
-			}
+			fp->f_flag = FREAD;
+			fp->f_type = DTYPE_VNODE;
+			fp->f_ops = &vnops;
+			fp->f_data = vn;
+			fp->f_offset = 0;
+			dtrv->dtrv_fd = fd;
+			fdplock(p->p_fd);
+			fdinsert(p->p_fd, fd, UF_EXCLOSE, fp);
+			fdpunlock(p->p_fd);
+			FRELE(fp, p);
+		} else {
+			DPRINTF("%s vopen() failed (%d)\n", __func__,
+			    err);
+			vrele(vn);
+			fdplock(p->p_fd);
+			fdremove(p->p_fd, fd);
+			fdpunlock(p->p_fd);
+			FRELE(fp, p);
 		}
 	}
 
