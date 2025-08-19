@@ -129,9 +129,9 @@ struct dtioc_getaux {
 
 struct dtioc_rdvn {
 	pid_t			 dtrv_pid;	/* process to inspect */
+	int			 dtrv_fd;	/* where to dump data */
 	caddr_t			 dtrv_va;
 				    /* programm counter in inspected process */
-	int			 dtrv_fd;	/* where to dump data */
 	caddr_t			 dtrv_lbase;
 				    /* address where obj got loaded to */
 	caddr_t			 dtrv_end;	/* end address for section */
