@@ -124,7 +124,6 @@ uint64_t		 bt_filtered;	/* # of events filtered out */
 
 struct syms		*kelf;
 
-static pid_t		 pid = -1;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
@@ -217,9 +216,6 @@ main(int argc, char *argv[])
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
-
-		if (argv[0] != 0)
-			pid = strtonum(argv[0], 0, INT_MAX, NULL);
 
 		if (exec_path == NULL)
 			is_dynamic_elf = 1;
@@ -837,8 +833,8 @@ builtin_stack(struct dt_evt *dtev, int kernel, unsigned long offset)
 		int l;
 
 		if (!kernel)
-			l = kelf_snprintsym_proc(dtfd, pid, bp, sz - 1,
-			    st->st_pc[i], offset);
+			l = kelf_snprintsym_proc(dtfd, dtev->dtev_pid, bp,
+			    sz - 1, st->st_pc[i], offset);
 		else
 			l = kelf_snprintsym_kernel(kelf, bp, sz - 1, st->st_pc[i],
 			    offset);
