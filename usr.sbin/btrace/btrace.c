@@ -39,6 +39,8 @@
 
 #include <dev/dt/dtvar.h>
 
+#include <gelf.h>
+
 #include "btrace.h"
 #include "bt_parser.h"
 
@@ -120,11 +122,12 @@ struct dt_evt		 bt_devt;	/* fake event for BEGIN/END */
 #define EVENT_END	 (unsigned int)(-1)
 uint64_t		 bt_filtered;	/* # of events filtered out */
 
-struct syms		*kelf, *uelf;
+struct syms		*kelf;
 
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
+int			 is_dynamic_elf = 1;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -142,6 +145,7 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
+	const char *exec_path = NULL;
 
 	setlocale(LC_ALL, "");
 
@@ -158,7 +162,7 @@ main(int argc, char *argv[])
 			noaction = 1;
 			break;
 		case 'p':
-			uelf = kelf_open(optarg);
+			exec_path = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -212,6 +216,9 @@ main(int argc, char *argv[])
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
+
+		if (exec_path == NULL)
+			is_dynamic_elf = 1;
 	}
 
 	if (showprobes) {
@@ -611,7 +618,7 @@ rules_setup(int fd)
 	}
 
 	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS);
+		kelf = kelf_open_kernel(_PATH_KSYMS);
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
@@ -699,9 +706,6 @@ rules_teardown(int fd)
 	}
 
 	kelf_close(kelf);
-	kelf = NULL;
-	kelf_close(uelf);
-	uelf = NULL;
 
 	/* Update "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_END;
@@ -829,11 +833,11 @@ builtin_stack(struct dt_evt *dtev, int kernel, unsigned long offset)
 		int l;
 
 		if (!kernel)
-			l = kelf_snprintsym(uelf, bp, sz - 1, st->st_pc[i],
-			    offset);
+			l = kelf_snprintsym_proc(dtfd, dtev->dtev_pid, bp,
+			    sz - 1, st->st_pc[i], offset);
 		else
-			l = kelf_snprintsym(kelf, bp, sz - 1, st->st_pc[i],
-			    offset);
+			l = kelf_snprintsym_kernel(kelf, bp, sz - 1,
+			    st->st_pc[i], offset);
 		if (l < 0)
 			break;
 		if (l >= sz - 1) {
@@ -1808,7 +1812,10 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
+		if (is_dynamic_elf)
+			str = builtin_stack(dtev, 0, 0);
+		else
+			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
