@@ -34,6 +34,7 @@ ASN1_BIT_STRING_set_bit
 ASN1_BMPSTRING_free
 ASN1_BMPSTRING_it
 ASN1_BMPSTRING_new
+ASN1_BOOLEAN_it
 ASN1_ENUMERATED_free
 ASN1_ENUMERATED_get
 ASN1_ENUMERATED_get_int64
@@ -42,6 +43,7 @@ ASN1_ENUMERATED_new
 ASN1_ENUMERATED_set
 ASN1_ENUMERATED_set_int64
 ASN1_ENUMERATED_to_BN
+ASN1_FBOOLEAN_it
 ASN1_GENERALIZEDTIME_adj
 ASN1_GENERALIZEDTIME_check
 ASN1_GENERALIZEDTIME_free
@@ -116,6 +118,7 @@ ASN1_STRING_type_new
 ASN1_T61STRING_free
 ASN1_T61STRING_it
 ASN1_T61STRING_new
+ASN1_TBOOLEAN_it
 ASN1_TIME_adj
 ASN1_TIME_check
 ASN1_TIME_cmp_time_t
@@ -1446,6 +1449,23 @@ MD5_Final
 MD5_Init
 MD5_Transform
 MD5_Update
+MLKEM_decap
+MLKEM_encap
+MLKEM_generate_key
+MLKEM_marshal_private_key
+MLKEM_marshal_public_key
+MLKEM_parse_private_key
+MLKEM_parse_public_key
+MLKEM_private_key_ciphertext_length
+MLKEM_private_key_encoded_length
+MLKEM_private_key_free
+MLKEM_private_key_from_seed
+MLKEM_private_key_new
+MLKEM_public_from_private
+MLKEM_public_key_ciphertext_length
+MLKEM_public_key_encoded_length
+MLKEM_public_key_free
+MLKEM_public_key_new
 NAME_CONSTRAINTS_check
 NAME_CONSTRAINTS_free
 NAME_CONSTRAINTS_it

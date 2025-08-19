@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd-auth.c,v 1.4 2025/05/06 05:40:56 djm Exp $ */
+/* $OpenBSD: sshd-auth.c,v 1.7 2025/08/18 04:38:21 djm Exp $ */
 /*
  * SSH2 implementation:
  * Privilege Separation:
@@ -428,7 +428,7 @@ main(int ac, char **av)
 	extern int optind;
 	int r, opt, have_key = 0;
 	int sock_in = -1, sock_out = -1, rexeced_flag = 0;
-	char *line, *logfile = NULL;
+	char *line;
 	u_int i;
 	mode_t new_umask;
 	Authctxt *authctxt;
@@ -474,11 +474,7 @@ main(int ac, char **av)
 				options.log_level++;
 			break;
 		case 'D':
-			/* ignore */
-			break;
 		case 'E':
-			logfile = optarg;
-			/* FALLTHROUGH */
 		case 'e':
 			/* ignore */
 			break;
@@ -567,19 +563,6 @@ main(int ac, char **av)
 	OpenSSL_add_all_algorithms();
 #endif
 
-	/* If requested, redirect the logs to the specified logfile. */
-	if (logfile != NULL) {
-		char *cp, pid_s[32];
-
-		snprintf(pid_s, sizeof(pid_s), "%ld", (unsigned long)getpid());
-		cp = percent_expand(logfile,
-		    "p", pid_s,
-		    "P", "sshd-auth",
-		    (char *)NULL);
-		log_redirect_stderr_to(cp);
-		free(cp);
-	}
-
 	log_init(__progname,
 	    options.log_level == SYSLOG_LEVEL_NOT_SET ?
 	    SYSLOG_LEVEL_INFO : options.log_level,
@@ -635,9 +618,12 @@ main(int ac, char **av)
 	/* Fill in default values for those options not explicitly set. */
 	fill_default_server_options(&options);
 	options.timing_secret = timing_secret; /* XXX eliminate from unpriv */
+	ssh_packet_set_qos(ssh, options.ip_qos_interactive,
+	    options.ip_qos_bulk);
 
 	/* Reinit logging in case config set Level, Facility or Verbose. */
 	log_init(__progname, options.log_level, options.log_facility, 1);
+	set_log_handler(mm_log_handler, pmonitor);
 
 	debug("sshd-auth version %s, %s", SSH_VERSION, SSH_OPENSSL_VERSION);
 
