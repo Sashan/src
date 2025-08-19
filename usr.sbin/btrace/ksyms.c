@@ -49,6 +49,7 @@ struct syms {
 struct shlib_syms {
 	struct syms		*sls_syms;
 	caddr_t			 sls_base;
+	caddr_t			 sls_start;
 	caddr_t			 sls_end;
 	LIST_ENTRY(shlib_syms)	 sls_le;
 };
@@ -233,21 +234,22 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		return NULL;
 	}
 	new_sls->sls_base = dtrv.dtrv_lbase;
+	new_sls->sls_start = dtrv.dtrv_start;	/* start of text */
 	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
 	new_sls->sls_syms = syms;
 
 	/*
-	 * Keep list of symbol tables sorted ascending from lower base address.
+	 * Keep list of symbol tables sorted ascending from address.
 	 */
 	mark_sls = NULL;
 	LIST_FOREACH(sls, &shlib_lh, sls_le) {
 		mark_sls = sls;
-		if (new_sls->sls_base < sls->sls_base)
+		if (new_sls->sls_start < sls->sls_start)
 			break;
 	}
 	if (mark_sls == NULL)
 		LIST_INSERT_HEAD(&shlib_lh, new_sls, sls_le);
-	else if (new_sls->sls_base > mark_sls->sls_base)
+	else if (new_sls->sls_start > mark_sls->sls_start)
 		LIST_INSERT_AFTER(mark_sls, new_sls, sls_le);
 	else
 		LIST_INSERT_BEFORE(mark_sls, new_sls, sls_le);
@@ -262,13 +264,13 @@ find_shlib(caddr_t pc)
 
 	match_sls = NULL;
 	LIST_FOREACH(sls, &shlib_lh, sls_le) {
-		if (sls->sls_base > pc)
+		if (sls->sls_start > pc)
 			break;
 		match_sls = sls;
 	}
 
 	/*
-	 * program counter must fit <sls_base, sls_end> range,
+	 * program counter must fit <sls_start, sls_end> range,
 	 * if it does not, then the address has not been resolved
 	 * yet.
 	 */

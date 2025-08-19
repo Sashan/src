@@ -720,6 +720,7 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	ok = uvm_map_lookup_entry(&ps->ps_vmspace->vm_map,
 	    (vaddr_t)dtrv->dtrv_va, &e);
 	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
+	    ((e->protection & PROT_EXEC) == 0) ||
 	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) {
 		err = ENOENT;
 		vn = NULL;
@@ -751,7 +752,18 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 			}
 		}
 		dtrv->dtrv_len = (size_t)uvn->u_size;
+		/*
+		 * dtrv_lbase holds address, where elf file got loaded to
+		 * in virtual memory of traced process. Addresses found
+		 * in symbol table in elf file are offsets w.r.t. dtrv_lbase.
+		 */
 		dtrv->dtrv_lbase = (caddr_t)(ebase->start);
+		/*
+		 * text segment is defined as range of <dtrv_start, dtrv_end>.
+		 * The dtrv_va (address btrace(8) queries) must fit within
+		 * <dtrv_start, dtrv_end>
+		 */
+		dtrv->dtrv_start = (caddr_t)(e->start);
 		dtrv->dtrv_end = (caddr_t)e->end;
 	}
 

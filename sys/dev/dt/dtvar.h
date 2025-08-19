@@ -135,7 +135,8 @@ struct dtioc_rdvn {
 	caddr_t			 dtrv_lbase;
 				    /* address where obj got loaded to */
 	caddr_t			 dtrv_end;	/* end address for section */
-	size_t			 dtrv_len;	/* length needed */
+	caddr_t			 dtrv_start;	/* end address for section */
+	size_t			 dtrv_len;	/* the length of elf file */
 };
 
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
