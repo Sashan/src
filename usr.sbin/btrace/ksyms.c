@@ -48,7 +48,6 @@ struct syms {
 
 struct shlib_syms {
 	struct syms		*sls_syms;
-	caddr_t			 sls_base;
 	caddr_t			 sls_start;
 	caddr_t			 sls_end;
 	LIST_ENTRY(shlib_syms)	 sls_le;
@@ -60,17 +59,20 @@ static int sym_compare_search(const void *, const void *);
 static int sym_compare_sort(const void *, const void *);
 
 static struct syms *
-read_syms(Elf *elf, void *base_addr)
+read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 {
 	char *name;
 	Elf_Data *data = NULL;
 	Elf_Scn	*scn = NULL, *symtab = NULL;
 	GElf_Sym sym;
 	GElf_Shdr shdr;
-	size_t i, shstrndx, strtabndx = SIZE_MAX, symtab_size;
+	GElf_Phdr phdr;
+	size_t phnum, i;
+	size_t shstrndx, strtabndx = SIZE_MAX, symtab_size;
 	unsigned long diff;
 	struct sym *tmp;
 	struct syms *syms = NULL;
+	uintptr_t base_addr = 0;
 
 	if (elf_kind(elf) != ELF_K_ELF) {
 		warnx("elf_keind() != ELF_K_ELF");
@@ -81,6 +83,42 @@ read_syms(Elf *elf, void *base_addr)
 	if (elf_getshdrstrndx(elf, &shstrndx) != 0) {
 		warnx("elf_getshdrstrndx: %s", elf_errmsg(-1));
 		return NULL;
+	}
+
+	if (elf_getphdrnum(elf, &phnum) != 0) {
+		warnx("elf_getphdrnum: %s", elf_errmsg(-1));
+		return NULL;
+	}
+
+	/*
+	 * calculate base_addr where DSO got loaded to at traced process.
+	 * We need to combine
+	 *	- address of .text segment (.dtrv_start)
+	 *	- offset of .text segment (.dtrv_offset)
+	 *	- program address we are resolving (.dtrv_va)
+	 *	- .p_offset and .p_vaddr from elf header
+	 *
+	 * the offset comes from caller, caller did a math for us already:
+	 *	offset =  .dtrv_offset + (.dtrv_va - .dtrv_start)
+	 * Here we also use offset to find program header such offset
+	 * fits into range <.p_offset, .p_offset + .p_filesz). The matching
+	 * program header provides the last two pieces: .p_vaddr and .p_offset
+	 * to calculate base_addr:
+	 *	(dtrv_va - .p_vaddr) - (offset - .p_offset)
+	 */
+	for (i = 0; i < phnum; i++) {
+		if (gelf_getphdr(elf, i, &phdr) == NULL) {
+			warnx("gelf_getphdr(%zu): %s", i, elf_errmsg(-1));
+			continue;
+		}
+
+		if ((void *)phdr.p_offset <= offset &&
+		    offset < (void *)(phdr.p_offset + phdr.p_filesz)) {
+			base_addr =
+			    (uintptr_t)((dtrv_va - (void *)phdr.p_vaddr) -
+			    (offset - (void *)phdr.p_offset));
+			break;
+		}
 	}
 
 	while ((scn = elf_nextscn(elf, scn)) != NULL) {
@@ -135,8 +173,7 @@ read_syms(Elf *elf, void *base_addr)
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value +
-		    (intptr_t)base_addr;
+		syms->table[syms->nsymb].sym_value = sym.st_value + base_addr;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
@@ -167,7 +204,7 @@ read_syms(Elf *elf, void *base_addr)
 }
 
 static struct syms *
-read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t base_addr)
+read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t offset, caddr_t dtrv_va)
 {
 	Elf *elf;
 	struct syms *syms;
@@ -180,7 +217,7 @@ read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t base_addr)
 		return NULL;
 	}
 
-	syms = read_syms(elf, base_addr);
+	syms = read_syms(elf, offset, dtrv_va);
 	elf_end(elf);
 
 	return syms;
@@ -217,13 +254,20 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		return NULL;
 	}
 
-	elfbuf = mmap(NULL, dtrv.dtrv_len, PROT_READ, MAP_PRIVATE, dtrv.dtrv_fd, 0);
+	elfbuf = mmap(NULL, dtrv.dtrv_len, PROT_READ, MAP_PRIVATE,
+	    dtrv.dtrv_fd, 0);
 	if (elfbuf == MAP_FAILED) {
 		warn("mmap");
 		close(dtrv.dtrv_fd);
 		return NULL;
 	}
-	syms = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_lbase);
+	/*
+	 * calculate offset we use to determine the base_addr where DSO got
+	 * loaded at in traced process.
+	 */
+	dtrv.dtrv_offset += (dtrv.dtrv_va - dtrv.dtrv_start);
+	syms = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_offset,
+	    dtrv.dtrv_va);
 	munmap(elfbuf, dtrv.dtrv_len);
 	close(dtrv.dtrv_fd);
 
@@ -233,7 +277,6 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 		free_syms(syms);
 		return NULL;
 	}
-	new_sls->sls_base = dtrv.dtrv_lbase;
 	new_sls->sls_start = dtrv.dtrv_start;	/* start of text */
 	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
 	new_sls->sls_syms = syms;
@@ -320,7 +363,7 @@ kelf_open_kernel(const char *path)
 		return NULL;
 	}
 
-	syms = read_syms(elf, 0);
+	syms = read_syms(elf, 0, 0);
 	elf_end(elf);
 	close(fd);
 

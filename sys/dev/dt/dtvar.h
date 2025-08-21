@@ -132,7 +132,7 @@ struct dtioc_rdvn {
 	int			 dtrv_fd;	/* where to dump data */
 	caddr_t			 dtrv_va;
 				    /* programm counter in inspected process */
-	caddr_t			 dtrv_lbase;
+	caddr_t			 dtrv_offset;
 				    /* address where obj got loaded to */
 	caddr_t			 dtrv_end;	/* end address for section */
 	caddr_t			 dtrv_start;	/* end address for section */

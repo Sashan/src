@@ -705,10 +705,10 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 	struct process *ps;
 	struct proc *p = curproc;
 	boolean_t ok;
-	struct vm_map_entry *e, *ebase, *ewalk;
+	struct vm_map_entry *e;
 	int err = 0;
 	int fd;
-	struct uvm_vnode *uvn, *uvn_walk;
+	struct uvm_vnode *uvn;
 	struct vnode *vn;
 	struct file *fp;
 
@@ -730,41 +730,10 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 		vn = uvn->u_vnode;
 		vref(vn);
 
-		/*
-		 * Find the base address where .so library got loaded.
-		 * We walk the tree from left (starting at lowest map
-		 * entry). We search for the first map entry which refers
-		 * to the same vnode we found by uvm_map_lookup_entry().
-		 * The first map entry we find is the map entry with base
-		 * address.
-		 */
-		ebase = e;
-		RBT_FOREACH(ewalk, uvm_map_addr,
-		    &ps->ps_vmspace->vm_map.addr) {
-			if (ewalk->object.uvm_obj != NULL &&
-			    UVM_OBJ_IS_VNODE(ewalk->object.uvm_obj)) {
-				uvn_walk = (struct uvm_vnode *)
-				    ewalk->object.uvm_obj;
-				if (vn == uvn_walk->u_vnode) {
-					ebase = ewalk;
-					break;
-				}
-			}
-		}
 		dtrv->dtrv_len = (size_t)uvn->u_size;
-		/*
-		 * dtrv_lbase holds address, where elf file got loaded to
-		 * in virtual memory of traced process. Addresses found
-		 * in symbol table in elf file are offsets w.r.t. dtrv_lbase.
-		 */
-		dtrv->dtrv_lbase = (caddr_t)(ebase->start);
-		/*
-		 * text segment is defined as range of <dtrv_start, dtrv_end>.
-		 * The dtrv_va (address btrace(8) queries) must fit within
-		 * <dtrv_start, dtrv_end>
-		 */
-		dtrv->dtrv_start = (caddr_t)(e->start);
+		dtrv->dtrv_start = (caddr_t)e->start;
 		dtrv->dtrv_end = (caddr_t)e->end;
+		dtrv->dtrv_offset = (caddr_t)e->offset;
 	}
 
 	vm_map_unlock_read(&ps->ps_vmspace->vm_map);
