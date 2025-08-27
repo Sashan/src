@@ -58,7 +58,7 @@ static LIST_HEAD(table, shlib_syms) shlib_lh = LIST_HEAD_INITIALIZER(table);
 static int sym_compare_search(const void *, const void *);
 static int sym_compare_sort(const void *, const void *);
 
-static struct syms *
+static struct shlib_syms *
 read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 {
 	char *name;
@@ -73,6 +73,8 @@ read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 	struct sym *tmp;
 	struct syms *syms = NULL;
 	uintptr_t base_addr = 0;
+	struct shlib_syms *sls;
+	void *v_start, *v_end;
 
 	if (elf_kind(elf) != ELF_K_ELF) {
 		warnx("elf_keind() != ELF_K_ELF");
@@ -106,29 +108,46 @@ read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 	 * to calculate base_addr:
 	 *	(dtrv_va - .p_vaddr) - (offset - .p_offset)
 	 */
-	for (i = 0; i < phnum; i++) {
+	v_start = NULL;
+	v_end = NULL;
+	for (i = 0; i < phnum && base_addr == 0 && v_start == NULL; i++) {
 		if (gelf_getphdr(elf, i, &phdr) == NULL) {
 			warnx("gelf_getphdr(%zu): %s", i, elf_errmsg(-1));
 			continue;
 		}
 
-		if ((void *)phdr.p_offset <= offset &&
-		    offset < (void *)(phdr.p_offset + phdr.p_filesz)) {
+		if (base_addr == 0 && (void *)phdr.p_offset <= offset &&
+		    offset < (void *)(phdr.p_offset + phdr.p_filesz))
 			base_addr =
 			    (uintptr_t)((dtrv_va - (void *)phdr.p_vaddr) -
 			    (offset - (void *)phdr.p_offset));
-			break;
+
+		/*
+		 * while walking the headers, find virtual address of .text
+		 */
+		if ((phdr.p_flags & PF_X) != 0) {
+			v_start = (void *)phdr.p_vaddr;
+			v_end = (void *)(phdr.p_vaddr + phdr.p_memsz);
 		}
 	}
+	sls = malloc(sizeof (struct shlib_syms));
+	if (sls == NULL) {
+		err(1, "malloc");
+	} else {
+		sls->sls_start = v_start + base_addr;
+		sls->sls_end = v_end + base_addr;
+		sls->sls_syms = NULL;
+	}
+
 
 	while ((scn = elf_nextscn(elf, scn)) != NULL) {
 		if (gelf_getshdr(scn, &shdr) != &shdr) {
 			warnx("elf_getshdr: %s", elf_errmsg(-1));
-			return NULL;
+			return sls;
 		}
 		if ((name = elf_strptr(elf, shstrndx, shdr.sh_name)) == NULL) {
 			warnx("elf_strptr: %s", elf_errmsg(-1));
-			return NULL;
+			return sls;
 		}
 		if (strcmp(name, ELF_SYMTAB) == 0 &&
 		    shdr.sh_type == SHT_SYMTAB && shdr.sh_entsize != 0) {
@@ -142,24 +161,24 @@ read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 	}
 	if (symtab == NULL) {
 		warnx("%s: %s: section not found", __func__, ELF_SYMTAB);
-		return NULL;
+		return sls;
 	}
 	if (strtabndx == SIZE_MAX) {
 		warnx("%s: %s: section not found", __func__, ELF_STRTAB);
-		return NULL;
+		return sls;
 	}
 
 	data = elf_rawdata(symtab, data);
 	if (data == NULL) {
 		warnx("%s elf_rwadata() unable to read syms from\n", __func__);
-		return NULL;
+		return sls;
 	}
 
 	if ((syms = calloc(1, sizeof(*syms))) == NULL)
 		err(1, NULL);
 	syms->table = calloc(symtab_size, sizeof *syms->table);
 	if (syms->table == NULL)
-		err(1, NULL);
+		err(1, "calloc");
 	for (i = 0; i < symtab_size; i++) {
 		if (gelf_getsym(data, i, &sym) == NULL)
 			continue;
@@ -179,7 +198,7 @@ read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 	}
 	tmp = reallocarray(syms->table, syms->nsymb, sizeof *syms->table);
 	if (tmp == NULL)
-		err(1, NULL);
+		err(1, "reallocarray");
 	syms->table = tmp;
 
 	/* Sort symbols in ascending order by address. */
@@ -200,14 +219,16 @@ read_syms(Elf *elf, const void *offset, const void *dtrv_va)
 		syms->table[i].sym_size = diff;
 	}
 
-	return syms;
+	sls->sls_syms = syms;
+
+	return sls;
 }
 
-static struct syms *
+static struct shlib_syms *
 read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t offset, caddr_t dtrv_va)
 {
 	Elf *elf;
-	struct syms *syms;
+	struct shlib_syms *sls;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(1, "elf_version: %s", elf_errmsg(-1));
@@ -217,10 +238,10 @@ read_syms_buf(char *elfbuf, size_t elfbuf_sz, caddr_t offset, caddr_t dtrv_va)
 		return NULL;
 	}
 
-	syms = read_syms(elf, offset, dtrv_va);
+	sls = read_syms(elf, offset, dtrv_va);
 	elf_end(elf);
 
-	return syms;
+	return sls;
 }
 
 static void
@@ -242,7 +263,6 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 {
 	struct shlib_syms *new_sls, *mark_sls, *sls;
 	struct dtioc_rdvn dtrv;
-	struct syms *syms;
         char *elfbuf;
 
 	memset(&dtrv, 0, sizeof (dtrv));
@@ -266,20 +286,14 @@ load_syms(int dtdev, pid_t pid, caddr_t pc)
 	 * loaded at in traced process.
 	 */
 	dtrv.dtrv_offset += (dtrv.dtrv_va - dtrv.dtrv_start);
-	syms = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_offset,
+	new_sls = read_syms_buf(elfbuf, dtrv.dtrv_len, dtrv.dtrv_offset,
 	    dtrv.dtrv_va);
 	munmap(elfbuf, dtrv.dtrv_len);
 	close(dtrv.dtrv_fd);
-
-	new_sls = malloc(sizeof (struct shlib_syms));
 	if (new_sls == NULL) {
 		warn("%s malloc(shlib_syms))", __func__);
-		free_syms(syms);
 		return NULL;
 	}
-	new_sls->sls_start = dtrv.dtrv_start;	/* start of text */
-	new_sls->sls_end = dtrv.dtrv_end;	/* end of text */
-	new_sls->sls_syms = syms;
 
 	/*
 	 * Keep list of symbol tables sorted ascending from address.
@@ -346,6 +360,7 @@ sym_compare_search(const void *keyp, const void *entryp)
 struct syms *
 kelf_open_kernel(const char *path)
 {
+	struct shlib_syms *sls;
 	struct syms *syms;
 	Elf *elf;
 	int fd;
@@ -363,9 +378,16 @@ kelf_open_kernel(const char *path)
 		return NULL;
 	}
 
-	syms = read_syms(elf, 0, 0);
+	sls = read_syms(elf, 0, 0);
 	elf_end(elf);
 	close(fd);
+
+	if (sls != NULL) {
+		syms = sls->sls_syms;
+		free(sls);
+	} else {
+		syms = NULL;
+	}
 
 	return syms;
 }

@@ -128,10 +128,9 @@ struct dtioc_rdvn {
 	caddr_t			 dtrv_va;
 				    /* programm counter in inspected process */
 	caddr_t			 dtrv_offset;
-				    /* address where obj got loaded to */
-	caddr_t			 dtrv_end;	/* end address for section */
+				    /* comes from vm_map_entry::offset */
 	caddr_t			 dtrv_start;	/* end address for section */
-	size_t			 dtrv_len;	/* the length of elf file */
+	size_t			 dtrv_len;	/* the length of ELF file */
 };
 
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)

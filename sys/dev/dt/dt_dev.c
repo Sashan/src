@@ -678,9 +678,9 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 
 	ok = uvm_map_lookup_entry(&ps->ps_vmspace->vm_map,
 	    (vaddr_t)dtrv->dtrv_va, &e);
-	if ((ok == 0) || ((e->etype & UVM_ET_OBJ) == 0) ||
-	    ((e->protection & PROT_EXEC) == 0) ||
-	    (!UVM_OBJ_IS_VNODE(e->object.uvm_obj))) {
+	if (ok == 0 || (e->etype & UVM_ET_OBJ) == 0 ||
+	    (e->protection & PROT_EXEC) == 0 ||
+	    !UVM_OBJ_IS_VNODE(e->object.uvm_obj)) {
 		err = ENOENT;
 		vn = NULL;
 		DPRINTF("%s no mapping for %p\n", __func__, dtrv->dtrv_va);
@@ -691,7 +691,6 @@ dt_ioctl_rd_vnode(struct dt_softc *sc, struct dtioc_rdvn *dtrv)
 
 		dtrv->dtrv_len = (size_t)uvn->u_size;
 		dtrv->dtrv_start = (caddr_t)e->start;
-		dtrv->dtrv_end = (caddr_t)e->end;
 		dtrv->dtrv_offset = (caddr_t)e->offset;
 	}
 
