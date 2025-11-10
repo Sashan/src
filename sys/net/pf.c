@@ -266,13 +266,13 @@ extern struct pool pfr_ktable_pl;
 extern struct pool pfr_kentry_pl;
 
 struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
-	{ &pf_state_pl, PFSTATE_HIWAT, PFSTATE_HIWAT },
-	{ &pf_src_tree_pl, PFSNODE_HIWAT, PFSNODE_HIWAT },
-	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT, PFFRAG_FRENT_HIWAT },
-	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT, PFR_KTABLE_HIWAT },
-	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT, PFR_KENTRY_HIWAT },
-	{ &pf_pktdelay_pl, PF_PKTDELAY_MAXPKTS, PF_PKTDELAY_MAXPKTS },
-	{ &pf_anchor_pl, PF_ANCHOR_HIWAT, PF_ANCHOR_HIWAT }
+	{ &pf_state_pl, PFSTATE_HIWAT },
+	{ &pf_src_tree_pl, PFSNODE_HIWAT },
+	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT },
+	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT },
+	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT },
+	{ &pf_pktdelay_pl, PF_PKTDELAY_MAXPKTS },
+	{ &pf_anchor_pl, PF_ANCHOR_HIWAT }
 };
 
 #define BOUND_IFACE(r, k) \
@@ -1685,8 +1685,8 @@ pf_state_import(const struct pfsync_state *sp, int flags)
 	 */
 	if (sp->rule != htonl(-1) && sp->anchor == htonl(-1) &&
 	    (flags & (PFSYNC_SI_IOCTL | PFSYNC_SI_CKSUM)) &&
-	    ntohl(sp->rule) < pf_main_ruleset.rules.active.rcount) {
-		TAILQ_FOREACH(r, pf_main_ruleset.rules.active.ptr, entries)
+	    ntohl(sp->rule) < pf_main_ruleset.rules.rcount) {
+		TAILQ_FOREACH(r, pf_main_ruleset.rules.ptr, entries)
 			if (ntohl(sp->rule) == n++)
 				break;
 	} else
@@ -2323,11 +2323,13 @@ pf_purge_expired_states(const unsigned int limit, const unsigned int collect)
 }
 
 int
-pf_tbladdr_setup(struct pf_ruleset *rs, struct pf_addr_wrap *aw, int wait)
+pf_tbladdr_setup(struct pf_trans *t, struct pf_ruleset *rs,
+    struct pf_addr_wrap *aw, int wait)
 {
 	if (aw->type != PF_ADDR_TABLE)
 		return (0);
-	if ((aw->p.tbl = pfr_attach_table(rs, aw->v.tblname, wait)) == NULL)
+	if ((aw->p.tbl = pfr_attach_table(&t->pftina_rc, rs, aw->v.tblname,
+	    wait)) == NULL)
 		return (1);
 	return (0);
 }
@@ -2348,8 +2350,6 @@ pf_tbladdr_copyout(struct pf_addr_wrap *aw)
 
 	if (aw->type != PF_ADDR_TABLE || kt == NULL)
 		return;
-	if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE) && kt->pfrkt_root != NULL)
-		kt = kt->pfrkt_root;
 	aw->p.tbl = NULL;
 	aw->p.tblcnt = (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ?
 		kt->pfrkt_cnt : -1;
@@ -4432,7 +4432,7 @@ pf_match_rule(struct pf_test_ctx *ctx, struct pf_ruleset *ruleset)
 
 	pf_anchor_stack_init();
 enter_ruleset:
-	r = TAILQ_FIRST(ruleset->rules.active.ptr);
+	r = TAILQ_FIRST(ruleset->rules.ptr);
 	while (r != NULL) {
 		struct pf_statelim *stlim = NULL;
 		struct pf_sourcelim *srlim = NULL;

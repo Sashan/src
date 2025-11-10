@@ -382,19 +382,20 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 {
 	if (!debug && !(ta->pfrt_flags & PFR_TFLAG_ACTIVE))
 		return;
-	if (verbose)
-		printf("%c%c%c%c%c%c%c\t",
+	if (verbose) {
+		printf("%c%c%c%c%c%c\t%s\t%u",
 		    (ta->pfrt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_INACTIVE) ? 'i' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
-		    (ta->pfrt_flags & PFR_TFLAG_REFDANCHOR) ? 'h' : '-',
-		    (ta->pfrt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
-
-	printf("%s", ta->pfrt_name);
-	if (ta->pfrt_anchor[0] != '\0')
-		printf("@%s", ta->pfrt_anchor);
+		    (ta->pfrt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-',
+		    ta->pfrt_name, ta->pfrt_version);
+		if (ta->pfrt_anchor[0])
+			printf("\t%s", ta->pfrt_anchor);
+		puts("");
+	} else
+		puts(ta->pfrt_name);
 
 	printf("\n");
 }
@@ -415,9 +416,7 @@ print_tstats(struct pfr_tstats *ts, int debug)
 		printf("\tCleared:     %s", ct);
 	else
 		printf("\tCleared:     %lld\n", time);
-	printf("\tReferences:  [ Anchors: %-18d Rules: %-18d ]\n",
-	    ts->pfrts_refcnt[PFR_REFCNT_ANCHOR],
-	    ts->pfrts_refcnt[PFR_REFCNT_RULE]);
+	printf("\tReferences:  %-18d\n", ts->pfrts_refcnt);
 	printf("\tEvaluations: [ NoMatch: %-18llu Match: %-18llu ]\n",
 	    (unsigned long long)ts->pfrts_nomatch,
 	    (unsigned long long)ts->pfrts_match);
@@ -533,7 +532,7 @@ print_astats(struct pfr_astats *as, int dns)
 
 int
 pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
-    struct pfr_buffer *ab, u_int32_t ticket, struct pfr_uktable *ukt)
+    struct pfr_buffer *ab, uint64_t ticket, struct pfr_uktable *ukt)
 {
 	struct pfr_table tbl_buf;
 	struct pfr_table *tbl;

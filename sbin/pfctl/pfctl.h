@@ -64,15 +64,20 @@ struct pfr_uktable {
 	struct pfr_ktable	pfrukt_kt;
 	struct pfr_buffer	pfrukt_addrs;
 	int			pfrukt_init_addr;
-	SLIST_ENTRY(pfr_uktable)
-				pfrukt_entry;
 };
 
 #define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
 #define pfrukt_name	pfrukt_kt.pfrkt_t.pfrt_name
 #define pfrukt_anchor	pfrukt_kt.pfrkt_t.pfrt_anchor
-
-extern struct pfr_ktablehead pfr_ktables;
+#define pfrukt_ruleset	pfrukt_kt.pfrkt_t.pfrt_ruleset
+#define pfrukt_flags	pfrukt_kt.pfrkt_t.pfrt_flags
+#define pfrukt_cnt	pfrukt_kt.pfrkt_ts.pfrts_cnt
+#define pfrukt_refcnt	pfrukt_kt.pfrkt_ts.pfrts_refcnt
+#define pfrukt_packets	pfrukt_kt.pfrkt_ts.pfrts_packets
+#define pfrukt_bytes	pfrukt_kt.pfrkt_ts.pfrts_bytes
+#define pfrukt_match	pfrukt_kt.pfrkt_ts.pfrts_match
+#define pfrukt_nomatch	pfrukt_kt.pfrkt_ts.pfrts_nomatch
+#define pfrukt_tzero	pfrukt_kt.pfrkt_ts.pfrts_tzero
 
 SLIST_HEAD(pfr_anchors, pfr_anchoritem);
 
@@ -92,7 +97,7 @@ int	 pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
 int	 pfr_get_astats(struct pfr_table *, struct pfr_astats *, int *, int);
 int	 pfr_tst_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
 int	 pfr_ina_define(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int *, int, int);
+	    int *, uint64_t, int);
 void	 pfr_buf_clear(struct pfr_buffer *);
 int	 pfr_buf_add(struct pfr_buffer *, const void *);
 void	*pfr_buf_next(struct pfr_buffer *, const void *);
@@ -118,9 +123,6 @@ void	 print_state(struct pfsync_state *, int);
 
 int	 pfctl_cmdline_symset(char *);
 int	 pfctl_add_trans(struct pfr_buffer *, int, const char *);
-u_int32_t
-	 pfctl_get_ticket(struct pfr_buffer *, int, const char *);
-int	 pfctl_trans(int, struct pfr_buffer *, u_long, int);
 
 int	 pfctl_show_queues(int, const char *, int, int);
 

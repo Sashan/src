@@ -1994,26 +1994,3 @@ pfctl_add_trans(struct pfr_buffer *buf, int type, const char *anchor)
 
 	return pfr_buf_add(buf, &trans);
 }
-
-u_int32_t
-pfctl_get_ticket(struct pfr_buffer *buf, int type, const char *anchor)
-{
-	struct pfioc_trans_e *p;
-
-	PFRB_FOREACH(p, buf)
-		if (type == p->type && !strcmp(anchor, p->anchor))
-			return (p->ticket);
-	errx(1, "pfctl_get_ticket: assertion failed");
-}
-
-int
-pfctl_trans(int dev, struct pfr_buffer *buf, u_long cmd, int from)
-{
-	struct pfioc_trans trans;
-
-	bzero(&trans, sizeof(trans));
-	trans.size = buf->pfrb_size - from;
-	trans.esize = sizeof(struct pfioc_trans_e);
-	trans.array = ((struct pfioc_trans_e *)buf->pfrb_caddr) + from;
-	return ioctl(dev, cmd, &trans);
-}

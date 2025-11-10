@@ -90,7 +90,7 @@ void			 pfattach(int);
 int			 pfopen(dev_t, int, int, struct proc *);
 int			 pfclose(dev_t, int, int, struct proc *);
 int			 pfioctl(dev_t, u_long, caddr_t, int, struct proc *);
-int			 pf_begin_rules(u_int32_t *, const char *);
+int			 pf_begin_rules(struct pf_trans *, const char *);
 void			 pf_rollback_rules(u_int32_t, char *);
 void			 pf_remove_queues(void);
 int			 pf_commit_queues(void);
@@ -98,12 +98,11 @@ void			 pf_free_queues(struct pf_queuehead *);
 void			 pf_calc_chksum(struct pf_ruleset *);
 void			 pf_hash_rule(MD5_CTX *, struct pf_rule *);
 void			 pf_hash_rule_addr(MD5_CTX *, struct pf_rule_addr *);
-int			 pf_commit_rules(u_int32_t, char *);
-int			 pf_addr_setup(struct pf_ruleset *,
+int			 pf_addr_setup(struct pf_trans *t, struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
-void			 pf_trans_set_commit(void);
+void			 pf_trans_set_commit(struct pf_opts *);
 void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
 int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
 int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
@@ -118,12 +117,23 @@ struct pf_trans		*pf_open_trans(uint32_t);
 struct pf_trans		*pf_find_trans(uint32_t, uint64_t);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
+void			 pf_commit_trans(struct pf_trans *);
 
 void			 pf_init_tgetrule(struct pf_trans *,
 			    struct pf_anchor *, uint32_t, struct pf_rule *);
 void			 pf_cleanup_tgetrule(struct pf_trans *t);
+void			 pf_init_tina(struct pf_trans *);
+void			 pf_cleanup_tina(struct pf_trans *);
+void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
+			    struct pf_anchor *);
+int			 pf_trans_in_conflict(struct pf_trans *, const char *);
+int			 pf_ina_check(struct pf_anchor *, struct pf_anchor *);
+void			 pf_ina_commit(struct pf_trans *);
 
-struct pf_rule		 pf_default_rule, pf_default_rule_new;
+void			 pf_init_ttab(struct pf_trans *);
+int			 pf_tab_check(struct pf_anchor *, struct pf_anchor *);
+void			 pf_cleanup_ttab(struct pf_trans *);
+void			 pf_tab_commit(struct pf_trans *);
 
 void			 pf_statelim_commit();
 void			 pf_statelim_rollback();
@@ -131,28 +141,16 @@ int			 pf_sourcelim_check();
 void			 pf_sourcelim_commit();
 void			 pf_sourcelim_rollback();
 
-#if NKSTAT > 0
-static void		 pf_statelim_kstat_attach(struct pf_statelim *);
-static void		 pf_statelim_kstat_detach(struct pf_statelim *);
-static void		 pf_sourcelim_kstat_attach(struct pf_sourcelim *);
-static void		 pf_sourcelim_kstat_detach(struct pf_sourcelim *);
-#endif /* NKSTAT > 0 */
+void			 pf_init_ttab(struct pf_trans *);
+int			 pf_tab_check(struct pf_anchor *, struct pf_anchor *);
+void			 pf_cleanup_ttab(struct pf_trans *);
+void			 pf_tab_commit(struct pf_trans *);
 
-struct {
-	char		statusif[IFNAMSIZ];
-	u_int32_t	debug;
-	u_int32_t	hostid;
-	u_int32_t	reass;
-	u_int32_t	mask;
-} pf_trans_set;
+struct pf_rule		 pf_default_rule;
+uint32_t		 pf_default_vers = 1;
 
-#define	PF_ORDER_HOST	0
-#define	PF_ORDER_NET	1
-
-#define	PF_TSET_STATUSIF	0x01
-#define	PF_TSET_DEBUG		0x02
-#define	PF_TSET_HOSTID		0x04
-#define	PF_TSET_REASS		0x08
+void			 pf_dynaddr_remove(struct pf_addr_wrap *);
+void			 pfi_dynaddr_remove(struct pf_addr_wrap *);
 
 #define	TAGID_MAX	 50000
 TAILQ_HEAD(pf_tags, pf_tagname)	pf_tags = TAILQ_HEAD_INITIALIZER(pf_tags),
@@ -222,6 +220,8 @@ pfattach(int num)
 	    IPL_SOFTNET, 0, "pfpktdelay", NULL);
 	pool_init(&pf_anchor_pl, sizeof(struct pf_anchor), 0,
 	    IPL_SOFTNET, 0, "pfanchor", NULL);
+	pool_init(&pf_addr_pl, sizeof(struct pfi_dynaddr), 0,
+	    IPL_SOFTNET, 0, "pfiaddrpl", NULL);
 
 	pool_init(&pf_statelim_pl, sizeof(struct pf_statelim), 0,
 	    IPL_SOFTNET, 0, "pfstlim", NULL);
@@ -297,7 +297,7 @@ pfattach(int num)
 	/* XXX do our best to avoid a conflict */
 	pf_status.hostid = arc4random();
 
-	pf_default_rule_new = pf_default_rule;
+	pf_main_ruleset.rules.version = 1;
 
 	/*
 	 * we waste two stack frames as meta-data.
@@ -360,6 +360,58 @@ pf_rule_free(struct pf_rule *rule)
 	pfi_kif_free(rule->nat.kif);
 	pfi_kif_free(rule->route.kif);
 
+	pool_put(&pf_rule_pl, rule);
+}
+
+void
+pf_dynaddr_destroy(struct pf_addr_wrap *aw)
+{
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return;
+
+	KASSERT(aw->p.dyn->pfid_kif == NULL);
+	KASSERT(aw->p.dyn->pfid_kif == NULL);
+	pool_put(&pf_addr_pl, aw->p.dyn);
+	aw->p.dyn = NULL;
+}
+
+void
+pf_destroy_rule(struct pf_rule *rule)
+{
+	if (rule->states_cur > 0 || rule->src_nodes > 0)
+		return;
+	pf_tag_unref(rule->tag);
+	pf_tag_unref(rule->match_tag);
+	pf_rtlabel_remove(&rule->src.addr);
+	pf_rtlabel_remove(&rule->dst.addr);
+	pf_dynaddr_destroy(&rule->src.addr);
+	pf_dynaddr_destroy(&rule->dst.addr);
+	pf_dynaddr_destroy(&rule->rdr.addr);
+	pf_dynaddr_destroy(&rule->nat.addr);
+	pf_dynaddr_destroy(&rule->route.addr);
+	pf_tbladdr_remove(&rule->src.addr);
+	pf_tbladdr_remove(&rule->dst.addr);
+	pf_tbladdr_remove(&rule->rdr.addr);
+	pf_tbladdr_remove(&rule->nat.addr);
+	pf_tbladdr_remove(&rule->route.addr);
+	if (rule->overload_tbl)
+		pfr_detach_table(rule->overload_tbl);
+	pfi_kif_unref(rule->rcv_kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->rdr.kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->nat.kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->route.kif, PFI_KIF_REF_RULE);
+	/*
+	 * destroy rule is being called by transaction cleanup only.
+	 * transaction cleanup removed the anchor from tree already,
+	 * just make sure the refcount is still sane.
+	 */
+	if (rule->anchor != NULL) {
+		if (rule->anchor->refcnt <= 0)
+			panic("%s broken refcnt at %s\n", __func__,
+			    PF_ANCHOR_PATH(rule->anchor));
+		rule->anchor->refcnt--;
+	}
 	pool_put(&pf_rule_pl, rule);
 }
 
@@ -570,38 +622,27 @@ pf_qid_unref(u_int16_t qid)
 }
 
 int
-pf_begin_rules(u_int32_t *version, const char *anchor)
+pf_begin_rules(struct pf_trans *t, const char *anchor)
 {
 	struct pf_ruleset	*rs;
-	struct pf_rule		*rule;
 
-	if ((rs = pf_find_or_create_ruleset(anchor)) == NULL)
+	while (*anchor == '/')
+		anchor++;
+
+	if ((rs = pf_find_or_create_ruleset(&t->pftina_rc, anchor)) == NULL)
 		return (EINVAL);
-	while ((rule = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
-		pf_rm_rule(rs->rules.inactive.ptr, rule);
-		rs->rules.inactive.rcount--;
-	}
-	*version = ++rs->rules.inactive.version;
-	rs->rules.inactive.open = 1;
+
+	rs->rules.version = pf_get_ruleset_version(
+	    (rs == &t->pftina_rc.main_anchor.ruleset) ? "" : rs->anchor->path);
+	DPFPRINTF(LOG_DEBUG, "%s %s version: %d", __func__, anchor,
+	    rs->rules.version);
+
 	return (0);
 }
 
 void
 pf_rollback_rules(u_int32_t version, char *anchor)
 {
-	struct pf_ruleset	*rs;
-	struct pf_rule		*rule;
-
-	rs = pf_find_ruleset(anchor);
-	if (rs == NULL || !rs->rules.inactive.open ||
-	    rs->rules.inactive.version != version)
-		return;
-	while ((rule = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
-		pf_rm_rule(rs->rules.inactive.ptr, rule);
-		rs->rules.inactive.rcount--;
-	}
-	rs->rules.inactive.open = 0;
-
 	/* queue defs only in the main ruleset */
 	if (anchor[0])
 		return;
@@ -936,8 +977,8 @@ pf_calc_chksum(struct pf_ruleset *rs)
 
 	MD5Init(&ctx);
 
-	if (rs->rules.inactive.rcount) {
-		TAILQ_FOREACH(rule, rs->rules.inactive.ptr, entries) {
+	if (rs->rules.rcount) {
+		TAILQ_FOREACH(rule, rs->rules.ptr, entries) {
 			pf_hash_rule(&ctx, rule);
 		}
 	}
@@ -946,16 +987,143 @@ pf_calc_chksum(struct pf_ruleset *rs)
 	memcpy(pf_status.pf_chksum, digest, sizeof(pf_status.pf_chksum));
 }
 
-int
-pf_addr_setup(struct pf_ruleset *ruleset, struct pf_addr_wrap *addr,
-    sa_family_t af)
+void
+pfi_dynaddr_remove(struct pf_addr_wrap *aw)
 {
-	if (pfi_dynaddr_setup(addr, af, PR_WAITOK) ||
-	    pf_tbladdr_setup(ruleset, addr, PR_WAITOK) ||
+	if (aw->type != PF_ADDR_DYNIFTL || aw->p.dyn == NULL ||
+	    aw->p.dyn->pfid_kif == NULL || aw->p.dyn->pfid_kt == NULL)
+		return;
+
+	TAILQ_REMOVE(&aw->p.dyn->pfid_kif->pfik_dynaddrs, aw->p.dyn, entry);
+	pfi_kif_unref(aw->p.dyn->pfid_kif, PFI_KIF_REF_RULE);
+	aw->p.dyn->pfid_kif = NULL;
+	pfr_detach_table(aw->p.dyn->pfid_kt);
+	aw->p.dyn->pfid_kt = NULL;
+	pool_put(&pf_addr_pl, aw->p.dyn);
+	aw->p.dyn = NULL;
+}
+
+int
+pf_dynaddr_setup(struct pf_trans *t, struct pf_addr_wrap *aw, sa_family_t af)
+{
+	struct pfi_dynaddr	*dyn;
+	char			 tblname[PF_TABLE_NAME_SIZE];
+	struct pf_ruleset	*ruleset = NULL;
+	int			 rv = 0;
+
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return (0);
+	dyn = pool_get(&pf_addr_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
+	if (dyn == NULL)
+		return (1);
+
+	if (!strcmp(aw->v.ifname, "self"))
+		dyn->pfid_kif = pfi_kif_alloc(IFG_ALL, M_WAITOK);
+	else
+		dyn->pfid_kif = pfi_kif_alloc(aw->v.ifname, M_WAITOK);
+
+	dyn->pfid_net = pfi_unmask(&aw->v.a.mask);
+	if (af == AF_INET && dyn->pfid_net == 32)
+		dyn->pfid_net = 128;
+	strlcpy(tblname, aw->v.ifname, sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_NETWORK)
+		strlcat(tblname, ":network", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_BROADCAST)
+		strlcat(tblname, ":broadcast", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_PEER)
+		strlcat(tblname, ":peer", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_NOALIAS)
+		strlcat(tblname, ":0", sizeof(tblname));
+	if (dyn->pfid_net != 128)
+		snprintf(tblname + strlen(tblname),
+		    sizeof(tblname) - strlen(tblname), "/%d", dyn->pfid_net);
+	ruleset = pf_find_or_create_ruleset(&t->pftina_rc, PF_RESERVED_ANCHOR);
+	if (ruleset == NULL) {
+		rv = 1;
+		goto _bad;
+	}
+
+	dyn->pfid_kt = pfr_attach_table(&t->pftina_rc, ruleset, tblname,
+	    PR_WAITOK);
+	if (dyn->pfid_kt == NULL) {
+		rv = 1;
+		goto _bad;
+	}
+
+	/*
+	 * we mark table as active, when doing commit
+	 */
+	dyn->pfid_iflags = aw->iflags;
+	dyn->pfid_af = af;
+	aw->p.dyn = dyn;
+
+	return (0);
+
+_bad:
+	if (dyn->pfid_kt != NULL)
+		pfr_detach_table(dyn->pfid_kt);
+	pfi_kif_free(dyn->pfid_kif);
+	pool_put(&pf_addr_pl, dyn);
+	return (rv);
+}
+
+int
+pf_addr_setup(struct pf_trans *t, struct pf_ruleset *ruleset,
+    struct pf_addr_wrap *addr, sa_family_t af)
+{
+	if (pf_dynaddr_setup(t, addr, af) ||
+	    pf_tbladdr_setup(t, ruleset, addr, PR_WAITOK) ||
 	    pf_rtlabel_add(addr))
 		return (EINVAL);
 
 	return (0);
+}
+
+void
+pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
+    struct pf_addr_wrap *addr)
+{
+	struct pf_anchor *a;
+	struct pfr_ktable *kt;
+
+	a = (grs->anchor == NULL) ? &pf_main_anchor : grs->anchor;
+
+	if (addr->type != PF_ADDR_TABLE)
+		return;
+
+	/*
+	 * Similar to pfr_attach_table(), we just want to find desired table in
+	 * ancestor anchor. The difference is the anchor must
+	 */
+	kt = NULL;
+	while ((kt == NULL) && (a != NULL)) {
+		kt = pfr_lookup_table(a, (struct pfr_table *)addr->p.tbl);
+		a = a->parent;
+	}
+	if (kt == NULL)
+		kt = pfr_lookup_table(&pf_main_anchor,
+		    (struct pfr_table *)addr->p.tbl);
+
+	/*
+	 * pf_addr_update() must find table in root ruleset.
+	 */
+	KASSERT(kt != NULL);
+
+	/*
+	 * In case the pf.conf defines a table too, then
+	 * rule already refers to the table. However if we
+	 * just adding rule to existing runtime ruleset, then
+	 * we must update table reference in rule.
+	 */
+	if (kt != addr->p.tbl) {
+		addr->p.tbl->pfrkt_refcnt--;
+		/*
+		 * p.tbl reference can be safely overwritten here.  the table
+		 * will be destroed with transaction.
+		 */
+		addr->p.tbl = kt;
+		addr->p.tbl->pfrkt_refcnt++;
+	}
 }
 
 struct pfi_kif *
@@ -1995,6 +2163,476 @@ fail:
 }
 
 int
+pf_is_anchor_empty(struct pf_anchor *a)
+{
+	if (!TAILQ_EMPTY(a->ruleset.rules.ptr))
+		return (0);
+
+	if (!RB_EMPTY(&a->children))
+		return (0);
+
+	/* there is at least 1 rule which still refers to empty anchor */
+	if (a->refcnt != 0)
+		return (0);
+
+	if (!RB_EMPTY(&a->ktables))
+		return (0);
+
+	return (1);
+}
+
+void
+pf_remove_orphans(struct pf_trans *t)
+{
+	struct pf_anchor *a,  *aw;
+
+	RB_FOREACH_REVERSE_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
+		DPFPRINTF(LOG_DEBUG,
+		    "%s trying to remove %s (refcnt: %d, rules are "
+		    "%s empty, children are %s empty, tables: %d",
+		    __func__, a->path, a->refcnt,
+		    TAILQ_EMPTY(a->ruleset.rules.ptr) ?
+			"" : "not",
+		    RB_EMPTY(&a->children) ? "" : "not",
+		    a->ruleset.anchor->tables);
+		if (pf_is_anchor_empty(a)) {
+			RB_REMOVE(pf_anchor_global, &pf_anchors, a);
+			if (a->parent != NULL)
+				RB_REMOVE(pf_anchor_node, &a->parent->children,
+				    a);
+			TAILQ_INSERT_TAIL(&t->pftina_anchor_list, a, workq);
+			DPFPRINTF(LOG_DEBUG, "%s %s will be removed",
+			    __func__, a->path);
+		} else
+			DPFPRINTF(LOG_DEBUG, "%s %s will not be removed",
+			    __func__, a->path);
+	}
+}
+
+/*
+ * committing tables which are defined along the ruleset (ina)
+ * is tricky. This is the behavior we want to preserve:
+ *
+ *
+netlock# cat pf-tab.conf
+table <biano>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+
+block from <test> to any
+anchor foo {
+        pass in from any to <test>
+}
+netlock# pfctl -sT
+dup
+test
+netlock# pfctl -f pf-tab.conf
+netlock# pfctl -sT
+dup
+test
+ *
+ * pf-tab.,conf does not define table test, the table is left intact because it
+ * got defined by 'pfctl -t test -T add ...'
+ *
+ * table bianco did not survive commit operation because there is no rule
+ * using it (PFR_REFCNT_RULE is zero).
+ *
+ * table dup is left intact, because it got defined by 'pfctl -t test -T add'
+ *
+ * let's modify pf-tab.conf so <dup> becomes defined by ruleset. However
+ * it is still unused:
+ *
+netlock# cat pf-tab.conf
+table <biano>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+table <dup>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+
+block from <test> to any
+anchor foo {
+        pass in from any to <test>
+}
+netlock# pfctl -f pf-tab.conf
+netlock# pfctl -sT
+test
+ *
+ * table <dup> did not survive commit, because it got redefined by rulest.
+ */
+
+void
+pf_print_tables(const char *hdr, struct pf_anchor *a)
+{
+	struct pfr_ktable *kt;
+
+	RB_FOREACH(kt, pfr_ktablehead, &a->ktables)
+		pfr_print_table(hdr, a, kt);
+}
+
+void
+pf_detach_addr(struct pf_addr_wrap *aw)
+{
+	switch (aw->type) {
+	case PF_ADDR_TABLE:
+		aw->p.tbl->pfrkt_refcnt--;
+		KASSERT(aw->p.tbl->pfrkt_refcnt >= 0);
+		if (aw->p.tbl->pfrkt_refcnt == 0)
+			aw->p.tbl->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+		aw->p.tbl = NULL;
+		aw->type = PF_ADDR_NONE;
+		break;
+	case PF_ADDR_DYNIFTL:
+		/* remove ourselves from kif */
+		TAILQ_REMOVE(&aw->p.dyn->pfid_kif->pfik_dynaddrs, aw->p.dyn,
+		    entry);
+		pfi_kif_unref(aw->p.dyn->pfid_kif, PFI_KIF_REF_RULE);
+		aw->p.dyn->pfid_kif = NULL;
+		pfr_detach_table(aw->p.dyn->pfid_kt);
+		aw->p.dyn->pfid_kt = NULL;
+		break;
+	default:;
+	}
+}
+
+void
+pf_detach_rule(struct pf_rule *r)
+{
+	if (r->anchor != NULL) {
+		r->anchor->refcnt--;
+		DPFPRINTF(LOG_DEBUG, "%s droping reference to %s",
+		    __func__,
+		    r->anchor->path);
+		KASSERT(r->anchor->refcnt >= 0);
+		r->anchor = NULL;
+	}
+	pf_detach_addr(&r->src.addr);
+	pf_detach_addr(&r->dst.addr);
+	pf_detach_addr(&r->rdr.addr);
+	pf_detach_addr(&r->nat.addr);
+	pf_detach_addr(&r->route.addr);
+}
+
+int
+pf_update_tablerefs_rule(struct pf_addr_wrap *aw, struct pfr_ktable *cur,
+    struct pfr_ktable *new)
+{
+	int	rv;
+
+	if (aw->type != PF_ADDR_TABLE)
+		return (0);
+
+	if (aw->p.tbl == cur) {
+		cur->pfrkt_refcnt--;
+		KASSERT(cur->pfrkt_refcnt >= 0);
+		if (cur->pfrkt_refcnt == 0)
+			cur->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+		aw->p.tbl = new;
+		new->pfrkt_refcnt++;
+		new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		rv = 1;
+	} else
+		rv = 0;
+
+	return (rv);
+}
+
+void
+pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
+{
+	void **tables = (void **)arg;
+	struct pfr_ktable *current = tables[0];
+	struct pfr_ktable *new = tables[1];
+	struct pf_rule *r;
+	int updated;
+
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+		updated = pf_update_tablerefs_rule(&r->src.addr, current, new);
+		if (updated) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s",
+			    __func__, r->nr, PF_ANCHOR_PATH(a),
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->src.addr.type == PF_ADDR_TABLE &&
+		    r->src.addr.p.tbl != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->src.addr.p.tbl->pfrkt_name,
+			    r->src.addr.p.tbl->pfrkt_anchor);
+		}
+
+		updated = pf_update_tablerefs_rule(&r->dst.addr, current, new);
+		if (updated) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->dst.addr.type == PF_ADDR_TABLE &&
+		    r->dst.addr.p.tbl != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s != %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->dst.addr.p.tbl->pfrkt_name,
+			    r->dst.addr.p.tbl->pfrkt_anchor);
+		}
+
+		updated = pf_update_tablerefs_rule(&r->rdr.addr, current, new);
+		if (updated) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->rdr.addr.type == PF_ADDR_TABLE &&
+		    r->rdr.addr.p.tbl != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->rdr.addr.p.tbl->pfrkt_name,
+			    r->rdr.addr.p.tbl->pfrkt_anchor);
+		}
+
+		updated = pf_update_tablerefs_rule(&r->nat.addr, current, new);
+		if (r->nat.addr.type == PF_ADDR_TABLE &&
+		    r->nat.addr.p.tbl == current) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->nat.addr.type == PF_ADDR_TABLE &&
+		    r->nat.addr.p.tbl != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->nat.addr.p.tbl->pfrkt_name,
+			    r->nat.addr.p.tbl->pfrkt_anchor);
+		}
+
+		updated = pf_update_tablerefs_rule(&r->route.addr, current, new);
+		if (r->route.addr.type == PF_ADDR_TABLE &&
+		    r->route.addr.p.tbl == current) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route  %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->route.addr.type == PF_ADDR_TABLE &&
+		    r->route.addr.p.tbl != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->route.addr.p.tbl->pfrkt_name,
+			    r->route.addr.p.tbl->pfrkt_anchor);
+		}
+	}
+}
+
+void
+pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pfr_ktable *kt, *ktw, *exists;
+	struct pfr_kentryworkq workq;
+	void *tables[2];
+
+	/*
+	 * We flush all existing tables (except persistent ones) and mark them
+	 * as inactive.
+	 */
+	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		if (kt->pfrkt_flags & PFR_TFLAG_PERSIST)
+			continue;
+
+		pfr_print_table("pf_swap_tables flushing ", a, kt);
+		SLIST_INIT(&workq);
+		pfr_enqueue_addrs(kt, &workq, NULL, 0);
+		pfr_remove_kentries(kt, &workq);
+		kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+		/* update version, because we changed flags */
+		kt->pfrkt_version++;
+	}
+
+	/*
+	 * move tables from transaction anchor to anchor
+	 */
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &ta->ktables, ktw) {
+		ta->tables--;
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
+		DPFPRINTF(LOG_DEBUG, "%s moving %s",
+		    __func__, kt->pfrkt_name);
+		exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+		if (exists != NULL) {
+			DPFPRINTF(LOG_DEBUG, "%s %s exists already",
+			    __func__, kt->pfrkt_name);
+			RB_REMOVE(pfr_ktablehead, &a->ktables, exists);
+			RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+			kt->pfrkt_version = exists->pfrkt_version++;
+			SLIST_INSERT_HEAD(&t->pftina_garbage, exists,
+			    pfrkt_workq);
+
+			if (exists->pfrkt_refcnt != 0) {
+				tables[0] = exists;
+				tables[1] = kt;
+				pf_walk_anchor_subtree(a, (void *)tables,
+				    pf_update_tablerefs_anchor);
+			}
+		} else
+			a->tables++;
+	}
+}
+
+void
+pf_refresh_addr(struct pf_trans *t, struct pf_addr_wrap *aw)
+{
+	struct pfi_kif		*kif_buf;
+	struct pfi_dynaddr	*dyn;
+	struct pfr_ktable	*kt, *ktchk;
+
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return;
+	if (t->pftina_reserved_anchor == NULL)
+		panic("%s PF_RESERVED_ANCHOR (_pf) is NULL)", __func__);
+
+	dyn = aw->p.dyn;
+	kif_buf = dyn->pfid_kif;
+
+	dyn->pfid_kif = pfi_kif_get(kif_buf->pfik_name, &kif_buf);
+	pfi_kif_ref(dyn->pfid_kif, PFI_KIF_REF_RULE);
+
+	kt = pfr_lookup_table(t->pftina_reserved_anchor,
+	    (struct pfr_table *)dyn->pfid_kt);
+	if (kt == NULL)
+		panic("%s table for %s was not found", __func__,
+		    dyn->pfid_kt->pfrkt_name);
+
+	if (kt != dyn->pfid_kt) {
+		/*
+		 * update dynamic interface table up-to-date
+		 */
+		kt->pfrkt_refcnt++;
+		dyn->pfid_kt->pfrkt_refcnt--;
+		ktchk = dyn->pfid_kt;
+		dyn->pfid_kt = kt;
+		SLIST_FOREACH(kt, &t->pftina_garbage, pfrkt_workq) {
+			if (kt == ktchk)
+				break;
+		}
+
+		if (kt == NULL)
+			panic("%s %s is not found on garbage queue",
+			    __func__, ktchk->pfrkt_name);
+	}
+
+	/*
+	 * add ourselves to dynaddrs list at kif.  The code here preserves
+	 * behavior of former pfi_dynaddr_setup(). Each address field in rule
+	 * indeed has an entry in pfik_dynaddrs list. This is surprising,
+	 * because I would expect we would an entry per table. If update
+	 * happens and there is 10 rules which refer to interface we get 10
+	 * update calls to table. We can make it better at some point.
+	 */
+	TAILQ_INSERT_HEAD(&dyn->pfid_kif->pfik_dynaddrs, dyn, entry);
+}
+
+void
+pf_refresh_rules(struct pf_trans *t, struct pf_anchor *a)
+{
+	struct pf_rule *r;
+
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+		if (r->anchor != NULL) {
+			struct pf_anchor *anchor;
+			/*
+			 * ->anchor can either refer to anchor found
+			 * transaction or to anchor found in pf_anchors.
+			 * If ->anchor is found in pf_anchors, then we
+			 * are done.
+			 */
+
+			anchor = RB_FIND(pf_anchor_global, &pf_anchors,
+			    r->anchor);
+			if (anchor != r->anchor) {
+				/*
+				 * if anchor is not found, then it must be
+				 * found in transaction, waiting to be
+				 * committed. No action for us then.  If
+				 * different anchor is found in pf_anchors for
+				 * r->anchor, then we must update reference.
+				 */
+				if (anchor == NULL) {
+					anchor = RB_FIND(pf_anchor_global,
+					    &t->pftina_rc.anchors, r->anchor);
+					if (anchor == NULL)
+						panic(
+						    "%s dangling anchor %s",
+						    __func__,
+						    r->anchor->path);
+				} else {
+					r->anchor->refcnt--;
+					KASSERT(r->anchor->refcnt >= 0);
+					r->anchor = anchor;
+					r->anchor->refcnt++;
+					DPFPRINTF(LOG_DEBUG,
+					    "%s %s->refcnt: %u",
+					    __func__,
+					    r->anchor->path,
+					    r->anchor->refcnt);
+				}
+			}
+		}
+		pf_refresh_addr(t, &r->src.addr);
+		pf_refresh_addr(t, &r->dst.addr);
+		pf_refresh_addr(t, &r->rdr.addr);
+		pf_refresh_addr(t, &r->nat.addr);
+		pf_refresh_addr(t, &r->route.addr);
+	}
+}
+
+/*
+ * Function swaps rules and tables between global anchor 'a' and
+ * transaction anchor 'ta'.
+ */
+void
+pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pf_ruleset tmp_rs;
+	struct pf_ruleset *trs, *grs;
+	struct pf_rule *r;
+
+	DPFPRINTF(LOG_DEBUG, "%s, swapping %s", __func__, PF_ANCHOR_PATH(a));
+
+	trs = &ta->ruleset;
+	grs = &a->ruleset;
+	KASSERT(grs->rules.version == trs->rules.version);
+
+	pf_init_ruleset(&tmp_rs);
+	tmp_rs.rules.rcount = trs->rules.rcount;
+	TAILQ_CONCAT(tmp_rs.rules.ptr, trs->rules.ptr, entries);
+
+	/*
+	 * We move rules from global anchor to transaction anchor, we also must
+	 * drop references to global objects referred by rule.
+	 */
+	trs->rules.rcount = grs->rules.rcount;
+	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
+	/*
+	 * Detach anchor rules and tables from rules which are moved to
+	 * transaction anchor (read: replaced by commit operation).
+	 */
+	TAILQ_FOREACH(r, trs->rules.ptr, entries)
+		pf_detach_rule(r);
+
+	pf_swap_tables(t, ta, a);
+
+	grs->rules.rcount = tmp_rs.rules.rcount;
+	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
+
+	pf_refresh_rules(t, a);
+
+	grs->rules.version++;
+}
+
+int
 pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
 	int			 error = 0;
@@ -2156,7 +2794,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		u_int32_t		 nr = 0;
 
 		PF_LOCK();
-		pq->ticket = pf_main_ruleset.rules.active.version;
+		pq->ticket = pf_main_ruleset.rules.version;
 
 		/* save state to not run over them all each time? */
 		qs = TAILQ_FIRST(pf_queues_active);
@@ -2175,7 +2813,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		u_int32_t		 nr = 0;
 
 		PF_LOCK();
-		if (pq->ticket != pf_main_ruleset.rules.active.version) {
+		if (pq->ticket != pf_main_ruleset.rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			goto fail;
@@ -2203,7 +2841,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		if (pq->ticket != pf_main_ruleset.rules.active.version) {
+		if (pq->ticket != pf_main_ruleset.rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2250,7 +2888,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		if (q->ticket != pf_main_ruleset.rules.inactive.version) {
+		if (q->ticket != pf_main_ruleset.rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2332,6 +2970,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_rule	*pr = (struct pfioc_rule *)addr;
 		struct pf_ruleset	*ruleset;
 		struct pf_rule		*rule, *tail;
+		struct pf_trans		*t;
+
+		t = pf_find_trans(minor(dev), pr->ticket);
+		if (t == NULL) {
+			error = EBUSY;
+			goto fail;
+		}
 
 		rule = pool_get(&pf_rule_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
 		if (rule == NULL) {
@@ -2371,29 +3016,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		NET_LOCK();
-		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
+		ruleset = pf_find_ruleset(&t->pftina_rc, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			pf_rule_free(rule);
-			goto fail;
-		}
-		if (pr->ticket != ruleset->rules.inactive.version) {
-			error = EBUSY;
-			PF_UNLOCK();
-			NET_UNLOCK();
 			pf_rule_free(rule);
 			goto fail;
 		}
 		rule->cuid = p->p_ucred->cr_ruid;
 		rule->cpid = p->p_p->ps_pid;
 
-		tail = TAILQ_LAST(ruleset->rules.inactive.ptr,
-		    pf_rulequeue);
+		tail = TAILQ_LAST(ruleset->rules.ptr, pf_rulequeue);
 		if (tail)
 			rule->nr = tail->nr + 1;
 		else
@@ -2406,37 +3039,34 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		rule->route.kif = pf_kif_setup(rule->route.kif);
 
 		if (rule->overload_tblname[0]) {
-			if ((rule->overload_tbl = pfr_attach_table(ruleset,
-			    rule->overload_tblname, PR_WAITOK)) == NULL)
+			if ((rule->overload_tbl = pfr_attach_table(
+			    &t->pftina_rc, ruleset, rule->overload_tblname,
+			    PR_WAITOK)) == NULL)
 				error = EINVAL;
 			else
-				rule->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+				rule->overload_tbl->pfrkt_flags |=
+				    PFR_TFLAG_ACTIVE;
 		}
 
-		if (pf_addr_setup(ruleset, &rule->src.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->src.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->dst.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->dst.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->rdr.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->rdr.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->nat.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->nat.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->route.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->route.addr, rule->af))
 			error = EINVAL;
-		if (pf_anchor_setup(rule, ruleset, pr->anchor_call))
+		if (pf_anchor_setup(&t->pftina_rc, rule, ruleset,
+		    pr->anchor_call))
 			error = EINVAL;
 
 		if (error) {
 			pf_rm_rule(NULL, rule);
-			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
-		TAILQ_INSERT_TAIL(ruleset->rules.inactive.ptr,
-		    rule, entries);
-		ruleset->rules.inactive.rcount++;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		TAILQ_INSERT_TAIL(ruleset->rules.ptr, rule, entries);
 		break;
 	}
 
@@ -2450,21 +3080,21 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
 		}
-		rule = TAILQ_LAST(ruleset->rules.active.ptr, pf_rulequeue);
+		rule = TAILQ_LAST(ruleset->rules.ptr, pf_rulequeue);
 		if (rule)
 			pr->nr = rule->nr + 1;
 		else
 			pr->nr = 0;
-		ruleset_version = ruleset->rules.active.version;
+		ruleset_version = ruleset->rules.version;
 		pf_anchor_take(ruleset->anchor);
-		rule = TAILQ_FIRST(ruleset->rules.active.ptr);
+		rule = TAILQ_FIRST(ruleset->rules.ptr);
 		PF_UNLOCK();
 		NET_UNLOCK();
 
@@ -2501,7 +3131,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_LOCK();
 		KASSERT(t->pftgr_anchor != NULL);
 		ruleset = &t->pftgr_anchor->ruleset;
-		if (t->pftgr_version != ruleset->rules.active.version) {
+		if (t->pftgr_version != ruleset->rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2556,6 +3186,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCCHANGERULE: {
+		/*
+		 * TODO: this must be rewrittern so it will use transactions,
+		 * for rules we are adding/changing. Remove action must bump
+		 * ruleset version number
+		 */
 		struct pfioc_rule	*pcr = (struct pfioc_rule *)addr;
 		struct pf_ruleset	*ruleset;
 		struct pf_rule		*oldrule = NULL, *newrule = NULL;
@@ -2571,11 +3206,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			NET_LOCK();
 			PF_LOCK();
 
-			ruleset = pf_find_ruleset(pcr->anchor);
+			ruleset = pf_find_ruleset(&pf_global, pcr->anchor);
 			if (ruleset == NULL)
 				error = EINVAL;
 			else
-				pcr->ticket = ++ruleset->rules.active.version;
+				pcr->ticket = ++ruleset->rules.version;
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2616,7 +3251,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		ruleset = pf_find_ruleset(pcr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pcr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
@@ -2625,7 +3260,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		if (pcr->ticket != ruleset->rules.active.version) {
+		if (pcr->ticket != ruleset->rules.version) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2634,6 +3269,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (pcr->action != PF_CHANGE_REMOVE) {
+			/* FixMe: here we need a proper transaction */
+			struct pf_trans *t = NULL;
+
 			KASSERT(newrule != NULL);
 			newrule->cuid = p->p_ucred->cr_ruid;
 			newrule->cpid = p->p_p->ps_pid;
@@ -2646,8 +3284,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			if (newrule->overload_tblname[0]) {
 				newrule->overload_tbl = pfr_attach_table(
-				    ruleset, newrule->overload_tblname,
-				    PR_WAITOK);
+				    &t->pftina_rc, ruleset,
+				    newrule->overload_tblname, PR_WAITOK);
 				if (newrule->overload_tbl == NULL)
 					error = EINVAL;
 				else
@@ -2655,22 +3293,27 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					    PFR_TFLAG_ACTIVE;
 			}
 
-			if (pf_addr_setup(ruleset, &newrule->src.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->src.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->dst.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->dst.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->rdr.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->rdr.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->nat.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->nat.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->route.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->route.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_anchor_setup(newrule, ruleset, pcr->anchor_call))
+			/*
+			 * TODO: we have to ensure no ruleset/anchors get
+			 * 0 created here.
+			 */
+			if (pf_anchor_setup(&pf_global, newrule, ruleset,
+			    pcr->anchor_call))
 				error = EINVAL;
 
 			if (error) {
@@ -2682,12 +3325,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (pcr->action == PF_CHANGE_ADD_HEAD)
-			oldrule = TAILQ_FIRST(ruleset->rules.active.ptr);
+			oldrule = TAILQ_FIRST(ruleset->rules.ptr);
 		else if (pcr->action == PF_CHANGE_ADD_TAIL)
-			oldrule = TAILQ_LAST(ruleset->rules.active.ptr,
+			oldrule = TAILQ_LAST(ruleset->rules.ptr,
 			    pf_rulequeue);
 		else {
-			oldrule = TAILQ_FIRST(ruleset->rules.active.ptr);
+			oldrule = TAILQ_FIRST(ruleset->rules.ptr);
 			while ((oldrule != NULL) && (oldrule->nr != pcr->nr))
 				oldrule = TAILQ_NEXT(oldrule, entries);
 			if (oldrule == NULL) {
@@ -2701,31 +3344,31 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (pcr->action == PF_CHANGE_REMOVE) {
-			pf_rm_rule(ruleset->rules.active.ptr, oldrule);
-			ruleset->rules.active.rcount--;
+			pf_rm_rule(ruleset->rules.ptr, oldrule);
+			ruleset->rules.rcount--;
 		} else {
 			if (oldrule == NULL)
 				TAILQ_INSERT_TAIL(
-				    ruleset->rules.active.ptr,
+				    ruleset->rules.ptr,
 				    newrule, entries);
 			else if (pcr->action == PF_CHANGE_ADD_HEAD ||
 			    pcr->action == PF_CHANGE_ADD_BEFORE)
 				TAILQ_INSERT_BEFORE(oldrule, newrule, entries);
 			else
 				TAILQ_INSERT_AFTER(
-				    ruleset->rules.active.ptr,
+				    ruleset->rules.ptr,
 				    oldrule, newrule, entries);
-			ruleset->rules.active.rcount++;
+			ruleset->rules.rcount++;
 		}
 
 		nr = 0;
-		TAILQ_FOREACH(oldrule, ruleset->rules.active.ptr, entries)
+		TAILQ_FOREACH(oldrule, ruleset->rules.ptr, entries)
 			oldrule->nr = nr++;
 
-		ruleset->rules.active.version++;
+		ruleset->rules.version++;
 
-		pf_calc_skip_steps(ruleset->rules.active.ptr);
-		pf_remove_if_empty_ruleset(ruleset);
+		pf_calc_skip_steps(ruleset->rules.ptr);
+		pf_remove_if_empty_ruleset(&pf_global, ruleset);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2936,20 +3579,31 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETSTATUSIF: {
-		struct pfioc_iface	*pi = (struct pfioc_iface *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		struct pfioc_iface	 pi;
 
-		NET_LOCK();
-		PF_LOCK();
-		if (pi->pfiio_name[0] == 0) {
-			memset(pf_status.ifname, 0, IFNAMSIZ);
-			PF_UNLOCK();
-			NET_UNLOCK();
+		if (io->esize != sizeof(pi) || io->size != 1) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETSTATUSIF\n", __func__);
 			goto fail;
 		}
-		strlcpy(pf_trans_set.statusif, pi->pfiio_name, IFNAMSIZ);
-		pf_trans_set.mask |= PF_TSET_STATUSIF;
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pi, sizeof(pi))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		strlcpy(t->pftina_opts.statusif, pi.pfiio_name, IFNAMSIZ);
+		t->pftina_opts.mask |= PF_TSET_STATUSIF;
+		t->pftina_modify_defaults = 1;
+
 		break;
 	}
 
@@ -3046,21 +3700,39 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETTIMEOUT: {
-		struct pfioc_tm	*pt = (struct pfioc_tm *)addr;
+		struct pfioc_trans *io = (struct pfioc_trans *)addr;
+		struct pfioc_tm	 pt;
+		struct pf_trans *t;
 
-		if (pt->timeout < 0 || pt->timeout >= PFTM_MAX ||
-		    pt->seconds < 0) {
+		if ((io->esize != sizeof(pt)) || (io->size != 1)) {
+			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETTIMEOUT", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pt, sizeof(pt)) != 0) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		if (pt.timeout < 0 || pt.timeout >= PFTM_MAX ||
+		    pt.seconds < 0) {
 			error = EINVAL;
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		if (pt->timeout == PFTM_INTERVAL && pt->seconds == 0)
-			pt->seconds = 1;
-		pf_default_rule_new.timeout[pt->timeout] = pt->seconds;
-		pt->seconds = pf_default_rule.timeout[pt->timeout];
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (pt.timeout == PFTM_INTERVAL && pt.seconds == 0)
+			pt.seconds = 1;
+		t->pftina_default_rule.timeout[pt.timeout] = pt.seconds;
+		t->pftina_modify_defaults = 1;
+
+		pt.seconds = pf_default_rule.timeout[pt.timeout];
+
 		break;
 	}
 
@@ -3078,7 +3750,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCGETLIMIT: {
-		struct pfioc_limit	*pl = (struct pfioc_limit *)addr;
+		struct pfioc_limit *pl = (struct pfioc_limit *)addr;
 
 		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX) {
 			error = EINVAL;
@@ -3091,47 +3763,83 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETLIMIT: {
-		struct pfioc_limit	*pl = (struct pfioc_limit *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		struct pfioc_limit	 pl;
+
+		if (io->esize != sizeof(pl) || io->size != 1) {
+			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETLIMIT", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			DPFPRINTF(LOG_DEBUG,
+			    "%s DIOCSETLIMIT no transaction for %llu",
+			    __func__, io->ticket);
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pl, sizeof(pl)) != 0) {
+			error = EFAULT;
+			goto fail;
+		}
 
 		PF_LOCK();
-		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX) {
+		if (pl.index < 0 || pl.index >= PF_LIMIT_MAX) {
 			error = EINVAL;
 			PF_UNLOCK();
 			goto fail;
 		}
-		if (((struct pool *)pf_pool_limits[pl->index].pp)->pr_nout >
-		    pl->limit) {
+		if (((struct pool *)pf_pool_limits[pl.index].pp)->pr_nout >
+		    pl.limit) {
 			error = EBUSY;
 			PF_UNLOCK();
 			goto fail;
 		}
 		/* Fragments reference mbuf clusters. */
-		if (pl->index == PF_LIMIT_FRAGS &&
-		    pl->limit > atomic_load_long(&nmbclust)) {
+		if (pl.index == PF_LIMIT_FRAGS && pl.limit > nmbclust) {
 			error = EINVAL;
 			PF_UNLOCK();
 			goto fail;
 		}
 
-		error = pool_sethardlimit(pf_pool_limits[pl->index].pp,
-		    pl->limit);
-		if (error == 0) {
-			pf_pool_limits[pl->index].limit_new = pl->limit;
-			pf_pool_limits[pl->index].limit = pl->limit;
-		}
+		t->pftina_pool_limits[pl.index] = pl.limit;
+		t->pftina_modify_defaults |= (1 << pl.index);
+		t->pftina_modify_defaults = 1;
+		pl.limit = pf_pool_limits[pl.index].limit;
 		PF_UNLOCK();
 		break;
 	}
 
 	case DIOCSETDEBUG: {
-		u_int32_t	*level = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans	*t;
+		u_int32_t	 level;
 
-		NET_LOCK();
-		PF_LOCK();
-		pf_trans_set.debug = *level;
-		pf_trans_set.mask |= PF_TSET_DEBUG;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (io->esize != sizeof(level) || io->size != 1) {
+			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETDEBUG", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &level, sizeof(level))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		t->pftina_opts.debug = level;
+		t->pftina_opts.mask |= PF_TSET_DEBUG;
+		t->pftina_modify_defaults = 1;
+
 		break;
 	}
 
@@ -3142,16 +3850,15 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
-		if ((ruleset = pf_find_ruleset(pr->path)) == NULL) {
+		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			goto fail;
 		}
 		pr->nr = 0;
 		if (ruleset == &pf_main_ruleset) {
-			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
-				if (anchor->parent == NULL)
+				if (anchor->parent == &pf_main_anchor)
 					pr->nr++;
 		} else {
 			RB_FOREACH(anchor, pf_anchor_node,
@@ -3170,18 +3877,19 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
-		if ((ruleset = pf_find_ruleset(pr->path)) == NULL) {
+		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			goto fail;
 		}
 		pr->name[0] = '\0';
 		if (ruleset == &pf_main_ruleset) {
-			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
-				if (anchor->parent == NULL && nr++ == pr->nr) {
+				if (anchor->parent == &pf_main_anchor &&
+				    nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
 					    sizeof(pr->name));
+					pr->refcnt = anchor->refcnt;
 					break;
 				}
 		} else {
@@ -3190,6 +3898,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				if (nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
 					    sizeof(pr->name));
+					pr->refcnt = anchor->refcnt;
 					break;
 				}
 		}
@@ -3201,206 +3910,547 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRCLRTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		char *path;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTABLES", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_clr_tables(&io->pfrio_table, &io->pfrio_ndel,
-		    io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		error = pfr_clr_tables(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			io->pfrio_ndel = t->pfttab_ndel;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRADDTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES", __func__);
 			goto fail;
 		}
-		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_nadd, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
+		if (error != 0) {
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES error in "
+			    "pfr_add_tables", __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		NET_LOCK();
+		PF_LOCK();
+
+		if (pf_trans_in_conflict(t, "DIOCRADDTABLES") != 0) {
+			PF_UNLOCK();
+			NET_UNLOCK();
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES conflict",
+			    __func__);
+			error = EBUSY;
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		pf_commit_trans(t);
+
+		PF_UNLOCK();
+		NET_UNLOCK();
+
+		io->pfrio_nadd = t->pfttab_nadd;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRDELTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES", __func__);
 			goto fail;
 		}
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
+		if (error != 0) {
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES error in "
+			    "pfr_del_tables", __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_del_tables(io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		if (pf_trans_in_conflict(t, "DIOCRDELTABLES") != 0) {
+			PF_UNLOCK();
+			NET_UNLOCK();
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES conflict",
+			    __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		pf_commit_trans(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		io->pfrio_ndel = t->pfttab_ndel;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		char *path;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTABLES", __func__);
 			goto fail;
 		}
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pfttab_size = io->pfrio_size;
+		if (io->pfrio_size != 0) {
+			t->pfttab_kbuf_sz =
+			    io->pfrio_size * sizeof(struct pfr_table);
+			t->pfttab_kbuf = malloc(t->pfttab_kbuf_sz, M_PF,
+			    M_WAITOK);
+		}
+
+		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_tables(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		error = pfr_get_tables(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if ((error == 0) && (t->pfttab_size <= io->pfrio_size))
+			error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
+			    io->pfrio_size * sizeof(struct pfr_table));
+
+		io->pfrio_size = t->pfttab_size;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		char *path;
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTSTATS", __func__);
 			goto fail;
 		}
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pfttab_size = io->pfrio_size;
+		if (io->pfrio_size != 0) {
+			t->pfttab_kbuf_sz =
+			    io->pfrio_size * sizeof(struct pfr_tstats);
+			t->pfttab_kbuf = malloc(t->pfttab_kbuf_sz, M_PF,
+			    M_WAITOK);
+		}
+
+		if ((io->pfrio_flags & PFR_FLAG_ALLRSETS) == 0) {
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_tstats(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		error = pfr_get_tstats(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0) {
+			io->pfrio_size = t->pfttab_size;
+			error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
+			    io->pfrio_size * sizeof(struct pfr_tstats));
+		} else
+			io->pfrio_size = 0;
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRCLRTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTSTATS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_clr_tstats(io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRCLRTSTATS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		if (error == 0)
+			io->pfrio_nzero = t->pfttab_nzero;
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRSETTFLAGS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETTFLAGS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_set_tflags(io->pfrio_buffer, io->pfrio_size,
-		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
-		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((io->pfrio_setflag & ~PFR_TFLAG_USRMASK) ||
+		    (io->pfrio_clrflag & ~PFR_TFLAG_USRMASK) ||
+		    (io->pfrio_setflag & io->pfrio_clrflag)) {
+			error = EINVAL;
+			goto fail;
+		}
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags;
+
+		t->pfttab_setf = io->pfrio_setflag;
+		t->pfttab_clrf = io->pfrio_clrflag;
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRSETTFLAGS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		if (error == 0) {
+			io->pfrio_ndel = t->pfttab_ndel;
+			io->pfrio_nchange = t->pfttab_nchg;
+		}
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRCLRADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		struct pfr_ktable *ktt;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRADDRS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_clr_addrs(&io->pfrio_table, &io->pfrio_ndel,
-		    io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags;
+		ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+		    gettime(), PR_WAITOK);
+		if (ktt == NULL) {
+			error = EINVAL;
+			goto fail;
+		}
+		if (ktt->pfrkt_version == 0) {
+			error = ESRCH;
+			goto fail;
+		}
+
+		if ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRCLRADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
 		break;
 	}
 
 	case DIOCRADDADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDADDRS", __func__);
 			goto fail;
 		}
-		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRADDADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			NET_UNLOCK();
+			PF_UNLOCK();
+
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_nadd = t->pfttab_nadd;
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRDELADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELADDRS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_del_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRDELADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_ndel = t->pfttab_ndel;
+		}
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRSETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETADDRS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_set_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
-		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL, 0);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRSETADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+
+			pfr_addrs_feedback(t, io->pfrio_buffer, io->pfrio_size,
+			    PFR_GARBAGE_TOO);
+			io->pfrio_nadd = t->pfttab_nadd;
+			io->pfrio_ndel = t->pfttab_ndel;
+			io->pfrio_nchange = t->pfttab_nchg;
+
+			/*
+			 * forget deleted addresses, so pf_rollback_trans()
+			 * won't purge them
+			 */
+			if (io->pfrio_flags & PFR_FLAG_DUMMY)
+				SLIST_INIT(&t->pfttab_ke_garbage);
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRGETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETADDRS", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pft_ioflags = io->pfrio_flags;
+		t->pfttab_iocmd = cmd;
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_get_addrs(t, &io->pfrio_table, &io->pfrio_size);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			error = pfr_copyout_addrs(t, io->pfrio_buffer);
+		/*
+		 * forget entries we copied out so pf_rollback_trans() won't
+		 * attempt to free them.
+		 */
+		SLIST_INIT(&t->pfttab_ke_ioq);
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETASTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_astats)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETASTATS", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pft_ioflags = io->pfrio_flags;
+		t->pfttab_iocmd = DIOCRGETASTATS;
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_astats(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_get_astats(t, &io->pfrio_table, &io->pfrio_size);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			error = pfr_copyout_addrs(t, io->pfrio_buffer);
+		/*
+		 * forget entries we copied out so pf_rollback_trans() won't
+		 * attempt to free them.
+		 */
+		SLIST_INIT(&t->pfttab_ke_ioq);
+		pf_rollback_trans(t);
 		break;
 	}
 
@@ -3409,6 +4459,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRASTATS", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -3423,35 +4474,92 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRTSTADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		struct pf_anchor *ta, *a;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRTSTADDRS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_tst_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_nmatch, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		t->pft_ioflags |= PFR_FLAG_DUPOK;
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
+
+		if (error == 0) {
+			/*
+			 * pfr_copyin_addrs()  earlier called
+			 * pf_find_or_create_ruleset() which breaks path
+			 * to table (table@foo/bar/leaf) to three tree nodes:
+			 * foo, bar, leaf. The table is found at leaf anchor.
+			 * No tables are expected at foo and bar anchors.
+			 * One day some day we must find more efficient way
+			 * to deal with this.
+			 */
+			RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+				if (!RB_EMPTY(&ta->ktables))
+					break;
+			}
+			if (ta == NULL) {
+				/*
+				 * call to pfr_copyin_addrs() should have
+				 * failed, something is wrong if are here
+				 */
+				panic("%s(DIOCRTSTADDRS) no table found"
+				     "in transaction", __func__);
+			} else {
+
+				NET_LOCK();
+				PF_LOCK();
+
+				a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+				if (a != NULL)
+					pfr_tst_addrs(t, a, ta);
+
+				NET_UNLOCK();
+				PF_UNLOCK();
+
+				if (a == NULL) {
+					error = ESRCH;
+					goto fail;
+				}
+			}
+
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_nadd = t->pfttab_nadd;
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRINADEFINE: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRINADEFINE", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_ina_define(&io->pfrio_table, io->pfrio_buffer,
+
+		t = pf_find_trans(minor(dev), io->pfrio_ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		error = pfr_ina_define(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, &io->pfrio_naddr,
-		    io->pfrio_ticket, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+		    io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
@@ -3467,28 +4575,35 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		break;
 	}
 
-	case DIOCXBEGIN: {
+	case DIOCXRULESET: {
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
+		struct pf_trans		*t = NULL;
 		struct pfr_table	*table;
 		int			 i;
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRULESET %d != %lu",
+			    __func__, io->esize, sizeof(*ioe));
 			goto fail;
 		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
 		ioe = malloc(sizeof(*ioe), M_PF, M_WAITOK);
 		table = malloc(sizeof(*table), M_PF, M_WAITOK);
-		NET_LOCK();
-		PF_LOCK();
-		pf_default_rule_new = pf_default_rule;
-		PF_UNLOCK();
-		NET_UNLOCK();
-		memset(&pf_trans_set, 0, sizeof(pf_trans_set));
+
 		for (i = 0; i < io->size; i++) {
-			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
+			if (copyin(io->array + (i*sizeof(*ioe)) , ioe,
+			    sizeof(*ioe))) {
 				free(table, M_PF, sizeof(*table));
 				free(ioe, M_PF, sizeof(*ioe));
+				pf_rollback_trans(t);
 				error = EFAULT;
 				goto fail;
 			}
@@ -3496,257 +4611,131 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    sizeof(ioe->anchor)) {
 				free(table, M_PF, sizeof(*table));
 				free(ioe, M_PF, sizeof(*ioe));
+				pf_rollback_trans(t);
 				error = ENAMETOOLONG;
 				goto fail;
 			}
-			NET_LOCK();
-			PF_LOCK();
 			switch (ioe->type) {
 			case PF_TRANS_TABLE:
-				memset(table, 0, sizeof(*table));
-				strlcpy(table->pfrt_anchor, ioe->anchor,
-				    sizeof(table->pfrt_anchor));
-				if ((error = pfr_ina_begin(table,
-				    &ioe->ticket, NULL, 0))) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					goto fail;
-				}
-				break;
 			case PF_TRANS_RULESET:
-				if ((error = pf_begin_rules(&ioe->ticket,
-				    ioe->anchor))) {
-					PF_UNLOCK();
-					NET_UNLOCK();
+				error = pf_begin_rules(t, ioe->anchor);
+				if (error != 0) {
 					free(table, M_PF, sizeof(*table));
 					free(ioe, M_PF, sizeof(*ioe));
+					pf_rollback_trans(t);
 					goto fail;
 				}
 				break;
 			default:
-				PF_UNLOCK();
-				NET_UNLOCK();
 				free(table, M_PF, sizeof(*table));
 				free(ioe, M_PF, sizeof(*ioe));
+				DPFPRINTF(LOG_DEBUG, "%s [i] unknown type",
+				    __func__);
 				error = EINVAL;
-				goto fail;
-			}
-			PF_UNLOCK();
-			NET_UNLOCK();
-			if (copyout(ioe, io->array+i, sizeof(io->array[i]))) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EFAULT;
+				pf_rollback_trans(t);
 				goto fail;
 			}
 		}
 		free(table, M_PF, sizeof(*table));
 		free(ioe, M_PF, sizeof(*ioe));
+		DPFPRINTF(LOG_DEBUG, "%s DIOCXRULESET is done", __func__);
+
+		break;
+	}
+
+	case DIOCXBEGIN: {
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t = NULL;
+
+		t = pf_open_trans(minor(dev));
+		pf_init_tina(t);
+
+		if (io->array != NULL)
+			error = copyinstr(io->array, t->pftina_anchor_path,
+			    sizeof(t->pftina_anchor_path), NULL);
+
+		DPFPRINTF(LOG_DEBUG, "%s transaction: %llu on %s", __func__,
+		    t->pft_ticket, t->pftina_anchor_path);
+
+		if (error == 0)
+			io->ticket = t->pft_ticket;
 		break;
 	}
 
 	case DIOCXROLLBACK: {
+		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		struct pfioc_trans_e	*ioe;
-		struct pfr_table	*table;
-		int			 i;
 
-		if (io->esize != sizeof(*ioe)) {
-			error = ENODEV;
-			goto fail;
-		}
-		ioe = malloc(sizeof(*ioe), M_PF, M_WAITOK);
-		table = malloc(sizeof(*table), M_PF, M_WAITOK);
-		for (i = 0; i < io->size; i++) {
-			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EFAULT;
-				goto fail;
-			}
-			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
-			    sizeof(ioe->anchor)) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = ENAMETOOLONG;
-				goto fail;
-			}
-			NET_LOCK();
-			PF_LOCK();
-			switch (ioe->type) {
-			case PF_TRANS_TABLE:
-				memset(table, 0, sizeof(*table));
-				strlcpy(table->pfrt_anchor, ioe->anchor,
-				    sizeof(table->pfrt_anchor));
-				if ((error = pfr_ina_rollback(table,
-				    ioe->ticket, NULL, 0))) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					goto fail; /* really bad */
-				}
-				break;
-			case PF_TRANS_RULESET:
-				pf_rollback_rules(ioe->ticket, ioe->anchor);
-				break;
-			default:
-				PF_UNLOCK();
-				NET_UNLOCK();
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EINVAL;
-				goto fail; /* really bad */
-			}
-			PF_UNLOCK();
-			NET_UNLOCK();
-		}
-		free(table, M_PF, sizeof(*table));
-		free(ioe, M_PF, sizeof(*ioe));
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t != NULL)
+			pf_rollback_trans(t);
+		else
+			error = ENXIO;
+		io->ticket = 0;
+
 		break;
 	}
 
 	case DIOCXCOMMIT: {
+		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		struct pfioc_trans_e	*ioe;
-		struct pfr_table	*table;
-		struct pf_ruleset	*rs;
-		int			 i;
 
-		if (io->esize != sizeof(*ioe)) {
-			error = ENODEV;
+		/*
+		 * Looks like we will have to distinguish various
+		 * transaction types:
+		 *	DIOCXRULESET/ina_define
+		 *
+		 * 	DIOCRCLRTSTATS
+		 *
+		 *	DIOCRADDTABLES
+		 *
+		 *	DIOCRSETADDRS
+		 *
+		 *	DIOCRSETTFLAGS
+		 *	...
+		 *
+		 * this kind of hint may make implementation of
+		 * commit operation lot easier.
+		 *
+		 * after thinking more about things:
+		 *	I prefer we bump ruleset version iff
+		 *	we change rules.
+		 *
+		 *	tables bound to rulesets carry their own
+		 *	version number.
+		 *
+		 * we should check ruleset version iff and only iff we
+		 * will be changing rules. if we will be changing table
+		 * bound to ruleset then ruleset version can be ignored.
+		 */
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
 			goto fail;
 		}
-		ioe = malloc(sizeof(*ioe), M_PF, M_WAITOK);
-		table = malloc(sizeof(*table), M_PF, M_WAITOK);
-		/* first makes sure everything will succeed */
-		for (i = 0; i < io->size; i++) {
-			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EFAULT;
-				goto fail;
-			}
-			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
-			    sizeof(ioe->anchor)) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = ENAMETOOLONG;
-				goto fail;
-			}
-			NET_LOCK();
-			PF_LOCK();
-			switch (ioe->type) {
-			case PF_TRANS_TABLE:
-				rs = pf_find_ruleset(ioe->anchor);
-				if (rs == NULL || !rs->topen || ioe->ticket !=
-				     rs->tticket) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					error = EBUSY;
-					goto fail;
-				}
-				break;
-			case PF_TRANS_RULESET:
-				rs = pf_find_ruleset(ioe->anchor);
-				if (rs == NULL ||
-				    !rs->rules.inactive.open ||
-				    rs->rules.inactive.version !=
-				    ioe->ticket) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					error = EBUSY;
-					goto fail;
-				}
-				break;
-			default:
-				PF_UNLOCK();
-				NET_UNLOCK();
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EINVAL;
-				goto fail;
-			}
-			PF_UNLOCK();
-			NET_UNLOCK();
+
+		if (t->pft_type != PF_TRANS_INA) {
+			error = EINVAL;
+			goto fail;
 		}
+
 		NET_LOCK();
 		PF_LOCK();
 
-		/* now do the commit - no errors should happen here */
-		for (i = 0; i < io->size; i++) {
-			PF_UNLOCK();
-			NET_UNLOCK();
-			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EFAULT;
-				goto fail;
-			}
-			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
-			    sizeof(ioe->anchor)) {
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = ENAMETOOLONG;
-				goto fail;
-			}
-			NET_LOCK();
-			PF_LOCK();
-			switch (ioe->type) {
-			case PF_TRANS_TABLE:
-				memset(table, 0, sizeof(*table));
-				strlcpy(table->pfrt_anchor, ioe->anchor,
-				    sizeof(table->pfrt_anchor));
-				if ((error = pfr_ina_commit(table, ioe->ticket,
-				    NULL, NULL, 0))) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					goto fail; /* really bad */
-				}
-				break;
-			case PF_TRANS_RULESET:
-				if ((error = pf_commit_rules(ioe->ticket,
-				    ioe->anchor))) {
-					PF_UNLOCK();
-					NET_UNLOCK();
-					free(table, M_PF, sizeof(*table));
-					free(ioe, M_PF, sizeof(*ioe));
-					goto fail; /* really bad */
-				}
-				break;
-			default:
-				PF_UNLOCK();
-				NET_UNLOCK();
-				free(table, M_PF, sizeof(*table));
-				free(ioe, M_PF, sizeof(*ioe));
-				error = EINVAL;
-				goto fail; /* really bad */
-			}
+		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
+			error = EBUSY;
+		else {
+			pf_commit_trans(t);
+			pfi_xcommit();
 		}
-		for (i = 0; i < PFTM_MAX; i++) {
-			int old = pf_default_rule.timeout[i];
 
-			pf_default_rule.timeout[i] =
-			    pf_default_rule_new.timeout[i];
-			if (pf_default_rule.timeout[i] == PFTM_INTERVAL &&
-			    pf_default_rule.timeout[i] < old &&
-			    timeout_del(&pf_purge_to))
-				task_add(systqmp, &pf_purge_task);
-		}
-		pfi_xcommit();
-		pf_trans_set_commit();
 		PF_UNLOCK();
 		NET_UNLOCK();
-		free(table, M_PF, sizeof(*table));
-		free(ioe, M_PF, sizeof(*ioe));
+
+		/*
+		 * use rollback to release stuff which became invalidated.
+		 */
+		pf_rollback_trans(t);
 		break;
 	}
 
@@ -3887,17 +4876,35 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETHOSTID: {
-		u_int32_t	*hostid = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		u_int32_t	hostid;
 
-		NET_LOCK();
-		PF_LOCK();
-		if (*hostid == 0)
-			pf_trans_set.hostid = arc4random();
+		if (io->esize != sizeof(hostid) || io->size != 1) {
+			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETHOSTID", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &hostid, sizeof(hostid))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		if (hostid == 0)
+			t->pftina_opts.hostid = arc4random();
 		else
-			pf_trans_set.hostid = *hostid;
-		pf_trans_set.mask |= PF_TSET_HOSTID;
-		PF_UNLOCK();
-		NET_UNLOCK();
+			t->pftina_opts.hostid = hostid;
+
+		t->pftina_opts.mask |= PF_TSET_HOSTID;
+		t->pftina_modify_defaults = 1;
+
 		break;
 	}
 
@@ -3912,6 +4919,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfiio_esize != sizeof(struct pfi_kif)) {
 			error = ENODEV;
+			DPFPRINTF(LOG_DEBUG, "%s DIOCIGETIFACES", __func__);
 			goto fail;
 		}
 
@@ -3962,14 +4970,30 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETREASS: {
-		u_int32_t	*reass = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		u_int32_t	 reass;
 
-		NET_LOCK();
-		PF_LOCK();
-		pf_trans_set.reass = *reass;
-		pf_trans_set.mask |= PF_TSET_REASS;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (io->esize != sizeof(reass) || io->size != 1) {
+			error = EINVAL;
+			goto fail;
+		}
+
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &reass, sizeof(reass))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		t->pftina_opts.reass = reass;
+		t->pftina_opts.mask |= PF_TSET_REASS;
+		t->pftina_modify_defaults = 1;
+
 		break;
 	}
 
@@ -4008,6 +5032,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
+		DPFPRINTF(LOG_DEBUG, "%s default unknown iocmd (%lx) ]",
+		    __func__, cmd);
 		break;
 	}
 fail:
@@ -4017,16 +5043,18 @@ fail:
 }
 
 void
-pf_trans_set_commit(void)
+pf_trans_set_commit(struct pf_opts *status)
 {
-	if (pf_trans_set.mask & PF_TSET_STATUSIF)
-		strlcpy(pf_status.ifname, pf_trans_set.statusif, IFNAMSIZ);
-	if (pf_trans_set.mask & PF_TSET_DEBUG)
-		pf_status.debug = pf_trans_set.debug;
-	if (pf_trans_set.mask & PF_TSET_HOSTID)
-		pf_status.hostid = pf_trans_set.hostid;
-	if (pf_trans_set.mask & PF_TSET_REASS)
-		pf_status.reass = pf_trans_set.reass;
+	if (status->mask & PF_TSET_STATUSIF) {
+		memset(pf_status.ifname, 0, IFNAMSIZ);
+		strlcpy(pf_status.ifname, status->statusif, IFNAMSIZ);
+	}
+	if (status->mask & PF_TSET_DEBUG)
+		pf_status.debug = status->debug;
+	if (status->mask & PF_TSET_HOSTID)
+		pf_status.hostid = status->hostid;
+	if (status->mask & PF_TSET_REASS)
+		pf_status.reass = status->reass;
 }
 
 void
@@ -4305,12 +5333,817 @@ pf_cleanup_tgetrule(struct pf_trans *t)
 	pf_anchor_rele(t->pftgr_anchor);
 }
 
+int
+pf_ina_check(struct pf_anchor *ta, struct pf_anchor *a)
+{
+	u_int32_t version;
+	int conflict;
+	struct pfr_ktable *kt, *tkt;
+
+	/*
+	 * if anchor does not exist in global tree, then
+	 * transaction is about to create/insert new anchor.
+	 * in this case we expect to see version 0.
+	 *
+	 * Same goes to tkt later. If desired table is not
+	 * found at global anchor, then we are adding/creating
+	 * a new table to anchor. Therefore expected version
+	 * must be 0.
+	 */
+	if (a != NULL)
+		version = a->ruleset.rules.version;
+	else
+		version = 0;
+
+	conflict = (version != ta->ruleset.rules.version);
+
+	if ((conflict == 0) && (a != NULL)) {
+		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
+			kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+			if (kt == NULL)
+				conflict = (tkt->pfrkt_version != 0);
+			else
+				conflict =
+				    (tkt->pfrkt_version != kt->pfrkt_version);
+
+			if (conflict) {
+				DPFPRINTF(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%u vs. %u)",
+				    __func__,
+				    tkt->pfrkt_name,
+				    PF_ANCHOR_PATH(a),
+				    tkt->pfrkt_version,
+				    (kt == NULL) ? 0 : kt->pfrkt_version);
+				break;
+			}
+		}
+	} else {
+		DPFPRINTF(LOG_DEBUG,
+		    "%s ruleset (%s) version match (%u vs. %u)",
+		    __func__,
+		    PF_ANCHOR_PATH(ta),
+		    ta->ruleset.rules.version,
+		    (a == NULL) ? 0 : a->ruleset.rules.version);
+	}
+
+	return (conflict);
+}
+
+int
+pf_tab_check(struct pf_anchor *ta, struct pf_anchor *a)
+{
+	int conflict = 0;
+	struct pfr_ktable *kt, *tkt;
+
+	if (a == NULL) {
+		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
+			if (tkt->pfrkt_version != 0) {
+				DPFPRINTF(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%u vs. 0)",
+				    __func__,
+				    tkt->pfrkt_name,
+				    PF_ANCHOR_PATH(a),
+				    tkt->pfrkt_version);
+				conflict = 1;
+				break;
+			}
+		}
+	} else {
+		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
+			kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+			if (kt == NULL)
+				conflict = (tkt->pfrkt_version != 0);
+			else
+				conflict =
+				    (tkt->pfrkt_version != kt->pfrkt_version);
+
+			if (conflict) {
+				DPFPRINTF(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%u vs. %u)",
+				    __func__,
+				    tkt->pfrkt_name,
+				    PF_ANCHOR_PATH(a),
+				    tkt->pfrkt_version,
+				    (kt == NULL) ? 0 : kt->pfrkt_version);
+				break;
+			}
+		}
+	}
+
+	return (conflict);
+}
+
+int
+pf_trans_chk_ina(struct pf_trans *t, const char *iocmdname)
+{
+	int			 i, conflict = 0;
+	struct pf_anchor	*ta, *a;
+	struct pool		*pp;
+
+	if ((t->pftina_anchor_path[0] == '\0') &&
+	    (t->pftina_rc.main_anchor.ruleset.rules.version != 0))
+		conflict = pf_ina_check(&t->pftina_rc.main_anchor,
+		    &pf_main_anchor);
+
+	/* check if defaults can be modified/updated */
+	if (conflict == 0 && t->pftina_modify_defaults) {
+		conflict = (t->pftina_default_vers != pf_default_vers);
+		for (i = 0; i < PF_LIMIT_MAX && conflict == 0; i++) {
+			pp = (struct pool *)pf_pool_limits[i].pp;
+			if (t->pftina_pool_limits[i] > 0 &&
+			    pp->pr_nout > t->pftina_pool_limits[i]) {
+				log(LOG_WARNING, "pr_nout (%u) exceeds new "
+				    "limit (%u) for %s\n",
+				    pp->pr_nout,
+				    t->pftina_pool_limits[i],
+				    pp->pr_wchan);
+				conflict = 1;
+			}
+		}
+	}
+
+	DPFPRINTF(LOG_DEBUG, "%s:%s (defaults) conflict == %d", __func__,
+	    iocmdname, conflict);
+
+	/*
+	 * check anchor versions in transaction to match versions found in
+	 * global table.
+	 */
+	if (conflict == 0) {
+		RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
+			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
+			conflict = pf_ina_check(ta, a);
+			if (conflict != 0)
+				break;
+		}
+	}
+
+	return (conflict);
+}
+
+int
+pf_trans_chk_tab(struct pf_trans *t, const char *iocmdname)
+{
+	int	conflict = 0;
+	struct pf_anchor	*ta, *a;
+
+	conflict = pf_tab_check(&t->pfttab_rc.main_anchor, &pf_main_anchor);
+
+	if (conflict == 0) {
+		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
+			conflict = pf_tab_check(ta, a);
+			if (conflict != 0)
+				break;
+		}
+	}
+
+	return (conflict);
+}
+
+int
+pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
+{
+	int	conflict = 1;
+
+	switch (t->pft_type) {
+	case PF_TRANS_INA:
+		conflict = pf_trans_chk_ina(t, iocmdname);
+		break;
+	case PF_TRANS_TAB:
+		conflict = pf_trans_chk_tab(t, iocmdname);
+		break;
+	default:
+		panic("%s unknown transaction type %d", __func__ , t->pft_type);
+	}
+	return (conflict);
+}
+
+const char *
+pf_match_root_path(const char *a, const char *b)
+{
+	const char *wa;
+
+	if (b == NULL || *b == '\0')
+		return (a);
+
+	wa = a;
+	while (*b && *b == *wa) {
+		b++;
+		wa++;
+	}
+
+	return ((*b == '\0') ? a : NULL);
+}
+
+void
+pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
+{
+	struct pf_anchor *parent, *exists;
+
+	if (ta->parent == NULL)
+		return;
+
+	if (ta->parent == &t->pftina_rc.main_anchor)
+		parent = &pf_main_anchor;
+	else
+		parent = RB_FIND(pf_anchor_global, &pf_anchors, ta->parent);
+
+	if (parent != ta->parent) {
+		/*
+		 * The parent in global tree is different
+		 */
+		DPFPRINTF(LOG_DEBUG,
+		    "%s parent (%s) found for %s in global tree",
+		    __func__,
+		    PF_ANCHOR_PATH(parent),
+		    ta->path);
+		RB_REMOVE(pf_anchor_node, &ta->parent->children, ta);
+		exists = RB_INSERT(pf_anchor_node, &parent->children, ta);
+		KASSERT(exists == NULL);
+		ta->parent = parent;
+	} else {
+		/*
+		 * anchor must be present in parent's children already
+		 */
+		KASSERT(
+		    RB_FIND(pf_anchor_node, &parent->children, ta) != NULL);
+		DPFPRINTF(LOG_DEBUG,
+		    "%s %s found in %s:children, we are good",
+		    __func__,
+		    PF_ANCHOR_PATH(ta),
+		    PF_ANCHOR_PATH(parent));
+	}
+}
+
+void
+pf_ina_commit_reserved_anchor(struct pf_trans *t)
+{
+	/*
+	 * We must always try to commit PF_RESERVED_ANCHOR.
+	 * Think of situation someone does:
+	 *	echo 'pass in from any to (self)|pfctl -a foo/bar -f -
+	 * to keep things to work we must commit _pf anchor which holds tables
+	 * which support self and interface names.  a.k.a.  dynamic addresses.
+	 * Reserved anchor must go in as first.
+	 */
+	struct pf_anchor *a, *ta;
+	struct pfr_ktable *ktt, *ktw, *exists;
+
+	/*
+	 * poor man's solution. We can not use RB_FIND(), because
+	 * rb-tree look up requires us to allocate a pf_anchor as a key.
+	 * we don't want to allocate memory when doing commit.
+	 */
+	RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
+		if (strcmp(ta->name, PF_RESERVED_ANCHOR) == 0)
+			break;
+	}
+
+	if (ta == NULL)
+		return;
+
+	RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
+	a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+	if (a == NULL) {
+		RB_INSERT(pf_anchor_global, &pf_anchors, ta);
+		ta->ruleset.rules.version++;
+		t->pftina_reserved_anchor = ta;
+		return;
+	}
+	t->pftina_reserved_anchor = a;
+
+	RB_FOREACH_SAFE(ktt, pfr_ktablehead, &ta->ktables, ktw) {
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, ktt);
+		exists = RB_INSERT(pfr_ktablehead, &a->ktables, ktt);
+		if (exists != NULL) {
+			SLIST_INSERT_HEAD(&t->pftina_garbage, ktt,
+			    pfrkt_workq);
+		} else {
+			ktt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			ktt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+			ktt->pfrkt_version++;
+		}
+	}
+
+	TAILQ_INSERT_HEAD(&t->pftina_anchor_list, ta, workq);
+}
+
+void
+pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pf_anchor *exists;
+
+	if (a == NULL) {
+		/*
+		 * Do not create empty rulesets.
+		 */
+		if (TAILQ_EMPTY(ta->ruleset.rules.ptr) &&
+		    ta->tables == 0 && RB_EMPTY(&ta->children) &&
+		    ta->refcnt == 0) {
+			DPFPRINTF(LOG_DEBUG,
+			    "%s will not create empty anchor %s",
+			    __func__, ta->path);
+			/*
+			 * removing ourselves from our direct parent is
+			 * sufficient the rulesets (RB-tree) is walked from
+			 * left to right (MIN -> MAX, parent is always grater
+			 * than child).
+			 */
+			if (ta->parent != NULL)
+				RB_REMOVE(pf_anchor_node,
+				    &ta->parent->children, ta);
+			return;
+		}
+
+		DPFPRINTF(LOG_DEBUG, "%s moving %s", __func__,
+		    PF_ANCHOR_PATH(ta));
+		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
+		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
+		KASSERT(exists == NULL);
+		if (ta->parent != NULL) {
+			pf_update_parent(t, ta);
+		}
+		pf_refresh_rules(t, ta);
+		ta->ruleset.rules.version++;
+	} else {
+		if (pf_match_root_path(a->path, t->pftina_anchor_path) ==
+		    a->path)
+			pf_swap_anchors_ina(t, ta, a);
+		else
+			DPFPRINTF(LOG_DEBUG, "%s skipping %s",
+			    __func__, a->path);
+	}
+}
+
+void
+pf_walk_anchor_subtree(struct pf_anchor *root, void *arg,
+    void(*f)(struct pf_anchor *, void *))
+{
+	struct pf_anchor *recursive_a, *aux_a;
+	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
+
+	if (root == NULL)
+		return;
+
+	DPFPRINTF(LOG_DEBUG, "%s root: %s", __func__, PF_ANCHOR_PATH(root));
+	f(root, arg);
+
+	/*
+	 * unwind recursion into lists so we can descent to leaf child without
+	 * risking stack overflow.
+	 */
+	TAILQ_INIT(&recursive_l);
+	TAILQ_INIT(&aux);
+
+	RB_FOREACH(aux_a, pf_anchor_node, &root->children) {
+		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
+	}
+
+	while (!TAILQ_EMPTY(&recursive_l)) {
+		TAILQ_FOREACH(recursive_a, &recursive_l, workq) {
+			RB_FOREACH(aux_a, pf_anchor_node,
+			    &recursive_a->children) {
+				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
+			}
+			DPFPRINTF(LOG_DEBUG, "%s node: %s", __func__,
+			    PF_ANCHOR_PATH(recursive_a));
+			f(recursive_a, arg);
+		}
+		/*
+		 * move to the next level towards a leaf in anchor tree.
+		 */
+		TAILQ_INIT(&recursive_l);
+		TAILQ_CONCAT(&recursive_l, &aux, workq);
+	}
+}
+
+void
+pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
+{
+	struct pfr_ktable	*kt, *ktw, *kt_parent;
+	struct pf_anchor	*parent;
+	struct pfr_ktable	*call_arg[2];
+
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
+		pfr_print_table("pf_kill_unused_tables", a, kt);
+		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
+			DPFPRINTF(LOG_DEBUG,
+			    "%s try to find active parent for %s@%s",
+			    __func__, kt->pfrkt_name, PF_ANCHOR_PATH(a));
+			parent = a->parent;
+			kt_parent = NULL;
+			while (parent != NULL) {
+				kt_parent = RB_FIND(pfr_ktablehead,
+				    &parent->ktables, kt);
+				if (kt_parent != NULL)
+					break;
+				parent = parent->parent;
+			}
+
+			if (kt_parent != NULL) {
+				DPFPRINTF(LOG_DEBUG, "%s found parent: %s@%s",
+				    __func__, kt_parent->pfrkt_name,
+				    kt_parent->pfrkt_anchor);
+				call_arg[0] = kt;
+				call_arg[1] = kt_parent;
+				pf_update_tablerefs_anchor(a, (void *)call_arg);
+			}
+		}
+
+		if ((kt->pfrkt_refcnt == 0) &&
+		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
+			DPFPRINTF(LOG_DEBUG, "%s removing %s@%s", __func__,
+			    kt->pfrkt_name, PF_ANCHOR_PATH(a));
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
+			a->tables--;
+		}
+	}
+}
+
+void
+pf_ina_commit(struct pf_trans *t)
+{
+	struct pf_anchor	*ta, *taw, *a;
+	int			 i;
+
+	if (t->pftina_modify_defaults) {
+		/*
+		 * too late to derail transaction here.  I think
+		 * warning we failed to update limit is sufficient
+		 * here.
+		 */
+		for (i = 0; i < PF_LIMIT_MAX; i++) {
+			struct pool *pp;
+
+			if ((t->pftina_modify_defaults & (1 << i)) == 0)
+				continue;
+
+			pp = (struct pool *)pf_pool_limits[i].pp;
+			if (pp->pr_nout > t->pftina_pool_limits[i]) {
+				log(LOG_WARNING,
+				    "pr_nout (%u) exceeds new "
+				    "limit (%u) for %s at commit\n",
+				    pp->pr_nout,
+				    t->pftina_pool_limits[i],
+				    pp->pr_wchan);
+			} else if (t->pftina_pool_limits[i] !=
+			    pf_pool_limits[i].limit &&
+			    pool_sethardlimit(pp, t->pftina_pool_limits[i]) != 0) {
+				log(LOG_WARNING,
+				    "setting limit to %u failed "
+				    "for %s at commit\n",
+				    t->pftina_pool_limits[i],
+				    pp->pr_wchan);
+			} else {
+				pf_pool_limits[i].limit =
+				    t->pftina_pool_limits[i];
+			}
+		}
+
+		/*
+		 * is there a better way to modify default rule?
+		 */
+		pf_default_rule = t->pftina_default_rule;
+
+		for (i = 0; i < PFTM_MAX; i++) {
+			int old = pf_default_rule.timeout[i];
+
+			pf_default_rule.timeout[i] =
+			    t->pftina_default_rule.timeout[i];
+
+			if (i == PFTM_INTERVAL &&
+			    pf_default_rule.timeout[i] < old)
+				task_add(net_tq(0), &pf_purge_task);
+		}
+
+		pf_default_vers++;
+	}
+
+	pf_ina_commit_reserved_anchor(t);
+
+	/*
+	 * Commit non-global rulesets first, so main ruleset
+	 * main ruleset can easily refer to children anchors.
+	 */
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw) {
+		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
+		    &pf_anchors, ta));
+	}
+
+	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0) {
+		pf_ina_commit_anchor(t, &t->pftina_rc.main_anchor,
+		    &pf_main_anchor);
+	}
+
+	/*
+	 * remove tables with no references unless they are persistent
+	 */
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+		pf_kill_unused_tables(t, a);
+	}
+
+	pf_kill_unused_tables(t, &pf_main_anchor);
+}
+
+void
+pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	switch (t->pfttab_iocmd) {
+	case DIOCRADDTABLES:
+		pfr_addtables_commit(t, ta, a);
+		break;
+	case DIOCRDELTABLES:
+		pfr_deltables_commit(t, ta, a);
+		break;
+	case DIOCRCLRTSTATS:
+		pfr_clrtstats_commit(t, ta, a);
+		break;
+	case DIOCRSETTFLAGS:
+		pfr_settflags_commit(t, ta, a);
+		break;
+	case DIOCRADDADDRS:
+		pfr_addaddrs_commit(t, ta, a);
+		break;
+	case DIOCRDELADDRS:
+		pfr_deladdrs_commit(t, ta, a);
+		break;
+	case DIOCRSETADDRS:
+		pfr_setaddrs_commit(t, ta, a);
+		break;
+	case DIOCRCLRADDRS:
+		pfr_clraddrs_commit(t, ta, a);
+		break;
+	default:
+		panic("%s unexpected iocmd for transaction on /",
+		    __func__);
+	}
+}
+
+void
+pf_tab_commit(struct pf_trans *t)
+{
+	struct pf_anchor *ta, *taw, *a, *exists;
+	struct pfr_ktable *kt;
+
+	if (!RB_EMPTY(&t->pfttab_rc.main_anchor.ktables))
+		pf_tab_do_commit_op(t, &t->pfttab_rc.main_anchor,
+		    &pf_main_anchor);
+
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pfttab_rc.anchors, taw) {
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+		if (a == NULL) {
+			if (t->pfttab_iocmd == DIOCRADDTABLES) {
+				/*
+				 * move table from transaction anchor to global
+				 * anchor, if table does not exists in global
+				 * anchor.
+				 */
+				if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0) {
+					RB_FOREACH(kt, pfr_ktablehead,
+					    &ta->ktables) {
+						t->pfttab_nadd++;
+					}
+					continue;	/* RB_FOREACH_SAFE() */
+				}
+
+				RB_REMOVE(pf_anchor_global,
+				    &t->pfttab_rc.anchors, ta);
+				exists = RB_INSERT(pf_anchor_global,
+				    &pf_anchors, ta);
+				KASSERT(exists == NULL);
+				if (ta->parent != NULL)
+					pf_update_parent(t, ta);
+				RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
+					kt->pfrkt_version++;
+					kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+					kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+					t->pfttab_nadd++;
+				}
+				pfr_update_table_refs(ta);
+			} else {
+				panic("%s ruleset %s to modify does not exists",
+				    __func__, ta->path);
+			}
+		} else if (pf_match_root_path(a->path,
+		    t->pfttab_anchor_path) == a->path)
+			pf_tab_do_commit_op(t, ta, a);
+	}
+}
+
+void
+pf_commit_trans(struct pf_trans *t)
+{
+	pf_trans_set_commit(&t->pftina_opts);
+
+	switch (t->pft_type) {
+	case PF_TRANS_INA:
+		pf_ina_commit(t);
+		break;
+	case PF_TRANS_TAB:
+		pf_tab_commit(t);
+		break;
+	default:
+		panic("%s unknown transaction type (%d)",
+		    __func__, t->pft_type);
+	}
+
+	pf_remove_orphans(t);
+}
+
+void
+pf_cleanup_tina(struct pf_trans *t)
+{
+	struct pf_anchor *ta, *tw;
+	struct pfr_ktable *tkt, *tktw;
+	struct pf_rule *r;
+	struct pf_ruleset *rs;
+
+	KASSERT(t->pft_type == PF_TRANS_INA);
+
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, tw) {
+		DPFPRINTF(LOG_DEBUG, "%s removing %s",
+		    __func__, PF_ANCHOR_PATH(ta));
+		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
+		while ((r = TAILQ_FIRST(ta->ruleset.rules.ptr)) != NULL) {
+			/*
+			 * Note we did call RB_REMOVE() already on anchor `ta`,
+			 * therefore we pass NULL here to avoid calling
+			 * pf_remove_if_empty_ruleset() which would attempt to
+			 * remove anchor removed already.
+			 */
+			TAILQ_REMOVE(ta->ruleset.rules.ptr, r, entries);
+			ta->ruleset.rules.rcount--;
+			pf_destroy_rule( r);
+		}
+		/*
+		 * bump version number so any racing GETRULES ioctl()
+		 * knows world has changed.
+		 */
+		ta->ruleset.rules.version++;
+
+		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
+			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
+			pfr_destroy_ktable(tkt, 1);
+		}
+		/*
+		 * Unlike pf_remove_if_empty_ruleset() we don't need to deal
+		 * with parents, because all parents are part of transaction
+		 * (are found in t->pftina_rc.anchors).
+		 */
+		pf_anchor_rele(ta);
+	}
+
+	rs = &t->pftina_rc.main_anchor.ruleset;
+	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
+		TAILQ_REMOVE(rs->rules.ptr, r, entries);
+		pf_destroy_rule(r);
+		rs->rules.rcount--;
+	}
+
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead,
+	    &t->pftina_rc.main_anchor.ktables, tktw) {
+		RB_REMOVE(pfr_ktablehead,
+		    &t->pftina_rc.main_anchor.ktables, tkt);
+		pfr_destroy_ktable(tkt, 1);
+	}
+
+	while ((ta = TAILQ_FIRST(&t->pftina_anchor_list)) != NULL) {
+		TAILQ_REMOVE(&t->pftina_anchor_list, ta, workq);
+		KASSERT(ta->refcnt == 0);
+		KASSERT(ta->tables == 0);
+		KASSERT(RB_EMPTY(&ta->children));
+		KASSERT(RB_EMPTY(&ta->ktables));
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+		/*
+		 * bump version number so any racing GETRULES ioctl()
+		 * knows world has changed.
+		 */
+		ta->ruleset.rules.version++;
+		pf_anchor_rele(ta);
+	}
+
+	while ((tkt = SLIST_FIRST(&t->pftina_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pftina_garbage, pfrkt_workq);
+		pfr_destroy_ktable(tkt, 1);
+	}
+}
+
+void
+pf_init_tina(struct pf_trans *t)
+{
+	t->pft_type = PF_TRANS_INA;
+
+	RB_INIT(&t->pftina_rc.anchors);
+	TAILQ_INIT(&t->pftina_anchor_list);
+	SLIST_INIT(&t->pftina_garbage);
+	pf_init_ruleset(&t->pftina_rc.main_anchor.ruleset);
+	t->pftina_default_rule = pf_default_rule;
+	t->pftina_default_vers = pf_default_vers;
+}
+
+void
+pf_cleanup_ttab(struct pf_trans *t)
+{
+	struct pf_anchor *ta, *tw;
+	struct pfr_ktable *tkt, *tktw;
+	struct pfr_kentry *ke;
+
+	KASSERT(t->pft_type == PF_TRANS_TAB);
+
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pfttab_rc.anchors, tw) {
+		RB_REMOVE(pf_anchor_global, &t->pfttab_rc.anchors, ta);
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+
+		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
+			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
+			pfr_destroy_ktable(tkt, 1);
+		}
+		/*
+		 * Let concurrent GETRULES ioctl() know world has changed
+		 */
+		ta->ruleset.rules.version++;
+		pf_anchor_rele(ta);
+	}
+
+	KASSERT(TAILQ_EMPTY(t->pfttab_rc.main_anchor.ruleset.rules.ptr));
+
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead,
+	    &t->pfttab_rc.main_anchor.ktables, tktw) {
+		RB_REMOVE(pfr_ktablehead,
+		    &t->pfttab_rc.main_anchor.ktables, tkt);
+		pfr_destroy_ktable(tkt, 1);
+	}
+
+	while ((ta = TAILQ_FIRST(&t->pfttab_anchor_list)) != NULL) {
+		TAILQ_REMOVE(&t->pfttab_anchor_list, ta, workq);
+		KASSERT(ta->refcnt == 0);
+		KASSERT(ta->tables == 0);
+		KASSERT(RB_EMPTY(&ta->children));
+		KASSERT(RB_EMPTY(&ta->ktables));
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+		/*
+		 * Let concurrent GETRULES ioctl() know world has changed
+		 */
+		pf_anchor_rele(ta);
+	}
+
+	while ((tkt = SLIST_FIRST(&t->pfttab_kt_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_kt_garbage, pfrkt_workq);
+		pfr_destroy_ktable(tkt, 1);
+	}
+
+	while ((ke = SLIST_FIRST(&t->pfttab_ke_ioq)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_ke_ioq, pfrke_ioq);
+		switch (ke->pfrke_fb) {
+		case PFR_FB_ADDED:
+			break;
+		default:
+			pfr_destroy_kentry(ke);
+		}
+	}
+
+	while ((ke = SLIST_FIRST(&t->pfttab_ke_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_ke_garbage, pfrke_workq);
+		pfr_destroy_kentry(ke);
+	}
+
+	if (t->pfttab_kbuf_sz != 0)
+		free(t->pfttab_kbuf, M_PF, t->pfttab_kbuf_sz);
+}
+
+void
+pf_init_ttab(struct pf_trans *t)
+{
+	t->pft_type = PF_TRANS_TAB;
+
+	RB_INIT(&t->pfttab_rc.anchors);
+	TAILQ_INIT(&t->pfttab_anchor_list);
+	SLIST_INIT(&t->pfttab_ke_ioq);
+	SLIST_INIT(&t->pfttab_kt_garbage);
+	SLIST_INIT(&t->pfttab_ke_garbage);
+	pf_init_ruleset(&t->pfttab_rc.main_anchor.ruleset);
+}
+
 void
 pf_free_trans(struct pf_trans *t)
 {
 	switch (t->pft_type) {
 	case PF_TRANS_GETRULE:
 		pf_cleanup_tgetrule(t);
+		break;
+	case PF_TRANS_INA:
+		pf_cleanup_tina(t);
+		break;
+	case PF_TRANS_TAB:
+		pf_cleanup_ttab(t);
 		break;
 	default:
 		log(LOG_ERR, "%s unknown transaction type: %d\n",
