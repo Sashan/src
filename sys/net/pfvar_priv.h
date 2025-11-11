@@ -310,6 +310,7 @@ struct pf_statelim {
 	RBT_ENTRY(pf_statelim)		 pfstlim_nm_tree;
 	TAILQ_ENTRY(pf_statelim)	 pfstlim_list;
 	struct kstat			*pfstlim_ks;
+	struct kstat			*pfstlim_ks_commit;
 
 	uint32_t			 pfstlim_id;
 	char				 pfstlim_nm[PF_STATELIM_NAME_LEN];
@@ -355,13 +356,6 @@ RBT_HEAD(pf_statelim_nm_tree, pf_statelim);
 RBT_PROTOTYPE(pf_statelim_nm_tree, pf_statelim, pfstlim_nm_tree, cmp);
 
 TAILQ_HEAD(pf_statelim_list, pf_statelim);
-
-extern struct pf_statelim_id_tree pf_statelim_id_tree_active;
-extern struct pf_statelim_list pf_statelim_list_active;
-
-extern struct pf_statelim_id_tree pf_statelim_id_tree_inactive;
-extern struct pf_statelim_nm_tree pf_statelim_nm_tree_inactive;
-extern struct pf_statelim_list pf_statelim_list_inactive;
 
 static inline unsigned int
 pf_statelim_enter(struct pf_statelim *pfstlim)
@@ -421,6 +415,7 @@ struct pf_sourcelim {
 	RBT_ENTRY(pf_sourcelim)		 pfsrlim_nm_tree;
 	TAILQ_ENTRY(pf_sourcelim)	 pfsrlim_list;
 	struct kstat			*pfsrlim_ks;
+	struct kstat			*pfsrlim_ks_commit;
 
 	uint32_t			 pfsrlim_id;
 	char				 pfsrlim_nm[PF_SOURCELIM_NAME_LEN];
@@ -486,12 +481,29 @@ RBT_PROTOTYPE(pf_sourcelim_nm_tree, pf_sourcelim, pfsrlim_nm_tree, cmp);
 
 TAILQ_HEAD(pf_sourcelim_list, pf_sourcelim);
 
-extern struct pf_sourcelim_id_tree pf_sourcelim_id_tree_active;
-extern struct pf_sourcelim_list pf_sourcelim_list_active;
+/*
+ * The kernel variant of pf_rules_container includes
+ * member for source limitter (sourcelim*). We don't want
+ * to export source limiter internals to userland, hence the
+ * onlu option is to introduce two variants for pf_rules_container.
+ */
+struct pf_rules_container {
+	struct pf_anchor_global		anchors;
+	struct pf_anchor		main_anchor;
+	struct pf_sourcelim_id_tree	sourcelim_id_tree;
+	struct pf_sourcelim_list	sourcelim_list;
+	struct pf_statelim_id_tree	statelim_id_tree;
+	struct pf_statelim_list		statelim_list;
+};
+extern struct pf_rules_container pf_global;
 
-extern struct pf_sourcelim_id_tree pf_sourcelim_id_tree_inactive;
-extern struct pf_sourcelim_nm_tree pf_sourcelim_nm_tree_inactive;
-extern struct pf_sourcelim_list pf_sourcelim_list_inactive;
+#define pf_anchors	pf_global.anchors
+#define pf_main_anchor	pf_global.main_anchor
+#define pf_main_ruleset		pf_main_anchor.ruleset
+#define	pf_sourcelim_id_tree_g	pf_global.sourcelim_id_tree
+#define	pf_sourcelim_list_g	pf_global.sourcelim_list
+#define	pf_statelim_id_tree_g	pf_global.statelim_id_tree
+#define	pf_statelim_list_g	pf_global.statelim_list
 
 static inline unsigned int
 pf_sourcelim_enter(struct pf_sourcelim *pfsrlim)
@@ -634,6 +646,10 @@ struct pf_trans {
 			struct pfr_ktableworkq	 ina_garbage;
 			struct pf_rules_container
 						 ina_rc;
+			struct pf_sourcelim_nm_tree
+						 ina_sourcelim_nm_tree;
+			struct pf_statelim_nm_tree
+						 ina_statelim_nm_tree;
 			struct pf_anchor	*ina_reserved_anchor;
 			unsigned		 ina_pool_limits[PF_LIMIT_MAX];
 			struct pf_rule		 ina_default_rule;
@@ -680,6 +696,10 @@ struct pf_trans {
 #define pftina_anchor_list	u.u_ina.ina_anchor_list
 #define pftina_garbage		u.u_ina.ina_garbage
 #define pftina_rc		u.u_ina.ina_rc
+#define	pftina_sourcelim_nm_tree \
+				u.u_ina.ina_sourcelim_nm_tree
+#define	pftina_statelim_nm_tree \
+				u.u_ina.ina_statelim_nm_tree
 #define pftina_reserved_anchor	u.u_ina.ina_reserved_anchor
 #define	pftina_pool_limits	u.u_ina.ina_pool_limits
 #define pftina_default_rule	u.u_ina.ina_default_rule

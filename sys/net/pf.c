@@ -406,18 +406,6 @@ pf_source_ioc_cmp(const struct pf_source *a, const struct pf_source *b)
 
 RBT_GENERATE(pf_source_ioc_tree, pf_source, pfsr_ioc_tree, pf_source_ioc_cmp);
 
-struct pf_sourcelim_id_tree pf_sourcelim_id_tree_active =
-    RBT_INITIALIZER(pf_sourcelim_id_tree_active);
-struct pf_sourcelim_list pf_sourcelim_list_active =
-    TAILQ_HEAD_INITIALIZER(pf_sourcelim_list_active);
-
-struct pf_sourcelim_id_tree pf_sourcelim_id_tree_inactive =
-    RBT_INITIALIZER(pf_sourcelim_id_tree_inactive);
-struct pf_sourcelim_nm_tree pf_sourcelim_nm_tree_inactive =
-    RBT_INITIALIZER(pf_sourcelim_nm_tree_inactive);
-struct pf_sourcelim_list pf_sourcelim_list_inactive =
-    TAILQ_HEAD_INITIALIZER(pf_sourcelim_list_inactive);
-
 static inline struct pf_statelim *
 pf_statelim_find(uint32_t id)
 {
@@ -438,8 +426,7 @@ pf_sourcelim_find(uint32_t id)
 	/* only the id is used in cmp, so don't have to zero all the things */
 	key.pfsrlim_id = id;
 
-	return (RBT_FIND(pf_sourcelim_id_tree,
-	    &pf_sourcelim_id_tree_active, &key));
+	return (RBT_FIND(pf_sourcelim_id_tree, &pf_sourcelim_id_tree_g, &key));
 }
 
 struct pf_source_list pf_source_gc = TAILQ_HEAD_INITIALIZER(pf_source_gc);

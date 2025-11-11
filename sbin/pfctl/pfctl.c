@@ -1872,7 +1872,7 @@ pfctl_load_statelims(struct pfctl *pf)
 	u_int32_t		 ticket = 0;
 
 	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		ticket = pfctl_get_ticket(pf->trans, PF_TRANS_RULESET, "");
+		ticket = 0; /* XXX fix me with proper transaction */
 
 	RBT_FOREACH(stlim, pfctl_statelim_ids, &pf->statelim_ids) {
 		stlim->ioc.ticket = ticket;
@@ -1904,7 +1904,7 @@ pfctl_load_sourcelims(struct pfctl *pf)
 	u_int32_t		 ticket = 0;
 
 	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		ticket = pfctl_get_ticket(pf->trans, PF_TRANS_RULESET, "");
+		ticket = 0; /* XXX fix me with proper transaction */
 
 	RBT_FOREACH(srlim, pfctl_sourcelim_ids, &pf->sourcelim_ids) {
 		srlim->ioc.ticket = ticket;
