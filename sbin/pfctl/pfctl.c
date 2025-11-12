@@ -1874,7 +1874,7 @@ pfctl_load_statelims(struct pfctl *pf)
 	/*
 	 * we are piggybacking on transaction which loads rules
 	 */
-	if ((pf->opts & PF_OPT_NOACTION) == 0 || pf->trans == NULL)
+	if ((pf->opts & PF_OPT_NOACTION) != 0 || pf->trans == NULL)
 		ticket = 0;
 	else
 		ticket = pf->trans->ticket;
@@ -1894,9 +1894,13 @@ pfctl_load_sourcelim(struct pfctl *pf, struct pfctl_sourcelim *srlim)
 	if (pf->opts & PF_OPT_VERBOSE)
 		print_sourcelim(&srlim->ioc);
 
-	if (pf->opts & PF_OPT_NOACTION)
+	/*
+	 * we are piggybacking on transaction which loads rules
+	 */
+	if (pf->opts & PF_OPT_NOACTION || pf->trans == NULL)
 		return;
 
+	srlim->ioc.ticket = pf->trans->ticket;
 	if (ioctl(pf->dev, DIOCADDSOURCELIM, &srlim->ioc) == -1) {
 		err(1, "DIOCADDSOURCELIM %s id %u",
 		    srlim->ioc.name, srlim->ioc.id);
