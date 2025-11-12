@@ -409,11 +409,13 @@ pf_destroy_rule(struct pf_rule *rule)
 	pf_tbladdr_remove(&rule->route.addr);
 	if (rule->overload_tbl)
 		pfr_detach_table(rule->overload_tbl);
+	PF_LOCK();
 	pfi_kif_unref(rule->rcv_kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->rdr.kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->nat.kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->route.kif, PFI_KIF_REF_RULE);
+	PF_UNLOCK();
 	/*
 	 * destroy rule is being called by transaction cleanup only.
 	 * transaction cleanup removed the anchor from tree already,
@@ -3007,11 +3009,18 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		else
 			rule->nr = 0;
 
+		/*
+		 * OK to grab PF_LOCK() here because the calls to
+		 * pf_kif_setup() won't allocate memory, because
+		 * memory is preallocated already.
+		 */
+		PF_LOCK();
 		rule->kif = pf_kif_setup(rule->kif);
 		rule->rcv_kif = pf_kif_setup(rule->rcv_kif);
 		rule->rdr.kif = pf_kif_setup(rule->rdr.kif);
 		rule->nat.kif = pf_kif_setup(rule->nat.kif);
 		rule->route.kif = pf_kif_setup(rule->route.kif);
+		PF_UNLOCK();
 
 		if (rule->overload_tblname[0]) {
 			if ((rule->overload_tbl = pfr_attach_table(
@@ -6206,17 +6215,23 @@ pf_statelim_kstat_attach(struct pf_statelim *pfstlim)
 	if (ks != NULL)
 		return;
 
-	d = malloc(sizeof(*d), M_DEVBUF, M_WAITOK|M_CANFAIL|M_ZERO);
-	if (d == NULL) {
-		printf("pf: unable to allocate state-limiter kstat\n");
-		return;
-	}
-
+	/*
+	 * failure here typically means transaction attempts to create
+	 * a duplicate kstat. This typically happens when transaction
+	 * is going to modify existing limiter object.
+	 */
 	ks = kstat_create("pf", 0, "state-limiter", pfstlim->pfstlim_id,
 	    KSTAT_T_KV, 0);
-	if (ks == NULL) {
-		printf("pf: unable to create state-limiter kstat\n");
-		free(d, M_DEVBUF, sizeof(*d));
+	if (ks == NULL)
+		return;
+
+	d = malloc(sizeof(*d), M_DEVBUF, M_WAITOK|M_CANFAIL|M_ZERO);
+	if (d == NULL) {
+		/*
+		 * failure to kstat_create() is more common in case of pf.
+		 */
+		kstat_destroy(ks);
+		printf("pf: unable to allocate state-limiter kstat\n");
 		return;
 	}
 
@@ -6282,17 +6297,23 @@ pf_sourcelim_kstat_attach(struct pf_sourcelim *pfsrlim)
 	if (ks != NULL)
 		return;
 
-	d = malloc(sizeof(*d), M_DEVBUF, M_WAITOK|M_CANFAIL|M_ZERO);
-	if (d == NULL) {
-		printf("pf: unable to allocate source-limiter kstat\n");
-		return;
-	}
-
+	/*
+	 * failure here typically means transaction attempts to create
+	 * a duplicate kstat. This typically happens when transaction
+	 * is going to modify existing limiter object.
+	 */
 	ks = kstat_create("pf", 0, "source-limiter", pfsrlim->pfsrlim_id,
 	    KSTAT_T_KV, 0);
-	if (ks == NULL) {
-		printf("pf: unable to create source-limiter kstat\n");
-		free(d, M_DEVBUF, sizeof(*d));
+	if (ks == NULL)
+		return;
+
+	d = malloc(sizeof(*d), M_DEVBUF, M_WAITOK|M_CANFAIL|M_ZERO);
+	if (d == NULL) {
+		/*
+		 * failure to kstat_create() is more common in case of pf.
+		 */
+		kstat_destroy(ks);
+		printf("pf: unable to allocate source-limiter kstat\n");
 		return;
 	}
 
