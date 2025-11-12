@@ -1869,11 +1869,17 @@ void
 pfctl_load_statelims(struct pfctl *pf)
 {
 	struct pfctl_statelim	*stlim;
-	u_int32_t		 ticket = 0;
+	u_int32_t ticket;
 
-	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		ticket = 0; /* XXX fix me with proper transaction */
+	/*
+	 * we are piggybacking on transaction which loads rules
+	 */
+	if ((pf->opts & PF_OPT_NOACTION) == 0 || pf->trans == NULL)
+		ticket = 0;
+	else
+		ticket = pf->trans->ticket;
 
+	fprintf(stderr, "%s ticket: %u\n", __func__, ticket);
 	RBT_FOREACH(stlim, pfctl_statelim_ids, &pf->statelim_ids) {
 		stlim->ioc.ticket = ticket;
 		pfctl_load_statelim(pf, stlim);
