@@ -1158,8 +1158,9 @@ pf_statelim_add(struct pf_trans *t, const struct pfioc_statelim *ioc)
 	if ((ioc->rate.limit == 0) != (ioc->rate.seconds == 0))
 		return (EINVAL);
 
-	namelen = strnlen(ioc->name, sizeof(ioc->name));
-	if (namelen == sizeof(ioc->name))
+	namelen = strnlen(ioc->name, sizeof(pfstlim->pfstlim_nm));
+	if (namelen == sizeof(pfstlim->pfstlim_nm) &&
+	    ioc->name[namelen] != '\0')
 		return (EINVAL);
 
 	pfstlim = pool_get(&pf_statelim_pl, PR_WAITOK|PR_ZERO);
@@ -1413,13 +1414,16 @@ pf_sourcelim_add(struct pf_trans *t, const struct pfioc_sourcelim *ioc)
 	if (ioc->inet6_prefix > 128)
 		return (EINVAL);
 
-	namelen = strnlen(ioc->name, sizeof(ioc->name));
-	if (namelen == sizeof(ioc->name))
+
+	namelen = strnlen(ioc->name, sizeof(pfsrlim->pfsrlim_nm));
+	if (namelen == sizeof(pfsrlim->pfsrlim_nm) &&
+	    ioc->name[namelen] != '\0')
 		return (EINVAL);
 
 	tablelen = strnlen(ioc->overload_tblname,
-	    sizeof(ioc->overload_tblname));
-	if (tablelen == sizeof(ioc->overload_tblname))
+	    sizeof(pfsrlim->pfsrlim_overload.name));
+	if (tablelen == sizeof(pfsrlim->pfsrlim_overload.name) &&
+	    ioc->overload_tblname[tablelen] != '\0')
 		return (EINVAL);
 	if (tablelen != 0) {
 		if (ioc->overload_hwm == 0)
