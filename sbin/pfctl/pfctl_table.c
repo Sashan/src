@@ -57,7 +57,7 @@ extern void	usage(void);
 static void	print_table(struct pfr_table *, int, int);
 static void	print_tstats(struct pfr_tstats *, int);
 static int	load_addr(struct pfr_buffer *, int, char *[], char *, int, int);
-static void	print_addrx(struct pfr_addr *, struct pfr_addr *, int);
+static void	print_addrx(struct pfr_addr *, struct pfr_addr *, int, int);
 static void	print_astats(struct pfr_astats *, int);
 static void	xprintf(int, const char *, ...);
 static void	print_iface(struct pfi_kif *, int);
@@ -208,7 +208,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 				if (opts & PF_OPT_VERBOSE2 ||
 				    a->pfra_fback != PFR_FB_NONE)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "delete")) {
 		b.pfrb_type = PFRB_ADDRS;
 		if (load_addr(&b, argc, argv, file, 0, opts))
@@ -223,7 +223,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 				if (opts & PF_OPT_VERBOSE2 ||
 				    a->pfra_fback != PFR_FB_NONE)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "replace")) {
 		b.pfrb_type = PFRB_ADDRS;
 		if (load_addr(&b, argc, argv, file, 0, opts))
@@ -255,7 +255,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 				if (opts & PF_OPT_VERBOSE2 ||
 				    a->pfra_fback != PFR_FB_NONE)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "expire")) {
 		const char		*errstr;
 		u_int			 lifetime;
@@ -294,7 +294,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 				if (opts & PF_OPT_VERBOSE2 ||
 				    a->pfra_fback != PFR_FB_NONE)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "show")) {
 		b.pfrb_type = (opts & PF_OPT_VERBOSE) ?
 			PFRB_ASTATS : PFRB_ADDRS;
@@ -316,7 +316,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 			if (opts & PF_OPT_VERBOSE)
 				print_astats(p, opts & PF_OPT_USEDNS);
 			else
-				print_addrx(p, NULL, opts & PF_OPT_USEDNS);
+				print_addrx(p, NULL, opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "test")) {
 		b.pfrb_type = PFRB_ADDRS;
 		b2.pfrb_type = PFRB_ADDRS;
@@ -336,12 +336,12 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 			PFRB_FOREACH(a, &b)
 				if (a->pfra_fback == PFR_FB_MATCH)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 		if (opts & PF_OPT_VERBOSE2) {
 			a2 = NULL;
 			PFRB_FOREACH(a, &b) {
 				a2 = pfr_buf_next(&b2, a2);
-				print_addrx(a2, a, opts & PF_OPT_USEDNS);
+				print_addrx(a2, a, opts & PF_OPT_USEDNS, 0);
 			}
 		}
 		if (nmatch < b.pfrb_size)
@@ -360,7 +360,7 @@ pfctl_table(int argc, char *argv[], char *tname, const char *command,
 				if (opts & PF_OPT_VERBOSE2 ||
 				    a->pfra_fback != PFR_FB_NONE)
 					print_addrx(a, NULL,
-					    opts & PF_OPT_USEDNS);
+					    opts & PF_OPT_USEDNS, 0);
 	} else if (!strcmp(command, "zero")) {
 		flags |= PFR_FLAG_ADDRSTOO;
 		RVTEST(pfr_clr_tstats(&table, 1, &nzero, flags));
@@ -383,16 +383,19 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 	if (!debug && !(ta->pfrt_flags & PFR_TFLAG_ACTIVE))
 		return;
 	if (verbose)
-		printf("%c%c%c%c%c%c%c\t",
+		printf("%c%c%c%c%c%c%c%c\t",
 		    (ta->pfrt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_INACTIVE) ? 'i' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_REFDANCHOR) ? 'h' : '-',
+		    (ta->pfrt_flags & PFR_TFLAG_TIMEOUT) ? 't' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
 
 	printf("%s", ta->pfrt_name);
+	if (ta->pfrt_flags & PFR_TFLAG_TIMEOUT)
+		printf(" timeout(%u)", ta->pfrt_timeout);
 	if (ta->pfrt_anchor[0] != '\0')
 		printf("@%s", ta->pfrt_anchor);
 
@@ -452,11 +455,19 @@ load_addr(struct pfr_buffer *b, int argc, char *argv[], char *file,
 }
 
 void
-print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns)
+print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns, int verbose)
 {
 	char		ch, buf[256] = "{error}";
 	char		fb[] = { ' ', 'M', 'A', 'D', 'C', 'Z', 'X', ' ', 'Y', ' ' };
 	unsigned int	fback, hostnet;
+	time_t		now = time(NULL);
+
+	/*
+	 * do not print expired addresses, those are printed in verbose output
+	 * only.
+	 */
+	if (verbose == 0 && rad->pfra_expire != 0 && rad->pfra_expire >= now)
+		return;
 
 	fback = (rad != NULL) ? rad->pfra_fback : ad->pfra_fback;
 	ch = (fback < sizeof(fb)/sizeof(*fb)) ? fb[fback] : '?';
@@ -499,6 +510,12 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns)
 	}
 	if (ad->pfra_ifname[0] != '\0')
 		printf("@%s", ad->pfra_ifname);
+	if (verbose != 0 && ad->pfra_expire != 0) {
+		if (ad->pfra_expire >= now)
+			printf("\t[ expired %llds ago ]", rad->pfra_expire - now);
+		else
+			printf("\t[ expires in %llds ]", rad->pfra_expire - now);
+	}
 	printf("\n");
 }
 
@@ -510,7 +527,7 @@ print_astats(struct pfr_astats *as, int dns)
 	char	*ct;
 
 	ct = ctime(&time);
-	print_addrx(&as->pfras_a, NULL, dns);
+	print_addrx(&as->pfras_a, NULL, dns, 1);
 	if (ct)
 		printf("\tCleared:     %s", ctime(&time));
 	else

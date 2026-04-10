@@ -1229,7 +1229,7 @@ print_rule(struct pfctl *pf, struct pf_rule *r, const char *anchor_call,
 }
 
 void
-print_tabledef(const char *name, int flags, int addrs,
+print_tabledef(const char *name, int flags, int addrs, uint32_t timeout,
     struct node_tinithead *nodes)
 {
 	struct node_tinit	*ti, *nti;
@@ -1242,6 +1242,8 @@ print_tabledef(const char *name, int flags, int addrs,
 		printf(" persist");
 	if (flags & PFR_TFLAG_COUNTERS)
 		printf(" counters");
+	if (flags & PFR_TFLAG_TIMEOUT)
+		printf(" timeout(%u)", timeout);
 	SIMPLEQ_FOREACH(ti, nodes, entries) {
 		if (ti->file) {
 			printf(" file \"%s\"", ti->file);

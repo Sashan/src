@@ -276,12 +276,14 @@ int	pfctl_load_queues(struct pfctl *);
 int	pfctl_add_queue(struct pfctl *, struct pf_queuespec *);
 struct pfctl_qsitem *	pfctl_find_queue(char *, struct pf_qihead *);
 
-void	print_pool(struct pf_pool *, u_int16_t, u_int16_t, sa_family_t, int, int);
+void	print_pool(struct pf_pool *, u_int16_t, u_int16_t, sa_family_t, int,
+	    int);
 void	print_src_node(struct pf_src_node *, int);
 void	print_statelim(const struct pfioc_statelim *);
 void	print_sourcelim(const struct pfioc_sourcelim *);
 void	print_rule(struct pfctl *pf, struct pf_rule *, const char *, int);
-void	print_tabledef(const char *, int, int, struct node_tinithead *);
+void	print_tabledef(const char *, int, int, uint32_t,
+	    struct node_tinithead *);
 void	print_status(struct pf_status *, struct pfctl_watermarks *, int);
 void	print_queuespec(struct pf_queuespec *);
 

@@ -872,15 +872,18 @@ RB_PROTOTYPE(pf_anchor_node, pf_anchor, entry_node, pf_anchor_compare)
 #define PFR_TFLAG_REFERENCED	0x00000010
 #define PFR_TFLAG_REFDANCHOR	0x00000020
 #define PFR_TFLAG_COUNTERS	0x00000040
+#define PFR_TFLAG_TIMEOUT	0x00000080
+#define PFR_TFLAG_NEED_PURGE	0x00000100
 /* Adjust masks below when adding flags. */
-#define PFR_TFLAG_USRMASK	0x00000043
-#define PFR_TFLAG_SETMASK	0x0000003C
-#define PFR_TFLAG_ALLMASK	0x0000007F
+#define PFR_TFLAG_USRMASK	0x000000C3
+#define PFR_TFLAG_SETMASK	0x0000013C
+#define PFR_TFLAG_ALLMASK	0x000001FF
 
 struct pfr_table {
 	char			 pfrt_anchor[PATH_MAX];
 	char			 pfrt_name[PF_TABLE_NAME_SIZE];
 	u_int32_t		 pfrt_flags;
+	u_int32_t		 pfrt_timeout;
 	u_int8_t		 pfrt_fback;
 };
 
@@ -894,6 +897,7 @@ struct pfr_addr {
 		struct in6_addr	 _pfra_ip6addr;
 	}		 pfra_u;
 	char		 pfra_ifname[IFNAMSIZ];
+	time_t		 pfra_expire;
 	u_int32_t	 pfra_states;
 	u_int16_t	 pfra_weight;
 	u_int8_t	 pfra_af;
@@ -1898,6 +1902,7 @@ int	pfr_ina_define(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int *, u_int32_t, int);
 struct pfr_ktable
 	*pfr_ktable_select_active(struct pfr_ktable *);
+void	pfr_purge_overload(void);
 
 extern struct pfi_kif		*pfi_all;
 

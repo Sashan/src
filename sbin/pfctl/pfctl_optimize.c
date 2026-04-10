@@ -564,7 +564,7 @@ combine_rules(struct pfctl *pf, struct superblock *block)
 
 			if (pf->opts & PF_OPT_VERBOSE)
 				print_tabledef(p1->por_src_tbl->pt_name,
-				    PFR_TFLAG_CONST, 1,
+				    PFR_TFLAG_CONST, 1, 0,
 				    &p1->por_src_tbl->pt_nodes);
 
 			memset(&p1->por_rule.src.addr, 0,
@@ -595,7 +595,7 @@ combine_rules(struct pfctl *pf, struct superblock *block)
 
 			if (pf->opts & PF_OPT_VERBOSE)
 				print_tabledef(p1->por_dst_tbl->pt_name,
-				    PFR_TFLAG_CONST, 1,
+				    PFR_TFLAG_CONST, 1, 0,
 				    &p1->por_dst_tbl->pt_nodes);
 
 			memset(&p1->por_rule.dst.addr, 0,

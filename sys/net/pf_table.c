@@ -118,7 +118,8 @@ struct pfr_walktree {
 		PFRW_GET_ADDRS,
 		PFRW_GET_ASTATS,
 		PFRW_POOL_GET,
-		PFRW_DYNADDR_UPDATE
+		PFRW_DYNADDR_UPDATE,
+		PFRW_ENQUEUE_EXPIRED
 	}	 pfrw_op;
 	union {
 		struct pfr_addr		*pfrw1_addr;
@@ -129,6 +130,7 @@ struct pfr_walktree {
 	}	 pfrw_1;
 	int	 pfrw_free;
 	int	 pfrw_flags;
+	time_t	 pfrw_now;
 };
 #define pfrw_addr	pfrw_1.pfrw1_addr
 #define pfrw_astats	pfrw_1.pfrw1_astats
@@ -1358,6 +1360,7 @@ pfr_copyout_addr(struct pfr_addr *ad, struct pfr_kentry *ke)
 	ad->pfra_af = ke->pfrke_af;
 	ad->pfra_net = ke->pfrke_net;
 	ad->pfra_type = ke->pfrke_type;
+	ad->pfra_expire = ke->pfrke_expire;
 	if (ke->pfrke_flags & PFRKE_FLAG_NOT)
 		ad->pfra_not = 1;
 
@@ -1476,6 +1479,12 @@ pfr_walktree(struct radix_node *rn, void *arg, u_int id)
 #endif	/* INET6 */
 		default:
 			unhandled_af(ke->pfrke_af);
+		}
+		break;
+	case PFRW_ENQUEUE_EXPIRED:
+		if (ke->pfrke_expire > w->pfrw_now) {
+			SLIST_INSERT_HEAD(w->pfrw_workq, ke, pfrke_workq);
+			w->pfrw_cnt++;
 		}
 		break;
 	}
@@ -2450,10 +2459,13 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 	ke = pfr_kentry_byaddr(kt, a, af, 0);
 
 	match = (ke && !(ke->pfrke_flags & PFRKE_FLAG_NOT));
-	if (match && pfr_kentry_expired(ke) == 0) 
+	if (match && pfr_kentry_expired(ke) == 0)
 		kt->pfrkt_match++;
-	else
+	else {
 		kt->pfrkt_nomatch++;
+		match = 0;
+		kt->pfrkt_flags |= PFR_TFLAG_NEED_PURGE;
+	}
 
 	return (match);
 }
@@ -2932,4 +2944,26 @@ pfr_ktable_select_active(struct pfr_ktable *kt)
 		return (NULL);
 
 	return (kt);
+}
+
+void
+pfr_purge_overload(void)
+{
+	struct pfr_ktable	*kt;
+	struct pfr_kentryworkq	 workq;
+	struct pfr_walktree	 w;
+
+	RB_FOREACH(kt, pfr_ktablehead, &pfr_ktables) {
+		if (kt->pfrkt_flags & PFR_TFLAG_NEED_PURGE) {
+			bzero(&w, sizeof(w));
+			w.pfrw_op = PFRW_ENQUEUE_EXPIRED;
+			w.pfrw_now = gettime();
+			w.pfrw_workq = &workq;
+			SLIST_INIT(&workq);
+			rn_walktree(kt->pfrkt_ip4, pfr_walktree, &w);
+			rn_walktree(kt->pfrkt_ip6, pfr_walktree, &w);
+			pfr_remove_kentries(kt, &workq);
+			kt->pfrkt_flags &= ~PFR_TFLAG_NEED_PURGE;
+		}
+	}
 }

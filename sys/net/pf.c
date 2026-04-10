@@ -1967,6 +1967,7 @@ pf_purge(void *null)
 
 	pf_purge_expired_src_nodes();
 	pf_source_purge();
+	pfr_purge_overload();
 
 	PF_UNLOCK();
 

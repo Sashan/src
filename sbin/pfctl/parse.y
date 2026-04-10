@@ -348,6 +348,7 @@ struct queue_opts {
 struct table_opts {
 	int			flags;
 	int			init_addr;
+	uint32_t		timeout;
 	struct node_tinithead	init_nodes;
 } table_opts;
 
@@ -1401,7 +1402,14 @@ table_opt	: STRING		{
 			    entries);
 			table_opts.init_addr = 1;
 		}
-		| TIMEOUT '(' ttimeout_spec ')' {
+		| TIMEOUT '(' NUMBER ')' {
+			/*
+			 * timeout tables are intended for 'overload' action in
+			 * rules and limiters. They are not supposed to be
+			 * either constant nor manged from command line
+			 * (persistent). Also no support for counters.
+			 */
+			table_opts.flags = PFR_TFLAG_TIMEOUT;
 			table_opts.timeout = $3;
 		}
 		;
@@ -1424,14 +1432,6 @@ table_host_list	: tablespec optnl			{ $$ = $1; }
 			$$ = $1;
 		}
 		;
-
-ttimeout_spec	: NUMBER { $$ = $1; }
-		| NUMBER ':' NUMBER { $$ = 60 * $1 $2 }
-		| NUMBER ':' NUMBER ':' NUMBER {
-			$$ = 3600 * $1 + 60 * $2 + $3;
-		}
-		|k
-		
 
 queuespec	: QUEUE STRING interface queue_opts		{
 			struct node_host	*n;
@@ -4519,7 +4519,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 	}
 	if (pf->opts & PF_OPT_VERBOSE)
 		print_tabledef(name, opts->flags, opts->init_addr,
-		    &opts->init_nodes);
+		    opts->timeout, &opts->init_nodes);
 	if (!(pf->opts & PF_OPT_NOACTION) ||
 	    (pf->opts & PF_OPT_DUMMYACTION))
 		warn_duplicate_tables(name, pf->anchor->path);
@@ -5038,7 +5038,7 @@ collapse_redirspec(struct pf_pool *rpool, struct pf_rule *r,
 		if (pf->opts & PF_OPT_VERBOSE)
 			print_tabledef(tbl->pt_name,
 			    PFR_TFLAG_CONST | tbl->pt_flags,
-			    1, &tbl->pt_nodes);
+			    1, 0, &tbl->pt_nodes);
 
 		memset(&rpool->addr, 0, sizeof(rpool->addr));
 		rpool->addr.type = PF_ADDR_TABLE;
