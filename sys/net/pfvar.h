@@ -958,6 +958,7 @@ struct _pfr_kentry {
 	SLIST_ENTRY(pfr_kentry)	 _pfrke_ioq;
 	struct pfr_kcounters	*_pfrke_counters;
 	time_t			 _pfrke_tzero;
+	time_t			 _pfrke_expire;
 	u_int8_t		 _pfrke_af;
 	u_int8_t		 _pfrke_net;
 	u_int8_t		 _pfrke_flags;
@@ -981,6 +982,7 @@ struct pfr_kentry {
 #define pfrke_ioq	u._ke._pfrke_ioq
 #define pfrke_counters	u._ke._pfrke_counters
 #define pfrke_tzero	u._ke._pfrke_tzero
+#define pfrke_expire	u._ke._pfrke_expire
 #define pfrke_af	u._ke._pfrke_af
 #define pfrke_net	u._ke._pfrke_net
 #define pfrke_flags	u._ke._pfrke_flags
@@ -1032,6 +1034,7 @@ struct pfr_ktable {
 	long			 pfrkt_larg;
 	int			 pfrkt_nflags;
 	u_int64_t		 pfrkt_refcntcost;
+	time_t			 pfrkt_timeout;
 	u_int16_t		 pfrkt_gcdweight;
 	u_int16_t		 pfrkt_maxweight;
 };

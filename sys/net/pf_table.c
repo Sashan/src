@@ -1137,8 +1137,11 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 	int			 rv;
 
 	p = pfr_lookup_addr(kt, ad, 1);
-	if (p != NULL)
+	if (p != NULL) {
+		if (kt->pfrkt_timeout != 0)
+			p->pfrke_expire = tzero + kt->pfrkt_timeout;
 		return (0);
+	}
 	p = pfr_create_kentry(ad);
 	if (p == NULL)
 		return (EINVAL);
@@ -1148,6 +1151,8 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 		return (rv);
 
 	p->pfrke_tzero = tzero;
+	if (kt->pfrkt_timeout != 0)
+		p->pfrke_expire = tzero + kt->pfrkt_timeout;
 	if (p->pfrke_type == PFRKE_COST)
 		kt->pfrkt_refcntcost++;
 	kt->pfrkt_cnt++;
@@ -2422,6 +2427,21 @@ pfr_lookup_table(struct pfr_table *tbl)
 }
 
 int
+pfr_kentry_expired(struct pfr_kentry *ke)
+{
+	time_t	now;
+	int	expired;
+
+	if (ke->pfrke_expire != 0) {
+		now = gettime();
+		expired = (ke->pfrke_expire > now);
+	} else
+		expired = 0;
+
+	return (expired);
+}
+
+int
 pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 {
 	struct pfr_kentry	*ke = NULL;
@@ -2430,7 +2450,7 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 	ke = pfr_kentry_byaddr(kt, a, af, 0);
 
 	match = (ke && !(ke->pfrke_flags & PFRKE_FLAG_NOT));
-	if (match)
+	if (match && pfr_kentry_expired(ke) == 0) 
 		kt->pfrkt_match++;
 	else
 		kt->pfrkt_nomatch++;

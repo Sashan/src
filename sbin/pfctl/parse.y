@@ -1401,6 +1401,9 @@ table_opt	: STRING		{
 			    entries);
 			table_opts.init_addr = 1;
 		}
+		| TIMEOUT '(' ttimeout_spec ')' {
+			table_opts.timeout = $3;
+		}
 		;
 
 tablespec	: xhost	optweight		{
@@ -1421,6 +1424,14 @@ table_host_list	: tablespec optnl			{ $$ = $1; }
 			$$ = $1;
 		}
 		;
+
+ttimeout_spec	: NUMBER { $$ = $1; }
+		| NUMBER ':' NUMBER { $$ = 60 * $1 $2 }
+		| NUMBER ':' NUMBER ':' NUMBER {
+			$$ = 3600 * $1 + 60 * $2 + $3;
+		}
+		|k
+		
 
 queuespec	: QUEUE STRING interface queue_opts		{
 			struct node_host	*n;
