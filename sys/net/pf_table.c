@@ -1140,7 +1140,7 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 
 	p = pfr_lookup_addr(kt, ad, 1);
 	if (p != NULL) {
-		if (kt->pfrkt_timeout != 0)
+		if (kt->pfrkt_flags & PFR_TFLAG_TIMEOUT)
 			p->pfrke_expire = tzero + kt->pfrkt_timeout;
 		return (0);
 	}
@@ -1153,7 +1153,7 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 		return (rv);
 
 	p->pfrke_tzero = tzero;
-	if (kt->pfrkt_timeout != 0)
+	if (kt->pfrkt_flags & PFR_TFLAG_TIMEOUT)
 		p->pfrke_expire = tzero + kt->pfrkt_timeout;
 	if (p->pfrke_type == PFRKE_COST)
 		kt->pfrkt_refcntcost++;
@@ -1416,7 +1416,6 @@ pfr_walktree(struct radix_node *rn, void *arg, u_int id)
 	case PFRW_GET_ADDRS:
 		if (w->pfrw_free-- > 0) {
 			struct pfr_addr ad;
-
 			pfr_copyout_addr(&ad, ke);
 			if (copyout(&ad, w->pfrw_addr, sizeof(ad)))
 				return (EFAULT);
@@ -1482,7 +1481,7 @@ pfr_walktree(struct radix_node *rn, void *arg, u_int id)
 		}
 		break;
 	case PFRW_ENQUEUE_EXPIRED:
-		if (ke->pfrke_expire > w->pfrw_now) {
+		if (ke->pfrke_expire != 0 && ke->pfrke_expire < w->pfrw_now) {
 			SLIST_INSERT_HEAD(w->pfrw_workq, ke, pfrke_workq);
 			w->pfrw_cnt++;
 		}
@@ -2443,7 +2442,7 @@ pfr_kentry_expired(struct pfr_kentry *ke)
 
 	if (ke->pfrke_expire != 0) {
 		now = gettime();
-		expired = (ke->pfrke_expire > now);
+		expired = (ke->pfrke_expire < now);
 	} else
 		expired = 0;
 
@@ -2463,8 +2462,10 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 		kt->pfrkt_match++;
 	else {
 		kt->pfrkt_nomatch++;
-		match = 0;
-		kt->pfrkt_flags |= PFR_TFLAG_NEED_PURGE;
+		if (ke != NULL) {
+			match = 0;
+			kt->pfrkt_flags |= PFR_TFLAG_NEED_PURGE;
+		}
 	}
 
 	return (match);

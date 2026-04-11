@@ -1289,7 +1289,7 @@ again:
 	tablenum++;
 
 	if (pfctl_define_table(tbl->pt_name, PFR_TFLAG_CONST | tbl->pt_flags, 1,
-	    pf->astack[0]->path, tbl->pt_buf, pf->astack[0]->ruleset.tticket,
+	    pf->astack[0]->path, 0, tbl->pt_buf, pf->astack[0]->ruleset.tticket,
 	    NULL)) {
 		warn("failed to create table %s in %s",
 		    tbl->pt_name, pf->astack[0]->name);

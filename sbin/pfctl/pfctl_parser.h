@@ -287,8 +287,8 @@ void	print_tabledef(const char *, int, int, uint32_t,
 void	print_status(struct pf_status *, struct pfctl_watermarks *, int);
 void	print_queuespec(struct pf_queuespec *);
 
-int	pfctl_define_table(char *, int, int, const char *, struct pfr_buffer *,
-	    u_int32_t, struct pfr_uktable *);
+int	pfctl_define_table(char *, int, int, const char *, u_int32_t,
+	    struct pfr_buffer *, u_int32_t, struct pfr_uktable *);
 void	pfctl_expand_label_nr(struct pf_rule *, unsigned int);
 
 void		 pfctl_clear_fingerprints(int, int);

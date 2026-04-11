@@ -4544,7 +4544,8 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 
 	if (!(pf->opts & PF_OPT_NOACTION) &&
 	    pfctl_define_table(name, opts->flags, opts->init_addr,
-	    pf->anchor->path, &ab, pf->anchor->ruleset.tticket, ukt)) {
+	    pf->anchor->path, opts->timeout, &ab, pf->anchor->ruleset.tticket,
+	    ukt)) {
 		yyerror("cannot define table %s: %s", name,
 		    pf_strerror(errno));
 		goto _error;

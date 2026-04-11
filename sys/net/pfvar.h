@@ -936,6 +936,7 @@ struct pfr_tstats {
 };
 #define	pfrts_name	pfrts_t.pfrt_name
 #define pfrts_flags	pfrts_t.pfrt_flags
+#define pfrts_timeout	pfrts_t.pfrt_timeout
 
 struct pfr_kcounters {
 	u_int64_t		 pfrkc_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
@@ -1038,7 +1039,6 @@ struct pfr_ktable {
 	long			 pfrkt_larg;
 	int			 pfrkt_nflags;
 	u_int64_t		 pfrkt_refcntcost;
-	time_t			 pfrkt_timeout;
 	u_int16_t		 pfrkt_gcdweight;
 	u_int16_t		 pfrkt_maxweight;
 };
@@ -1054,6 +1054,7 @@ struct pfr_ktable {
 #define pfrkt_match	pfrkt_ts.pfrts_match
 #define pfrkt_nomatch	pfrkt_ts.pfrts_nomatch
 #define pfrkt_tzero	pfrkt_ts.pfrts_tzero
+#define pfrkt_timeout	pfrkt_ts.pfrts_timeout
 
 RB_HEAD(pfi_ifhead, pfi_kif);
 

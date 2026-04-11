@@ -394,10 +394,10 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 		    (ta->pfrt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
 
 	printf("%s", ta->pfrt_name);
-	if (ta->pfrt_flags & PFR_TFLAG_TIMEOUT)
-		printf(" timeout(%u)", ta->pfrt_timeout);
 	if (ta->pfrt_anchor[0] != '\0')
 		printf("@%s", ta->pfrt_anchor);
+	if (verbose && ta->pfrt_flags & PFR_TFLAG_TIMEOUT)
+		printf(" timeout(%u)", ta->pfrt_timeout);
 
 	printf("\n");
 }
@@ -466,7 +466,7 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns, int verbose)
 	 * do not print expired addresses, those are printed in verbose output
 	 * only.
 	 */
-	if (verbose == 0 && rad->pfra_expire != 0 && rad->pfra_expire >= now)
+	if (verbose == 0 && ad->pfra_expire != 0 && ad->pfra_expire < now)
 		return;
 
 	fback = (rad != NULL) ? rad->pfra_fback : ad->pfra_fback;
@@ -511,10 +511,11 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns, int verbose)
 	if (ad->pfra_ifname[0] != '\0')
 		printf("@%s", ad->pfra_ifname);
 	if (verbose != 0 && ad->pfra_expire != 0) {
-		if (ad->pfra_expire >= now)
-			printf("\t[ expired %llds ago ]", rad->pfra_expire - now);
+		if (ad->pfra_expire < now)
+			printf("\t[ expired %llds ago ]",
+			    now - ad->pfra_expire);
 		else
-			printf("\t[ expires in %llds ]", rad->pfra_expire - now);
+			printf("\t[ expires in %llds ]", ad->pfra_expire - now);
 	}
 	printf("\n");
 }
@@ -550,7 +551,8 @@ print_astats(struct pfr_astats *as, int dns)
 
 int
 pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
-    struct pfr_buffer *ab, u_int32_t ticket, struct pfr_uktable *ukt)
+    u_int32_t timeout, struct pfr_buffer *ab, u_int32_t ticket,
+    struct pfr_uktable *ukt)
 {
 	struct pfr_table tbl_buf;
 	struct pfr_table *tbl;
@@ -580,8 +582,9 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	    sizeof(tbl->pfrt_anchor)) >= sizeof(tbl->pfrt_anchor))
 		errx(1, "%s: strlcpy", __func__);
 	tbl->pfrt_flags = flags;
-	DBGPRINT("%s %s@%s [%x]\n", __func__, tbl->pfrt_name,
-	    tbl->pfrt_anchor, tbl->pfrt_flags);
+	tbl->pfrt_timeout = timeout;
+	DBGPRINT("%s %s@%s [%x] (%u)\n", __func__, tbl->pfrt_name,
+	    tbl->pfrt_anchor, tbl->pfrt_flags, tbl->pfrt_timeout);
 
 	/*
 	 * non-root anchors processed by parse.y are loaded to kernel later.
