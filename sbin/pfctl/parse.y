@@ -4032,7 +4032,7 @@ portstar	: numberstring			{
 		}
 		;
 
-redirspec	: redirhost optweight		{
+redirspec	: host optweight		{
 			if ($2 > 0) {
 				struct node_host	*n;
 				for (n = $1; n != NULL; n = n->next)
@@ -4043,7 +4043,7 @@ redirspec	: redirhost optweight		{
 		| '{' optnl redir_host_list '}'	{ $$ = $3; }
 		;
 
-redir_host_list	: redirhost optweight optnl			{
+redir_host_list	: host optweight optnl			{
 			if ($1->addr.type != PF_ADDR_ADDRMASK) {
 				free($1);
 				yyerror("only addresses can be listed for "
@@ -4057,7 +4057,7 @@ redir_host_list	: redirhost optweight optnl			{
 			}
 			$$ = $1;
 		}
-		| redir_host_list comma redirhost optweight optnl {
+		| redir_host_list comma host optweight optnl {
 			$1->tail->next = $3;
 			$1->tail = $3->tail;
 			if ($4 > 0) {
@@ -4083,17 +4083,6 @@ redirpool	: redirspec		{
 			$$->host = $1;
 			$$->rport = $3;
 		}
-		;
-
-redirhost	: STRING {
-			$$ = host($1, pf->opts | PF_OPT_NOIFNAME);
-			if ($$ == NULL)  {
-				free($1);
-				yyerror("could not parse host specification");
-				YYERROR;
-			}
-			free($1);
-                }
 		;
 
 hashkey		: /* empty */
@@ -4219,6 +4208,7 @@ routespec	: redirspec pool_opts {
 				    "route-to/reply-to/dup-to");
 				YYERROR;
 			}
+			pf->opts |= PF_OPT_NOIFNAME;
 			redir = calloc(1, sizeof(*redir));
 			if (redir == NULL)
 				err(1, "routespec calloc");
@@ -4226,6 +4216,7 @@ routespec	: redirspec pool_opts {
 			filter_opts.rroute.rdr = redir;
 			memcpy(&filter_opts.rroute.pool_opts, &$2,
 			    sizeof(filter_opts.rroute.pool_opts));
+			pf->opts &= ~PF_OPT_NOIFNAME;
 		}
 		;
 
