@@ -3147,8 +3147,7 @@ host		: STRING			{
 				yyerror("could not parse host specification");
 				YYERROR;
 			}
-			free($1);
-
+			$$->parser_input = $1;
 		}
 		| STRING '-' STRING		{
 			struct node_host *b, *e;
@@ -3326,7 +3325,7 @@ dynaddr		: '(' STRING ')'		{
 				yyerror("interface name too long");
 				YYERROR;
 			}
-			free(op);
+			$$->parser_input = op;
 			$$->next = NULL;
 			$$->tail = $$;
 		}
@@ -4208,15 +4207,23 @@ routespec	: redirspec pool_opts {
 				    "route-to/reply-to/dup-to");
 				YYERROR;
 			}
-			pf->opts |= PF_OPT_NOIFNAME;
 			redir = calloc(1, sizeof(*redir));
 			if (redir == NULL)
 				err(1, "routespec calloc");
 			redir->host = $1;
+			if (redir->host->parser_input != NULL) {
+				struct node_host *chk_if;
+
+				chk_if = host_if(redir->host->parser_input, 0, 0);
+				if (chk_if != NULL) {
+					yyerror("route-to/reply-to/dup-to: "
+					    "network interface not expected");
+					YYERROR;
+				}
+			}
 			filter_opts.rroute.rdr = redir;
 			memcpy(&filter_opts.rroute.pool_opts, &$2,
 			    sizeof(filter_opts.rroute.pool_opts));
-			pf->opts &= ~PF_OPT_NOIFNAME;
 		}
 		;
 
