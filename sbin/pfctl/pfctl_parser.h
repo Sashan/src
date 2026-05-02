@@ -53,7 +53,6 @@
 #define PF_OPT_PORTNAMES	0x08000
 #define PF_OPT_IGNFAIL		0x10000
 #define PF_OPT_CALLSHOW		0x20000
-#define PF_OPT_NOIFNAME		0x40000
 
 #define PF_TH_ALL		0xFF
 
@@ -334,14 +333,13 @@ char			*ifa_indextoname(unsigned int, char *);
 struct node_host	*ifa_exists(const char *);
 struct node_host	*ifa_lookup(const char *, int);
 struct node_host	*host(const char *, int);
-struct node_host	*host_if(const char *, int, int);
+struct node_host	*host_if(const char *, int);
 
 int			 append_addr(struct pfr_buffer *, char *, int, int);
 int			 append_addr_host(struct pfr_buffer *,
 			    struct node_host *, int, int);
 int			 pfr_ktable_compare(struct pfr_ktable *,
 			    struct pfr_ktable *);
-
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 #endif /* _PFCTL_PARSER_H_ */

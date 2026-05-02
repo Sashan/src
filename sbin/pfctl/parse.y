@@ -4214,7 +4214,7 @@ routespec	: redirspec pool_opts {
 			if (redir->host->parser_input != NULL) {
 				struct node_host *chk_if;
 
-				chk_if = host_if(redir->host->parser_input, 0, 0);
+				chk_if = host_if(redir->host->parser_input, 0);
 				if (chk_if != NULL) {
 					yyerror("route-to/reply-to/dup-to: "
 					    "network interface not expected");
