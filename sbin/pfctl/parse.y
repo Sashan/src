@@ -567,7 +567,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.number>		reticmpspec reticmp6spec
 %type	<v.fromto>		fromto
 %type	<v.peer>		ipportspec from to
-%type	<v.host>		ipspec xhost host dynaddr host_list
+%type	<v.host>		ipspec xhost host dynaddr host_list redirhost
 %type	<v.host>		table_host_list tablespec
 %type	<v.host>		redir_host_list redirspec
 %type	<v.os>			os xos os_list
@@ -4032,7 +4032,7 @@ portstar	: numberstring			{
 		}
 		;
 
-redirspec	: host optweight		{
+redirspec	: redirhost optweight		{
 			if ($2 > 0) {
 				struct node_host	*n;
 				for (n = $1; n != NULL; n = n->next)
@@ -4043,7 +4043,7 @@ redirspec	: host optweight		{
 		| '{' optnl redir_host_list '}'	{ $$ = $3; }
 		;
 
-redir_host_list	: host optweight optnl			{
+redir_host_list	: redirhost optweight optnl			{
 			if ($1->addr.type != PF_ADDR_ADDRMASK) {
 				free($1);
 				yyerror("only addresses can be listed for "
@@ -4057,7 +4057,7 @@ redir_host_list	: host optweight optnl			{
 			}
 			$$ = $1;
 		}
-		| redir_host_list comma host optweight optnl {
+		| redir_host_list comma redirhost optweight optnl {
 			$1->tail->next = $3;
 			$1->tail = $3->tail;
 			if ($4 > 0) {
@@ -4083,6 +4083,17 @@ redirpool	: redirspec		{
 			$$->host = $1;
 			$$->rport = $3;
 		}
+		;
+
+redirhost	: STRING {
+			$$ = host($1, pf->opts | PF_OPT_NOIFNAME);
+			if ($$ == NULL)  {
+				free($1);
+				yyerror("could not parse host specification");
+				YYERROR;
+			}
+			free($1);
+                }
 		;
 
 hashkey		: /* empty */

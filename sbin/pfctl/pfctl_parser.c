@@ -77,7 +77,7 @@ void		 print_scspec(const char *, struct pf_queue_scspec *);
 int		 ifa_skip_if(const char *filter, struct node_host *p);
 
 struct node_host	*ifa_grouplookup(const char *, int);
-struct node_host	*host_if(const char *, int);
+struct node_host	*host_if(const char *, int, int);
 struct node_host	*host_ip(const char *, int);
 struct node_host	*host_dns(const char *, int, int);
 
@@ -1713,7 +1713,7 @@ host(const char *s, int opts)
 		p[0] = '\0';
 	}
 
-	if ((h = host_if(ps, mask)) == NULL &&
+	if ((h = host_if(ps, mask, (opts & PF_OPT_NOIFNAME))) == NULL &&
 	    (h = host_ip(ps, mask)) == NULL &&
 	    (h = host_dns(ps, mask, (opts & PF_OPT_NODNS))) == NULL) {
 		fprintf(stderr, "no IP address found for %s\n", s);
@@ -1731,11 +1731,14 @@ error:
 }
 
 struct node_host *
-host_if(const char *s, int mask)
+host_if(const char *s, int mask, int reject_iface)
 {
 	struct node_host	*n, *h = NULL;
 	char			*p, *ps;
 	int			 flags = 0;
+
+	if (reject_iface)
+		return (NULL);
 
 	if ((ps = strdup(s)) == NULL)
 		err(1, "host_if: strdup");
