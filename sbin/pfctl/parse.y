@@ -567,7 +567,7 @@ int	parseport(char *, struct range *r, int);
 %type	<v.number>		reticmpspec reticmp6spec
 %type	<v.fromto>		fromto
 %type	<v.peer>		ipportspec from to
-%type	<v.host>		ipspec xhost host dynaddr host_list redirhost
+%type	<v.host>		ipspec xhost host dynaddr host_list
 %type	<v.host>		table_host_list tablespec
 %type	<v.host>		redir_host_list redirspec
 %type	<v.os>			os xos os_list
