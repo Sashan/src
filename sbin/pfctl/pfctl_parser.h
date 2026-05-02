@@ -342,7 +342,6 @@ int			 append_addr_host(struct pfr_buffer *,
 int			 pfr_ktable_compare(struct pfr_ktable *,
 			    struct pfr_ktable *);
 
-void			 pfctl_free_nh(struct node_host *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 #endif /* _PFCTL_PARSER_H_ */
