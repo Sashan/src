@@ -1822,6 +1822,15 @@ The
 flag forces the kernel to keep the table even when no rules refer to it.
 If the flag is not set, the kernel will automatically remove the table
 when the last rule referring to it is flushed.
+.It timeout
+The
+.Cm timeout
+option sets timeout (in seconds) for which the IP address is kept in table.
+This is meant for tables used by
+.Cm overload
+action either in rule or in limiter.
+After the timeout elapses the IP address is removed from the table where
+timeout is set.
 .El
 .Pp
 This example creates a table called
@@ -3021,7 +3030,8 @@ antispoof-rule = "antispoof" [ "log" ] [ "quick" ]
 table-rule     = "table" "<" string ">" [ tableopts ]
 tableopts      = tableopt [ tableopts ]
 tableopt       = "persist" | "const" | "counters" |
-                 "file" string | "{" [ tableaddrs ] "}"
+                 "timeout" "(" number ")" | "file" string |
+                 "{" [ tableaddrs ] "}"
 tableaddrs     = tableaddr-spec [ [ "," ] tableaddrs ]
 tableaddr-spec = [ "!" ] tableaddr [ "/" mask-bits ]
 tableaddr      = hostname | ifspec | "self" |
