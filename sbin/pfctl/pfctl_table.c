@@ -466,7 +466,7 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns, int verbose)
 	 * do not print expired addresses, those are printed in verbose output
 	 * only.
 	 */
-	if (verbose == 0 && ad->pfra_expire != 0 && ad->pfra_expire < now)
+	if (verbose == 0 && ad->pfra_expire < now)
 		return;
 
 	fback = (rad != NULL) ? rad->pfra_fback : ad->pfra_fback;

@@ -39,6 +39,12 @@
 #define DBGPRINT(...)	(void)(0)
 #endif
 
+enum {
+	PFR_ATTR_NONE,
+	PFR_ATTR_WEIGHT,
+	PFR_ATTR_TTL
+};
+
 enum pfctl_show { PFCTL_SHOW_RULES, PFCTL_SHOW_LABELS, PFCTL_SHOW_NOTHING };
 
 enum {	PFRB_TABLES = 1, PFRB_TSTATS, PFRB_ADDRS, PFRB_ASTATS,

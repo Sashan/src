@@ -1896,15 +1896,20 @@ append_addr(struct pfr_buffer *b, char *s, int test, int opts)
 	const char		*errstr;
 	int			 rv, not = 0, i = 0;
 	u_int16_t		 weight;
+	u_int32_t		 ttl;
 
 	/* skip weight if given */
 	if (strcmp(s, "weight") == 0) {
-		expect = 1;
+		token = PFR_ATTR_WEIGHT;
 		return (1); /* expecting further call */
+	} else if (strcmp(s, "ttl") == 0) {
+		expect = PFR_ATTR_TTL;
+		return (1);
 	}
 
 	/* check if previous host is set */
-	if (expect) {
+	switch (expect) {
+	case PFR_ATTR_WEIGHT:
 		/* parse and append load balancing weight */
 		weight = strtonum(s, 1, USHRT_MAX, &errstr);
 		if (errstr) {
@@ -1919,8 +1924,26 @@ append_addr(struct pfr_buffer *b, char *s, int test, int opts)
 				}
 			}
 		}
-		expect = 0;
+		expect = PFR_ATTR_NONE;
 		return (0);
+	case PFR_ATTR_TTL:
+		/* parse and append load balancing weight */
+		ttl = strtonum(s, 1, UINT_MAX, &errstr);
+		if (errstr) {
+			fprintf(stderr, "failed to convert ttl %s\n", s);
+			return (-1);
+		}
+		if (previous != -1) {
+			PFRB_FOREACH(a, b) {
+				if (++i >= previous) {
+					a->pfra_expire = ttl;
+					a->pfra_type = PFRKE_COST;
+				}
+			}
+		}
+		expect = PFR_ATTR_NONE;
+		return (0);
+	default:
 	}
 
 	for (r = s; *r == '!'; r++)
