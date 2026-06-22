@@ -528,7 +528,7 @@ print_astats(struct pfr_astats *as, int dns)
 	char	*ct;
 
 	ct = ctime(&time);
-	print_addrx(&as->pfras_a, NULL, dns, 1);
+	print_addrx(&as->pfras_a, NULL, dns, /* verbose */1);
 	if (ct)
 		printf("\tCleared:     %s", ctime(&time));
 	else
