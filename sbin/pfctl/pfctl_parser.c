@@ -1900,7 +1900,7 @@ append_addr(struct pfr_buffer *b, char *s, int test, int opts)
 
 	/* skip weight if given */
 	if (strcmp(s, "weight") == 0) {
-		token = PFR_ATTR_WEIGHT;
+		expect = PFR_ATTR_WEIGHT;
 		return (1); /* expecting further call */
 	} else if (strcmp(s, "ttl") == 0) {
 		expect = PFR_ATTR_TTL;
@@ -1937,7 +1937,7 @@ append_addr(struct pfr_buffer *b, char *s, int test, int opts)
 			PFRB_FOREACH(a, b) {
 				if (++i >= previous) {
 					a->pfra_expire = ttl;
-					a->pfra_type = PFRKE_COST;
+					a->pfra_type = PFRKE_TTL;
 				}
 			}
 		}

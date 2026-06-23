@@ -961,6 +961,7 @@ pfr_create_kentry(struct pfr_addr *ad)
 
 	switch (ke->pfrke_type) {
 	case PFRKE_PLAIN:
+		((struct pfr_kentry *)ke)->pfrke_expire = ad->pfra_expire;
 		break;
 	case PFRKE_COST:
 		((struct pfr_kentry_cost *)ke)->weight = ad->pfra_weight;
@@ -1018,6 +1019,8 @@ pfr_create_kentry_unlocked(struct pfr_addr *ad, int flags)
 
 	switch (ke->pfrke_type) {
 	case PFRKE_PLAIN:
+		((struct pfr_kentry_cost *)ke)->pfrke_expire = ad->pfra_expire;
+		break;
 		break;
 	case PFRKE_COST:
 		((struct pfr_kentry_cost *)ke)->weight = ad->pfra_weight;
@@ -1140,6 +1143,10 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 
 	p = pfr_lookup_addr(kt, ad, 1);
 	if (p != NULL) {
+		/*
+		 * we typically arrive here on behalf of overload action,
+		 * just reset timer to keep offending IP address in table.
+		 */
 		if (kt->pfrkt_flags & PFR_TFLAG_TIMEOUT)
 			p->pfrke_expire = tzero + kt->pfrkt_timeout;
 		return (0);
@@ -1154,7 +1161,8 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 
 	p->pfrke_tzero = tzero;
 	if (kt->pfrkt_flags & PFR_TFLAG_TIMEOUT)
-		p->pfrke_expire = tzero + kt->pfrkt_timeout;
+		p->pfrke_expire = tzero +
+		    MAX(p->pfrke_expire, kt->pfrkt_timeout);
 	if (p->pfrke_type == PFRKE_COST)
 		kt->pfrkt_refcntcost++;
 	kt->pfrkt_cnt++;
