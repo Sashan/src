@@ -813,8 +813,10 @@ pf_src_connlimit(struct pf_state **stp)
 #endif /* INET6 */
 		}
 
+		PF_LOCK();
 		pfr_insert_kentry((*stp)->rule.ptr->overload_tbl,
 		    &p, gettime());
+		PF_UNLOCK();
 
 		/* kill existing states if that's required. */
 		if ((*stp)->rule.ptr->flush) {
@@ -822,6 +824,7 @@ pf_src_connlimit(struct pf_state **stp)
 			struct pf_state *st;
 
 			pf_status.lcounters[LCNT_OVERLOAD_FLUSH]++;
+			PF_STATE_ENTER_READ();
 			RBT_FOREACH(st, pf_state_tree_id, &tree_id) {
 				sk = st->key[PF_SK_WIRE];
 				/*
@@ -844,6 +847,7 @@ pf_src_connlimit(struct pf_state **stp)
 					killed++;
 				}
 			}
+			PF_STATE_EXIT_READ();
 			if (pf_status.debug >= LOG_NOTICE)
 				addlog(", %u states killed", killed);
 		}

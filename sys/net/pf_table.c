@@ -1145,6 +1145,8 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, time_t tzero)
 	struct pfr_kentry	*p;
 	int			 rv;
 
+	PF_ASSERT_LOCKED();
+
 	p = pfr_lookup_addr(kt, ad, 1);
 	if (p != NULL)
 		return (0);
